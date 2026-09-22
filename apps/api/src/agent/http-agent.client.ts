@@ -1,30 +1,53 @@
 import { Injectable } from '@nestjs/common';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
-import type { AgentClient, AgentJson } from './agent-client.js';
+import { z } from 'zod';
+import type { AgentClient } from './agent-client.js';
 import { loadAgentConfig, type AgentConfig } from './agent-config.js';
+import {
+  ClusterResponseSchema,
+  HealthResponseSchema,
+  ServiceDetailResponseSchema,
+  ServiceSummarySchema,
+  TaskSummarySchema,
+  type ClusterResponse,
+  type HealthResponse,
+  type ServiceDetailResponse,
+  type ServiceSummary,
+  type TaskSummary,
+} from './read-model.js';
 
 @Injectable()
 export class HttpAgentClient implements AgentClient {
   private readonly config: AgentConfig = loadAgentConfig();
 
-  health(): Promise<AgentJson> {
-    return this.get('/v1/health');
+  health(): Promise<HealthResponse> {
+    return this.get('/v1/health', HealthResponseSchema);
   }
 
-  inspectCluster(): Promise<AgentJson> {
-    return this.get('/v1/cluster');
+  inspectCluster(): Promise<ClusterResponse> {
+    return this.get('/v1/cluster', ClusterResponseSchema);
   }
 
-  inspectService(serviceId: string): Promise<AgentJson> {
-    return this.get(`/v1/services/${encodeURIComponent(serviceId)}`);
+  listServices(): Promise<ServiceSummary[]> {
+    return this.get('/v1/services', z.array(ServiceSummarySchema));
   }
 
-  listServiceTasks(serviceId: string): Promise<AgentJson> {
-    return this.get(`/v1/services/${encodeURIComponent(serviceId)}/tasks`);
+  inspectService(serviceId: string): Promise<ServiceDetailResponse> {
+    return this.get(
+      `/v1/services/${encodeURIComponent(serviceId)}`,
+      ServiceDetailResponseSchema,
+    );
   }
 
-  private async get(path: string): Promise<AgentJson> {
+  listServiceTasks(serviceId: string): Promise<TaskSummary[]> {
+    return this.get(
+      `/v1/services/${encodeURIComponent(serviceId)}/tasks`,
+      z.array(TaskSummarySchema),
+    );
+  }
+
+  private async get<T>(path: string, schema: z.ZodType<T>): Promise<T> {
     const url = new URL(path, this.config.baseUrl);
     const options: RequestOptions = {
       method: 'GET',
@@ -39,7 +62,7 @@ export class HttpAgentClient implements AgentClient {
       timeout: 5_000,
     };
 
-    return new Promise<AgentJson>((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
       const onResponse = (res: IncomingMessage) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -49,10 +72,15 @@ export class HttpAgentClient implements AgentClient {
             reject(new Error(`Agent request failed with ${res.statusCode}: ${body}`));
             return;
           }
+
           try {
-            resolve(JSON.parse(body) as AgentJson);
+            resolve(schema.parse(JSON.parse(body)));
           } catch (error) {
-            reject(new Error(`Agent returned invalid JSON: ${String(error)}`));
+            reject(
+              new Error(
+                `Agent response failed contract validation: ${String(error)}`,
+              ),
+            );
           }
         });
       };
@@ -62,9 +90,7 @@ export class HttpAgentClient implements AgentClient {
           ? httpsRequest(options, onResponse)
           : httpRequest(options, onResponse);
 
-      req.on('timeout', () =>
-        req.destroy(new Error('Agent request timed out')),
-      );
+      req.on('timeout', () => req.destroy(new Error('Agent request timed out')));
       req.on('error', reject);
       req.end();
     });
