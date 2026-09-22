@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -41,7 +42,7 @@ export class MutationController {
     return this.mutations.scale(
       clusterId,
       serviceId,
-      ScaleServiceRequestSchema.parse(body),
+      parseBody(ScaleServiceRequestSchema, body),
       principal(request),
     );
   }
@@ -58,7 +59,7 @@ export class MutationController {
     return this.mutations.restart(
       clusterId,
       serviceId,
-      RestartServiceRequestSchema.parse(body),
+      parseBody(RestartServiceRequestSchema, body),
       principal(request),
     );
   }
@@ -69,4 +70,16 @@ function principal(request: AuthenticatedRequest): Principal {
     throw new Error('Authenticated principal is missing');
   }
   return request.principal;
+}
+
+
+function parseBody<T>(
+  schema: { parse(value: unknown): T },
+  body: unknown,
+): T {
+  try {
+    return schema.parse(body);
+  } catch {
+    throw new BadRequestException('Invalid mutation request');
+  }
 }
