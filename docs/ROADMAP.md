@@ -16,8 +16,12 @@ Docklane은 기능 수보다 **안전하게 복구 가능한 하나의 deploymen
 - [ ] resource scope validation
 - [ ] mutation audit foundation
 - [ ] Docker Engine API read-only spike
-- [ ] Agent protocol skeleton
-- [ ] Control Plane ↔ Agent mTLS PoC
+- [ ] Go agent module
+- [ ] OpenAPI agent contract
+- [ ] Docker Engine Go client read-only spike
+- [ ] Agent protocol skeleton (HTTPS + JSON)
+- [ ] systemd service definition
+- [ ] Control Plane ↔ Go Agent mTLS PoC
 - [ ] lint / typecheck / test CI
 - [ ] supported Docker Engine/API version 명시
 
@@ -25,7 +29,9 @@ Exit criteria:
 
 - Web → API → DB 기본 연결
 - 인증되지 않은 사용자와 권한 없는 mutation 거절
+- Go Agent 단일 바이너리 빌드/실행
 - Agent arbitrary command 실행 불가
+- OpenAPI 기반 Control Plane ↔ Agent 요청 검증
 - read-only Docker inspect 동작
 
 ## v0.1 — Swarm Read Model
@@ -182,6 +188,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [ ] manager loss
 - [ ] quorum loss
 - [ ] network partition
+- [ ] manager별 Go Agent 배포
 - [ ] Agent reconnect/failover
 - [ ] manager resource contention
 - [ ] Swarm backup/restore drill
