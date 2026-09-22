@@ -88,6 +88,8 @@ export class OperationRepository implements OnModuleInit {
         actor_id VARCHAR(128) NOT NULL,
         cluster_id VARCHAR(128) NOT NULL,
         service_id VARCHAR(128) NOT NULL,
+        resource_type VARCHAR(32) NOT NULL DEFAULT 'service',
+        resource_id VARCHAR(128) NOT NULL DEFAULT '',
         action VARCHAR(64) NOT NULL,
         before_json JSON NULL,
         after_json JSON NULL,
@@ -96,6 +98,21 @@ export class OperationRepository implements OnModuleInit {
         INDEX idx_audit_resource (cluster_id, service_id, created_at)
       ) ENGINE=InnoDB
     `);
+
+    await this.ensureAuditColumn(
+      'resource_type',
+      "VARCHAR(32) NOT NULL DEFAULT 'service'",
+    );
+    await this.ensureAuditColumn(
+      'resource_id',
+      "VARCHAR(128) NOT NULL DEFAULT ''",
+    );
+    await this.db.pool.query(
+      `UPDATE audit_events
+       SET resource_type = 'service',
+           resource_id = service_id
+       WHERE resource_id = ''`,
+    );
   }
 
   async find(id: string): Promise<OperationRecord | null> {
@@ -250,17 +267,46 @@ export class OperationRepository implements OnModuleInit {
   ): Promise<void> {
     await connection.execute(
       `INSERT INTO audit_events
-       (operation_id, actor_id, cluster_id, service_id, action, before_json, after_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (
+         operation_id, actor_id, cluster_id, service_id,
+         resource_type, resource_id, action, before_json, after_json
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.operationId,
         input.actorId,
         input.clusterId,
         input.serviceId,
+        input.resourceType ?? 'service',
+        input.resourceId ?? input.serviceId,
         input.action,
         input.beforeJson === undefined ? null : JSON.stringify(input.beforeJson),
         input.afterJson === undefined ? null : JSON.stringify(input.afterJson),
       ],
+    );
+  }
+
+  private async ensureAuditColumn(
+    columnName: string,
+    definition: string,
+  ): Promise<void> {
+    const [rows] = await this.db.pool.query<CountRow[]>(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE()
+         AND table_name = 'audit_events'
+         AND column_name = ?`,
+      [columnName],
+    );
+    if ((rows[0]?.count ?? 0) > 0) {
+      return;
+    }
+
+    if (!/^[a-z_]+$/.test(columnName)) {
+      throw new Error('Unsafe audit column name');
+    }
+    await this.db.pool.query(
+      `ALTER TABLE audit_events ADD COLUMN ${columnName} ${definition}`,
     );
   }
 
