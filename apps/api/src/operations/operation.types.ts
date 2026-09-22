@@ -35,3 +35,25 @@ export interface AuditEventInput {
   beforeJson?: unknown;
   afterJson?: unknown;
 }
+
+
+export type NodeOperationType = 'DRAIN' | 'ACTIVATE';
+
+export interface NodeOperationRecord {
+  id: string;
+  clusterId: string;
+  nodeId: string;
+  type: NodeOperationType;
+  status: OperationStatus;
+  actorId: string;
+  expectedVersion: number;
+  beforeSpecHash: string;
+  targetSpecHash: string;
+  targetAvailability: 'drain' | 'active';
+  affectedServiceIds: string[];
+  resultVersion: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
