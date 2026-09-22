@@ -32,18 +32,86 @@ Docklane은 현재 **pre-alpha / specification 단계**입니다.
 
 ## Security Baseline
 
-Docklane 구현은 최소한 다음 원칙을 따라야 합니다.
+다음 항목은 **최초 infrastructure mutation을 제공하기 전** 구현되어야 합니다.
 
-- Docker daemon의 unauthenticated TCP endpoint를 노출하지 않는다.
-- Control Plane과 Swarm Agent 사이에 상호 인증을 사용한다.
+- 사용자 authentication
+- 최소 VIEWER / OPERATOR / ADMIN RBAC
+- cluster/service resource-scope authorization
+- mutation audit
+- Control Plane ↔ Agent mTLS
+- Agent operation allow-list
+- Agent field allow-list
+- expected Docker resource version 확인
+- Docker daemon의 unauthenticated TCP endpoint 노출 금지
+
+추가 필수 원칙:
+
 - Agent는 arbitrary shell execution API를 제공하지 않는다.
-- Bootstrap token은 짧은 TTL과 one-time semantics를 가진다.
+- caller가 전달한 raw Docker service spec을 무검증으로 적용하지 않는다.
 - Secret value는 API response, log, audit event에 기록하지 않는다.
 - Registry credential은 암호화하여 저장한다.
-- 모든 mutation endpoint는 RBAC 검증을 수행한다.
-- Deploy, rollback, scale, drain 등 인프라 변경 작업은 audit event를 남긴다.
 - Swarm 내부 통신 포트는 trusted/private network로 제한한다.
 - Manager quorum을 잃은 cluster에는 mutation을 수행하지 않는다.
+- 요청에는 expiry/replay 방지 수단을 둔다.
+
+## Agent mTLS Lifecycle
+
+mTLS는 단순히 인증서를 사용한다는 의미로 끝내지 않는다.
+
+구현 전 다음 수명주기를 정의한다.
+
+- certificate issuance
+- agent identity와 cluster binding
+- renewal
+- expiration behavior
+- revocation
+- compromised credential replacement
+- trust root rotation
+
+만료/폐기된 Agent는 mutation 요청을 수행할 수 없어야 한다.
+
+## Mutation Authorization
+
+API authorization과 Agent authorization을 분리한다.
+
+API:
+
+- actor role
+- target cluster
+- target service/node
+- requested operation
+
+Agent:
+
+- authenticated Control Plane identity
+- target cluster
+- target Docker resource
+- allowed operation
+- allowed mutable fields
+- expected Docker Version.Index
+- request expiry/generation
+
+두 경계 중 하나라도 검증에 실패하면 mutation을 실행하지 않는다.
+
+## Bootstrap Credentials
+
+Node bootstrap 자동화는 초기 MVP 이후 범위다.
+
+향후 구현 시 Docklane one-time bootstrap token과 Docker Swarm native join token을 별도 credential로 취급한다.
+
+Docklane token의 만료가 native join token의 무효화를 의미하지 않는다.
+
+Native token 노출 시에는 Docker의 token rotation 정책을 적용해야 한다.
+
+## Recovery Security
+
+Control Plane/API 재시작 후 non-terminal operation을 reconcile할 때 다음을 보장한다.
+
+- 오래된 operation lease가 새 실행을 덮어쓰지 않음
+- stale/late Agent response가 최신 generation을 변경하지 않음
+- 재시도 전에 실제 Docker state를 확인
+- 외부 CLI 변경을 conflict로 처리
+- secret/credential을 operation intent나 audit snapshot에 포함하지 않음
 
 ## Dependency Security
 
@@ -55,6 +123,19 @@ Docklane 구현은 최소한 다음 원칙을 따라야 합니다.
 - dependency vulnerability scanning
 - container image scanning
 - CI에서 lint, typecheck, test
+
+## Production Readiness
+
+운영 도입 전 최소한 다음을 실제로 검증한다.
+
+- 3-manager quorum behavior
+- leader loss / quorum loss
+- Swarm backup and restore
+- Docklane DB restore
+- encryption key/trust restore
+- unauthorized mutation rejection
+- Agent certificate expiry/revocation
+- rollback failure behavior
 
 ## Scope
 
