@@ -120,7 +120,7 @@ export class OperationRepository implements OnModuleInit {
   async listNonTerminal(): Promise<OperationRecord[]> {
     const [rows] = await this.db.pool.query<OperationRow[]>(
       `SELECT * FROM operations
-       WHERE status IN ('PENDING', 'RUNNING', 'VERIFYING')
+       WHERE status IN ('PENDING', 'RUNNING', 'VERIFYING', 'NEEDS_ATTENTION')
        ORDER BY created_at ASC`,
     );
     return rows.map(mapOperation);
