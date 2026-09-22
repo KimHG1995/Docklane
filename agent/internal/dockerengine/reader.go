@@ -24,17 +24,21 @@ func NewReader() (*Reader, error) {
 	return &Reader{client: cli}, nil
 }
 
-func (r *Reader) Close() error { return r.client.Close() }
+func (r *Reader) Close() error {
+	return r.client.Close()
+}
 
 func (r *Reader) Cluster(ctx context.Context) (model.ClusterResponse, error) {
 	server, err := r.client.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return model.ClusterResponse{}, fmt.Errorf("read docker server version: %w", err)
 	}
+
 	swarmResult, err := r.client.SwarmInspect(ctx, client.SwarmInspectOptions{})
 	if err != nil {
 		return model.ClusterResponse{}, fmt.Errorf("inspect swarm: %w", err)
 	}
+
 	nodeResult, err := r.client.NodeList(ctx, client.NodeListOptions{})
 	if err != nil {
 		return model.ClusterResponse{}, fmt.Errorf("list swarm nodes: %w", err)
@@ -42,17 +46,21 @@ func (r *Reader) Cluster(ctx context.Context) (model.ClusterResponse, error) {
 
 	nodes := make([]model.NodeSummary, 0, len(nodeResult.Items))
 	managerTotal, managerReachable, leaderCount := 0, 0, 0
+
 	for _, node := range nodeResult.Items {
 		nodes = append(nodes, toNodeSummary(node))
+
 		if node.Spec.Role != swarm.NodeRoleManager {
 			continue
 		}
+
 		managerTotal++
 		if node.ManagerStatus != nil {
 			if node.ManagerStatus.Leader {
 				leaderCount++
 			}
-			if node.Status.State == swarm.NodeStateReady && string(node.ManagerStatus.Reachability) == "reachable" {
+			if node.Status.State == swarm.NodeStateReady &&
+				string(node.ManagerStatus.Reachability) == "reachable" {
 				managerReachable++
 			}
 		}
@@ -65,16 +73,16 @@ func (r *Reader) Cluster(ctx context.Context) (model.ClusterResponse, error) {
 
 	return model.ClusterResponse{
 		Cluster: model.ClusterSummary{
-			ID: swarmResult.Swarm.ID,
+			ID:            swarmResult.Swarm.ID,
 			DockerVersion: server.Version,
-			APIVersion: server.APIVersion,
-			CreatedAt: swarmResult.Swarm.CreatedAt,
-			UpdatedAt: swarmResult.Swarm.UpdatedAt,
+			APIVersion:    server.APIVersion,
+			CreatedAt:     swarmResult.Swarm.CreatedAt,
+			UpdatedAt:     swarmResult.Swarm.UpdatedAt,
 			Managers: model.ManagerQuorum{
-				Total: managerTotal,
-				Reachable: managerReachable,
-				Required: required,
-				Available: required > 0 && managerReachable >= required,
+				Total:       managerTotal,
+				Reachable:   managerReachable,
+				Required:    required,
+				Available:   required > 0 && managerReachable >= required,
 				LeaderCount: leaderCount,
 			},
 		},
@@ -87,6 +95,7 @@ func (r *Reader) Services(ctx context.Context) ([]model.ServiceSummary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list swarm services: %w", err)
 	}
+
 	services := make([]model.ServiceSummary, 0, len(result.Items))
 	for _, service := range result.Items {
 		services = append(services, toServiceSummary(service))
@@ -118,7 +127,7 @@ func (r *Reader) Service(ctx context.Context, serviceID string) (model.ServiceDe
 
 	return model.ServiceDetailResponse{
 		Service: toServiceSummary(*found),
-		Tasks: tasks,
+		Tasks:   tasks,
 	}, nil
 }
 
@@ -127,6 +136,7 @@ func (r *Reader) ServiceTasks(ctx context.Context, serviceID string) ([]model.Ta
 	if err != nil {
 		return nil, fmt.Errorf("list service tasks: %w", err)
 	}
+
 	tasks := make([]model.TaskSummary, 0)
 	for _, task := range result.Items {
 		if task.ServiceID == serviceID {
@@ -139,25 +149,26 @@ func (r *Reader) ServiceTasks(ctx context.Context, serviceID string) ([]model.Ta
 func toNodeSummary(node swarm.Node) model.NodeSummary {
 	leader := false
 	reachability := ""
+
 	if node.ManagerStatus != nil {
 		leader = node.ManagerStatus.Leader
 		reachability = string(node.ManagerStatus.Reachability)
 	}
 
 	return model.NodeSummary{
-		ID: node.ID,
-		Hostname: node.Description.Hostname,
-		Address: node.Status.Addr,
-		Role: string(node.Spec.Role),
-		Availability: string(node.Spec.Availability),
-		State: string(node.Status.State),
-		Message: node.Status.Message,
-		Manager: node.Spec.Role == swarm.NodeRoleManager,
-		Leader: leader,
-		Reachability: reachability,
+		ID:            node.ID,
+		Hostname:      node.Description.Hostname,
+		Address:       node.Status.Addr,
+		Role:          string(node.Spec.Role),
+		Availability:  string(node.Spec.Availability),
+		State:         string(node.Status.State),
+		Message:       node.Status.Message,
+		Manager:       node.Spec.Role == swarm.NodeRoleManager,
+		Leader:        leader,
+		Reachability:  reachability,
 		EngineVersion: node.Description.Engine.EngineVersion,
-		NanoCPUs: node.Description.Resources.NanoCPUs,
-		MemoryBytes: node.Description.Resources.MemoryBytes,
+		NanoCPUs:      node.Description.Resources.NanoCPUs,
+		MemoryBytes:   node.Description.Resources.MemoryBytes,
 	}
 }
 
@@ -193,17 +204,17 @@ func toServiceSummary(service swarm.Service) model.ServiceSummary {
 	}
 
 	return model.ServiceSummary{
-		ID: service.ID,
-		Name: service.Spec.Name,
-		Version: service.Version.Index,
-		Image: image,
-		Mode: mode,
+		ID:              service.ID,
+		Name:            service.Spec.Name,
+		Version:         service.Version.Index,
+		Image:           image,
+		Mode:            mode,
 		DesiredReplicas: desired,
 		RunningReplicas: running,
-		UpdateState: updateState,
-		UpdateMessage: updateMessage,
-		CreatedAt: service.CreatedAt,
-		UpdatedAt: service.UpdatedAt,
+		UpdateState:     updateState,
+		UpdateMessage:   updateMessage,
+		CreatedAt:       service.CreatedAt,
+		UpdatedAt:       service.UpdatedAt,
 	}
 }
 
@@ -212,22 +223,23 @@ func toTaskSummary(task swarm.Task) model.TaskSummary {
 	if task.Status.ContainerStatus != nil {
 		containerID = task.Status.ContainerStatus.ContainerID
 	}
+
 	image := ""
 	if task.Spec.ContainerSpec != nil {
 		image = task.Spec.ContainerSpec.Image
 	}
 
 	return model.TaskSummary{
-		ID: task.ID,
-		ServiceID: task.ServiceID,
-		Slot: task.Slot,
-		NodeID: task.NodeID,
+		ID:           task.ID,
+		ServiceID:    task.ServiceID,
+		Slot:         task.Slot,
+		NodeID:       task.NodeID,
 		DesiredState: string(task.DesiredState),
-		State: string(task.Status.State),
-		Message: task.Status.Message,
-		Error: task.Status.Err,
-		ContainerID: containerID,
-		Image: image,
-		Timestamp: task.Status.Timestamp,
+		State:        string(task.Status.State),
+		Message:      task.Status.Message,
+		Error:        task.Status.Err,
+		ContainerID:  containerID,
+		Image:        image,
+		Timestamp:    task.Status.Timestamp,
 	}
 }
