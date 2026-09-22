@@ -5,7 +5,7 @@
 Docklane은 관리형 컨테이너 플랫폼 도입이 부담스러운 환경에서 기존 Linux VM과 Docker Swarm을 활용해 배포, 확장, 롤백, 노드 운영, 릴리스 이력과 감사 로그를 하나의 UI에서 관리하기 위한 오픈소스 프로젝트입니다.
 
 > Status: **Specification / pre-alpha**  
-> 현재 저장소는 설계 단계입니다. 운영 환경 사용을 권장하지 않습니다.
+> 현재 저장소는 설계 단계이며 운영 환경 사용을 권장하지 않습니다.
 
 ## Why Docklane?
 
@@ -14,30 +14,64 @@ Docklane은 관리형 컨테이너 플랫폼 도입이 부담스러운 환경에
 Docklane은 Docker Swarm이 이미 제공하는 오케스트레이션 기능을 재구현하지 않습니다.
 
 - **Docker Swarm**: desired state, scheduling, replica, service discovery, rolling update, rollback
-- **Docklane**: release, deployment workflow, health verification, historical redeploy, audit, node bootstrap, operational UI
+- **Docklane**: release, deployment workflow, target verification, recovery/reconciliation, audit, operational UI
 - **Existing CI**: source build, test, container image build/push
 - **Existing Registry**: OCI image storage
 - **Existing Load Balancer**: external traffic entry point
+
+## MVP Scope
+
+첫 번째 구현은 범위를 의도적으로 좁힙니다.
+
+- single Swarm cluster
+- application당 **단일 stateless replicated service**
+- existing OCI registry
+- existing external load balancer
+- Swarm ingress routing mesh
+- digest-pinned release
+- Web UI 기반 deploy / rollback / scale / drain
+- 모든 mutation의 RBAC, serialization, audit
+- API/Agent 재시작 후 reconciliation
+
+복수 service Stack, environment promotion, bootstrap automation, provider adapter는 후속 단계로 둡니다.
+
+## Core Safety Contract
+
+배포 성공은 단순히 replica 수와 health 200만으로 판단하지 않습니다.
+
+```text
+target digest/spec matches
+AND
+Swarm update reached terminal success
+AND
+all expected tasks converged to target version
+AND
+application health remains stable for verification window
+```
+
+Rollback 역시 명령 수락이 아니라 이전 spec으로 실제 수렴하고 복구 health 검증까지 완료되어야 성공으로 기록합니다.
+
+Deploy, rollback, scale, restart 같은 동일 service 변경은 하나의 service-level mutation lock으로 직렬화합니다. 외부 CLI 변경도 Docker service version/spec 비교를 통해 충돌로 감지합니다.
 
 ## Goals
 
 - 기존 VM을 최대한 재사용하는 저비용 구조
 - 여러 호스트의 Docker workload를 하나의 화면에서 관리
-- Rolling deployment와 자동/수동 rollback
-- Image tag뿐 아니라 digest 기반 release 추적
+- Rolling deployment와 검증 가능한 rollback
+- Digest 기반 immutable release 추적
 - Node drain, replica scale 등 반복 운영 작업 단순화
+- API/Agent 장애 후 실제 Swarm 상태와 재조정
 - Deployment ticket과 audit log를 통한 변경 추적
 - 특정 Cloud Provider에 강하게 종속되지 않는 core architecture
 
 ## Non-goals
-
-Docklane은 다음을 목표로 하지 않습니다.
 
 - Kubernetes 대체 구현
 - 자체 container runtime / scheduler / overlay network
 - VM provisioning 플랫폼
 - CI 또는 container registry 대체
 - Stateful database orchestration
+- DB schema/data rollback
 - Service mesh 또는 범용 observability 플랫폼
 
 ## Architecture
@@ -64,27 +98,9 @@ flowchart LR
     LB --> W3
 ```
 
-Docklane은 Docker Engine API를 외부에 직접 노출하지 않고, Swarm manager 내부의 제한된 agent를 통해 필요한 작업만 수행하는 방향을 기본 설계로 합니다.
+Docklane은 Docker Engine API를 외부에 직접 노출하지 않고, Swarm manager 내부의 제한된 agent를 통해 필요한 작업만 수행합니다.
 
 자세한 내용은 [Architecture](docs/ARCHITECTURE.md)를 참고하세요.
-
-## MVP
-
-첫 번째 동작 가능한 버전은 다음 흐름을 UI에서 수행하는 것을 목표로 합니다.
-
-1. Swarm cluster와 node 상태 조회
-2. Service / task / replica 상태 조회
-3. Replica scale 및 service restart
-4. Node drain / activate
-5. Release 등록 및 image digest 추적
-6. Rolling deployment
-7. Deployment health verification
-8. Automatic rollback
-9. Manual rollback / historical redeploy
-10. Deployment history / audit log
-11. One-time token 기반 node bootstrap
-
-전체 요구사항은 [Specification](docs/SPEC.md), 개발 순서는 [Roadmap](docs/ROADMAP.md)을 참고하세요.
 
 ## Concept Mapping
 
@@ -92,12 +108,13 @@ Docklane은 Docker Engine API를 외부에 직접 노출하지 않고, Swarm man
 | --- | --- |
 | Cluster | Swarm |
 | Node | Swarm node |
-| Application | Stack 또는 서비스 묶음 |
+| Deployment Target | Bound Swarm service |
 | Service | Swarm service |
 | Instance | Task / container |
 | Scale | Service replicas |
-| Deploy | Service update / stack deploy |
-| Rollback | Service rollback / historical redeploy |
+| Deploy | Service update |
+| Immediate rollback | Service rollback |
+| Historical redeploy | New deployment from stored release/spec |
 | Config | Docker config |
 | Secret | Docker secret |
 
@@ -110,46 +127,55 @@ Docklane은 Docker Engine API를 외부에 직접 노출하지 않고, Swarm man
 - **Runtime**: Docker Engine + Swarm
 - **Repository**: Monorepo
 
-예상 구조:
-
-```text
-.
-├── apps/
-│   ├── web/
-│   ├── api/
-│   └── agent/
-├── packages/
-│   ├── contracts/
-│   ├── docker/
-│   ├── config/
-│   └── ui/
-├── deploy/
-├── docs/
-└── scripts/
-```
-
 ## Design Principles
 
 1. **Reuse before rebuild** — Docker가 제공하는 기능을 다시 만들지 않습니다.
 2. **Build and deploy are separate** — Docklane은 image build server가 아닙니다.
-3. **Immutable releases** — 운영 배포는 가능한 한 image digest를 기록합니다.
-4. **One process per container** — Node.js cluster/PM2보다 Swarm replica를 기본 확장 단위로 봅니다.
-5. **Safe by default** — Docker socket/TCP daemon을 외부에 직접 노출하지 않습니다.
-6. **Audit operational changes** — 배포, rollback, scale, drain 같은 mutation을 추적합니다.
-7. **Provider adapters** — NCP, AWS 등 provider-specific 기능은 core domain과 분리합니다.
+3. **Immutable releases** — 운영 Release는 image digest를 필수로 고정합니다.
+4. **Target before health** — 목표 digest/spec 반영 여부를 먼저 확인하고 health를 검증합니다.
+5. **Serialize mutations** — 동일 service의 deploy/rollback/scale/restart를 직렬화합니다.
+6. **Reconcile after failure** — 이벤트만 믿지 않고 inspect/polling으로 실제 상태를 재조정합니다.
+7. **One process per container** — Node.js cluster/PM2보다 Swarm replica를 기본 확장 단위로 봅니다.
+8. **Safe by default** — Docker socket/TCP daemon을 외부에 직접 노출하지 않습니다.
+9. **Audit operational changes** — 모든 인프라 mutation을 추적합니다.
+10. **Provider adapters** — NCP, AWS 등 provider-specific 기능은 core domain과 분리합니다.
+
+## Validation Profiles
+
+### Functional PoC
+
+```text
+manager-01
+worker-01
+worker-02
+```
+
+기능 및 worker 장애/재배치 검증용입니다. Manager HA를 검증하는 구성이 아닙니다.
+
+### Operational Readiness
+
+최소 3 managers에서 다음을 별도로 검증합니다.
+
+- manager leader loss
+- quorum loss
+- network partition
+- agent failover/reconnect
+- Swarm state backup/restore
+- Docklane DB/암호화 키 복구
+- 실제 LB 경유 rolling deployment
+- start-first 시 capacity 부족
 
 ## Security
 
-Docklane은 인프라 변경 권한을 가지는 control plane을 지향하므로 일반 웹 애플리케이션보다 높은 보안 수준이 필요합니다.
+초기 mutation 기능부터 다음을 필수로 적용합니다.
 
-초기 보안 원칙:
-
+- 기본 인증/RBAC/resource scope 검사
 - Docker TCP 2375 외부 노출 금지
 - Control Plane ↔ Agent mTLS
+- 인증서 발급/갱신/폐기 lifecycle
 - Agent arbitrary shell execution 금지
-- Bootstrap token 일회성 및 만료
+- Agent operation별 허용 field/target 검증
 - Secret 값 조회/로그 출력 금지
-- RBAC와 mutation audit
 - Registry credential 암호화 저장
 - Manager quorum 상실 시 mutation 차단
 
@@ -165,15 +191,15 @@ Docklane은 인프라 변경 권한을 가지는 control plane을 지향하므�
 
 ## References
 
-Docklane 설계는 Docker의 공식 Swarm 기능을 기반으로 합니다.
-
 - [Swarm mode](https://docs.docker.com/engine/swarm/)
 - [Deploy services to a swarm](https://docs.docker.com/engine/swarm/services/)
-- [Deploy a stack to a swarm](https://docs.docker.com/engine/swarm/stack-deploy/)
-- [Docker secrets](https://docs.docker.com/engine/swarm/secrets/)
-- [Docker configs](https://docs.docker.com/engine/swarm/configs/)
+- [Rolling updates](https://docs.docker.com/engine/swarm/swarm-tutorial/rolling-update/)
+- [Docker service update](https://docs.docker.com/reference/cli/docker/service/update/)
+- [Routing mesh](https://docs.docker.com/engine/swarm/ingress/)
+- [Manage nodes](https://docs.docker.com/engine/swarm/manage-nodes/)
+- [Docker security](https://docs.docker.com/engine/security/)
 
-> `docker stack deploy`는 최신 Compose Specification 전체가 아니라 legacy Compose v3 형식의 호환 범위를 사용합니다. Docklane의 Stack 편집/검증 기능도 Swarm-compatible subset을 기준으로 설계합니다.
+> `docker stack deploy`는 최신 Compose Specification 전체가 아니라 legacy Compose v3 형식의 호환 범위를 사용합니다. Stack 지원은 MVP 이후 Swarm-compatible subset으로 제한합니다.
 
 ## License
 
