@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import { z } from 'zod';
-import type { AgentClient } from './agent-client.js';
+import { AgentRequestError, type AgentClient } from './agent-client.js';
 import { loadAgentConfig, type AgentConfig } from './agent-config.js';
 import {
   ClusterResponseSchema,
@@ -103,7 +103,7 @@ export class HttpAgentClient implements AgentClient {
         res.on('end', () => {
           const body = Buffer.concat(chunks).toString('utf8');
           if ((res.statusCode ?? 500) >= 400) {
-            reject(new Error(`Agent request failed with ${res.statusCode}: ${body}`));
+            reject(new AgentRequestError(res.statusCode ?? 500, body));
             return;
           }
 
