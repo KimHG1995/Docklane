@@ -98,7 +98,7 @@ flowchart LR
     LB --> W3
 ```
 
-Docklane은 Docker Engine API를 외부에 직접 노출하지 않고, Swarm manager 내부의 제한된 agent를 통해 필요한 작업만 수행합니다.
+Docklane은 Docker Engine API를 외부에 직접 노출하지 않고, Swarm manager 내부의 제한된 **Go agent**를 통해 필요한 작업만 수행합니다. Agent는 별도 Node.js runtime 없이 단일 바이너리로 배포하는 것을 기본으로 합니다.
 
 자세한 내용은 [Architecture](docs/ARCHITECTURE.md)를 참고하세요.
 
@@ -123,9 +123,10 @@ Docklane은 Docker Engine API를 외부에 직접 노출하지 않고, Swarm man
 - **Web**: Next.js, TypeScript
 - **API**: NestJS, TypeScript, Zod
 - **Database**: MySQL / MariaDB
-- **Agent**: TypeScript/Node.js first, Go 검토 가능
+- **Agent**: Go
+- **Agent ↔ Control Plane Contract**: OpenAPI, HTTPS + mTLS
 - **Runtime**: Docker Engine + Swarm
-- **Repository**: Monorepo
+- **Repository**: Monorepo (TypeScript + Go)
 
 ## Design Principles
 
@@ -139,6 +140,8 @@ Docklane은 Docker Engine API를 외부에 직접 노출하지 않고, Swarm man
 8. **Safe by default** — Docker socket/TCP daemon을 외부에 직접 노출하지 않습니다.
 9. **Audit operational changes** — 모든 인프라 mutation을 추적합니다.
 10. **Provider adapters** — NCP, AWS 등 provider-specific 기능은 core domain과 분리합니다.
+11. **Small agent footprint** — Agent는 Go 단일 바이너리로 배포하고 Docker manager에 추가 runtime 의존성을 최소화합니다.
+12. **Contract over shared code** — TypeScript Control Plane과 Go Agent는 OpenAPI 계약을 공유하고 언어별 내부 타입 구현을 분리합니다.
 
 ## Validation Profiles
 
