@@ -9,11 +9,13 @@ import {
   HealthResponseSchema,
   ServiceDetailResponseSchema,
   ServiceSummarySchema,
+  ServiceMutationResponseSchema,
   TaskSummarySchema,
   type ClusterResponse,
   type HealthResponse,
   type ServiceDetailResponse,
   type ServiceSummary,
+  type ServiceMutationResponse,
   type TaskSummary,
 } from './read-model.js';
 
@@ -22,35 +24,67 @@ export class HttpAgentClient implements AgentClient {
   private readonly config: AgentConfig = loadAgentConfig();
 
   health(): Promise<HealthResponse> {
-    return this.get('/v1/health', HealthResponseSchema);
+    return this.request('GET', '/v1/health', HealthResponseSchema);
   }
 
   inspectCluster(): Promise<ClusterResponse> {
-    return this.get('/v1/cluster', ClusterResponseSchema);
+    return this.request('GET', '/v1/cluster', ClusterResponseSchema);
   }
 
   listServices(): Promise<ServiceSummary[]> {
-    return this.get('/v1/services', z.array(ServiceSummarySchema));
+    return this.request('GET', '/v1/services', z.array(ServiceSummarySchema));
   }
 
   inspectService(serviceId: string): Promise<ServiceDetailResponse> {
-    return this.get(
+    return this.request(
+      'GET',
       `/v1/services/${encodeURIComponent(serviceId)}`,
       ServiceDetailResponseSchema,
     );
   }
 
   listServiceTasks(serviceId: string): Promise<TaskSummary[]> {
-    return this.get(
+    return this.request(
+      'GET',
       `/v1/services/${encodeURIComponent(serviceId)}/tasks`,
       z.array(TaskSummarySchema),
     );
   }
 
-  private async get<T>(path: string, schema: z.ZodType<T>): Promise<T> {
+  scaleService(
+    serviceId: string,
+    expectedVersion: number,
+    replicas: number,
+  ): Promise<ServiceMutationResponse> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/scale`,
+      ServiceMutationResponseSchema,
+      { expectedVersion, replicas },
+    );
+  }
+
+  restartService(
+    serviceId: string,
+    expectedVersion: number,
+  ): Promise<ServiceMutationResponse> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/restart`,
+      ServiceMutationResponseSchema,
+      { expectedVersion },
+    );
+  }
+
+  private async request<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    schema: z.ZodType<T>,
+    body?: unknown,
+  ): Promise<T> {
     const url = new URL(path, this.config.baseUrl);
     const options: RequestOptions = {
-      method: 'GET',
+      method,
       hostname: url.hostname,
       port: url.port,
       path: `${url.pathname}${url.search}`,
@@ -92,7 +126,12 @@ export class HttpAgentClient implements AgentClient {
 
       req.on('timeout', () => req.destroy(new Error('Agent request timed out')));
       req.on('error', reject);
-      req.end();
+      if (body !== undefined) {
+        req.setHeader('Content-Type', 'application/json');
+        req.end(JSON.stringify(body));
+      } else {
+        req.end();
+      }
     });
   }
 }
