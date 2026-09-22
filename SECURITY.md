@@ -26,6 +26,8 @@ GitHub의 **Private vulnerability reporting** 기능이 활성화되어 있다�
 - cluster/resource scope validation
 - 모든 mutation audit
 - Docker daemon unauthenticated TCP endpoint 금지
+- Swarm control/data-path 통신은 허가된 cluster node의 trusted/private network로 제한
+- TCP 2377, TCP/UDP 7946, UDP 4789 또는 설정된 data-path port의 untrusted/public 접근 차단
 - Control Plane ↔ Agent mTLS
 - Agent arbitrary shell execution 금지
 - Agent operation별 field/target allow-list
@@ -33,6 +35,20 @@ GitHub의 **Private vulnerability reporting** 기능이 활성화되어 있다�
 - secret value API/log/audit 출력 금지
 - manager quorum 상실 시 mutation 차단
 - service version/spec precondition 검증
+
+## Swarm Network Boundary
+
+Swarm node 간 control/data-path 포트는 인터넷 또는 비신뢰 네트워크에 노출하지 않는다.
+
+기본 포트:
+
+- `2377/TCP`: manager control plane
+- `7946/TCP/UDP`: node discovery / communication
+- `4789/UDP`: overlay/VXLAN data path
+
+`--data-path-port`로 4789를 변경한 경우에도 동일하게 해당 UDP 포트를 허가된 cluster node 사이에서만 허용한다.
+
+특히 VXLAN data-path는 자체 인증을 제공하지 않으므로 public/perimeter firewall에서 접근 가능하게 구성하지 않는다. Swarm traffic이 통과하는 네트워크를 완전히 신뢰할 수 없다면 encrypted overlay network 적용을 별도로 검토한다.
 
 ## Agent Boundary
 
