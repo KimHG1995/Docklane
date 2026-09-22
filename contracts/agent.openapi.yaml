@@ -1,12 +1,13 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.2.0
-  description: Stable read-model contract between the Docklane Control Plane and Go Agent.
+  version: 0.3.0
+  description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
 security:
   - mutualTLS: []
+
 paths:
   /v1/health:
     get:
@@ -18,6 +19,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+
   /v1/cluster:
     get:
       operationId: inspectCluster
@@ -28,7 +30,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ClusterResponse'
-  /v1/services:\n    get:\n      operationId: listServices\n      responses:\n        '200':\n          description: Normalized Swarm services.\n          content:\n            application/json:\n              schema:\n                type: array\n                items:\n                  $ref: '#/components/schemas/ServiceSummary'\n  /v1/services/{serviceId}:
+
+  /v1/services:
+    get:
+      operationId: listServices
+      responses:
+        '200':
+          description: Normalized Swarm services.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ServiceSummary'
+
+  /v1/services/{serviceId}:
     get:
       operationId: inspectService
       parameters:
@@ -40,6 +56,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServiceDetailResponse'
+
   /v1/services/{serviceId}/tasks:
     get:
       operationId: listServiceTasks
@@ -47,18 +64,63 @@ paths:
         - $ref: '#/components/parameters/ServiceId'
       responses:
         '200':
-          description: Normalized tasks currently associated with the service.
+          description: Normalized tasks associated with the service.
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  type: object
-                  additionalProperties: true
+                  $ref: '#/components/schemas/TaskSummary'
+
+  /v1/services/{serviceId}/scale:
+    post:
+      operationId: scaleService
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScaleServiceRequest'
+      responses:
+        '200':
+          description: Docker accepted the service update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationResponse'
+        '400':
+          description: Invalid service mode or request.
+        '409':
+          description: Service version precondition failed.
+
+  /v1/services/{serviceId}/restart:
+    post:
+      operationId: restartService
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestartServiceRequest'
+      responses:
+        '200':
+          description: Docker accepted the forced service update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationResponse'
+        '409':
+          description: Service version precondition failed.
+
 components:
   securitySchemes:
     mutualTLS:
       type: mutualTLS
+
   parameters:
     ServiceId:
       name: serviceId
@@ -67,9 +129,11 @@ components:
       schema:
         type: string
         minLength: 1
+
   schemas:
     HealthResponse:
       type: object
+      additionalProperties: false
       required: [status, component]
       properties:
         status:
@@ -78,6 +142,156 @@ components:
         component:
           type: string
           const: docklane-agent
-    DockerSnapshot:
+
+    ManagerQuorum:
       type: object
-      additionalProperties: true
+      additionalProperties: false
+      required: [total, reachable, required, available, leaderCount]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        reachable:
+          type: integer
+          minimum: 0
+        required:
+          type: integer
+          minimum: 0
+        available:
+          type: boolean
+        leaderCount:
+          type: integer
+          minimum: 0
+
+    NodeSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [id, hostname, address, role, availability, state, manager, leader, nanoCpus, memoryBytes]
+      properties:
+        id: { type: string }
+        hostname: { type: string }
+        address: { type: string }
+        role: { type: string }
+        availability: { type: string }
+        state: { type: string }
+        message: { type: string }
+        manager: { type: boolean }
+        leader: { type: boolean }
+        reachability: { type: string }
+        engineVersion: { type: string }
+        nanoCpus: { type: integer }
+        memoryBytes: { type: integer }
+
+    ClusterSummary:
+      type: object
+      additionalProperties: false
+      required: [id, dockerVersion, apiVersion, createdAt, updatedAt, managers]
+      properties:
+        id: { type: string }
+        dockerVersion: { type: string }
+        apiVersion: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        managers:
+          $ref: '#/components/schemas/ManagerQuorum'
+
+    ClusterResponse:
+      type: object
+      additionalProperties: false
+      required: [cluster, nodes]
+      properties:
+        cluster:
+          $ref: '#/components/schemas/ClusterSummary'
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeSummary'
+
+    ServiceSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [id, name, version, mode, desiredReplicas, runningReplicas, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version:
+          type: integer
+          minimum: 0
+        image: { type: string }
+        mode: { type: string }
+        desiredReplicas:
+          type: integer
+          minimum: 0
+        runningReplicas:
+          type: integer
+          minimum: 0
+        updateState: { type: string }
+        updateMessage: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    TaskSummary:
+      type: object
+      additionalProperties: false
+      required: [id, serviceId, slot, desiredState, state, timestamp]
+      properties:
+        id: { type: string }
+        serviceId: { type: string }
+        slot: { type: integer }
+        nodeId: { type: string }
+        desiredState: { type: string }
+        state: { type: string }
+        message: { type: string }
+        error: { type: string }
+        containerId: { type: string }
+        image: { type: string }
+        timestamp: { type: string, format: date-time }
+
+    ServiceDetailResponse:
+      type: object
+      additionalProperties: false
+      required: [service, tasks]
+      properties:
+        service:
+          $ref: '#/components/schemas/ServiceSummary'
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskSummary'
+
+    ScaleServiceRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, replicas]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        replicas:
+          type: integer
+          minimum: 0
+
+    RestartServiceRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+
+    ServiceMutationResponse:
+      type: object
+      additionalProperties: false
+      required: [serviceId, version]
+      properties:
+        serviceId: { type: string }
+        version:
+          type: integer
+          minimum: 0
+        warnings:
+          type: array
+          items:
+            type: string
