@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	cerrdefs "github.com/containerd/errdefs"
+
 	"github.com/KimHG1995/Docklane/agent/internal/model"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
@@ -44,7 +46,7 @@ func (r *Reader) ScaleService(
 		Spec:    service.Spec,
 	})
 	if err != nil {
-		return model.ServiceMutationResponse{}, fmt.Errorf("scale service %q: %w", serviceID, err)
+		return model.ServiceMutationResponse{}, mapServiceUpdateError("scale", serviceID, err)
 	}
 
 	after, err := r.client.ServiceInspect(ctx, service.ID, client.ServiceInspectOptions{})
@@ -91,7 +93,7 @@ func (r *Reader) RestartService(
 		Spec:    service.Spec,
 	})
 	if err != nil {
-		return model.ServiceMutationResponse{}, fmt.Errorf("restart service %q: %w", serviceID, err)
+		return model.ServiceMutationResponse{}, mapServiceUpdateError("restart", serviceID, err)
 	}
 
 	after, err := r.client.ServiceInspect(ctx, service.ID, client.ServiceInspectOptions{})
@@ -127,4 +129,19 @@ func validateMutationPrecondition(
 		return &ConflictError{Message: "service spec changed after mutation planning"}
 	}
 	return nil
+}
+
+
+func mapServiceUpdateError(action, serviceID string, err error) error {
+	if cerrdefs.IsConflict(err) {
+		return &ConflictError{
+			Message: fmt.Sprintf(
+				"%s service %q: Docker rejected stale service version",
+				action,
+				serviceID,
+			),
+		}
+	}
+
+	return fmt.Errorf("%s service %q: %w", action, serviceID, err)
 }
