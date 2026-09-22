@@ -22,14 +22,14 @@ func (r *Reader) ScaleService(
 
 	service := result.Service
 	if service.Version.Index != expectedVersion {
-		return model.ServiceMutationResponse{}, fmt.Errorf(
+		return model.ServiceMutationResponse{}, &ConflictError{Message: fmt.Sprintf(
 			"service version conflict: expected %d, got %d",
 			expectedVersion,
 			service.Version.Index,
-		)
+		)}
 	}
 	if service.Spec.Mode.Replicated == nil {
-		return model.ServiceMutationResponse{}, fmt.Errorf("service %q is not replicated", serviceID)
+		return model.ServiceMutationResponse{}, &ValidationError{Message: fmt.Sprintf("service %q is not replicated", serviceID)}
 	}
 
 	service.Spec.Mode.Replicated.Replicas = &replicas
