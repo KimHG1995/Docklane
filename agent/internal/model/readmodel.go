@@ -80,6 +80,7 @@ type ServiceMutationRequest struct {
 }
 
 type ServiceMutationResponse struct {
-	Service  ServiceSummary `json:"service"`
-	Warnings []string       `json:"warnings,omitempty"`
+	ServiceID string   `json:"serviceId"`
+	Version   uint64   `json:"version"`
+	Warnings  []string `json:"warnings,omitempty"`
 }
