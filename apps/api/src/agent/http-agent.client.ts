@@ -8,16 +8,21 @@ import {
   ClusterResponseSchema,
   HealthResponseSchema,
   ServiceDetailResponseSchema,
-  ServiceSummarySchema,
+  ServiceMutationPlanSchema,
   ServiceMutationResponseSchema,
+  ServiceSummarySchema,
   TaskSummarySchema,
   type ClusterResponse,
   type HealthResponse,
   type ServiceDetailResponse,
-  type ServiceSummary,
+  type ServiceMutationPlan,
   type ServiceMutationResponse,
+  type ServiceSummary,
   type TaskSummary,
 } from './read-model.js';
+
+const REQUEST_TIMEOUT_MS = 5_000;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 @Injectable()
 export class HttpAgentClient implements AgentClient {
@@ -51,28 +56,61 @@ export class HttpAgentClient implements AgentClient {
     );
   }
 
-  scaleService(
+  planScaleService(
     serviceId: string,
     expectedVersion: number,
     replicas: number,
+  ): Promise<ServiceMutationPlan> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/plan-scale`,
+      ServiceMutationPlanSchema,
+      { expectedVersion, replicas },
+    );
+  }
+
+  planRestartService(
+    serviceId: string,
+    expectedVersion: number,
+  ): Promise<ServiceMutationPlan> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/plan-restart`,
+      ServiceMutationPlanSchema,
+      { expectedVersion },
+    );
+  }
+
+  scaleService(
+    serviceId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+      replicas: number;
+    },
   ): Promise<ServiceMutationResponse> {
     return this.request(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/scale`,
       ServiceMutationResponseSchema,
-      { expectedVersion, replicas },
+      input,
     );
   }
 
   restartService(
     serviceId: string,
-    expectedVersion: number,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+    },
   ): Promise<ServiceMutationResponse> {
     return this.request(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/restart`,
       ServiceMutationResponseSchema,
-      { expectedVersion },
+      input,
     );
   }
 
@@ -93,24 +131,72 @@ export class HttpAgentClient implements AgentClient {
       cert: this.config.cert,
       key: this.config.key,
       rejectUnauthorized: !this.config.insecureDev,
-      timeout: 5_000,
+      timeout: REQUEST_TIMEOUT_MS,
     };
 
     return new Promise<T>((resolve, reject) => {
-      const onResponse = (res: IncomingMessage) => {
+      let settled = false;
+
+      const rejectOnce = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+
+      const resolveOnce = (value: T): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+
+      const onResponse = (res: IncomingMessage): void => {
         const chunks: Buffer[] = [];
-        res.on('data', (chunk: Buffer) => chunks.push(chunk));
-        res.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf8');
+        let totalBytes = 0;
+        let ended = false;
+
+        res.setTimeout(REQUEST_TIMEOUT_MS, () => {
+          res.destroy(new Error('Agent response timed out'));
+        });
+
+        res.on('data', (chunk: Buffer) => {
+          totalBytes += chunk.length;
+          if (totalBytes > MAX_RESPONSE_BYTES) {
+            res.destroy(new Error('Agent response exceeded size limit'));
+            return;
+          }
+          chunks.push(chunk);
+        });
+
+        res.once('aborted', () => {
+          rejectOnce(new Error('Agent response aborted'));
+        });
+        res.once('error', (error) => {
+          rejectOnce(
+            error instanceof Error
+              ? error
+              : new Error(`Agent response error: ${String(error)}`),
+          );
+        });
+        res.once('close', () => {
+          if (!ended) {
+            rejectOnce(new Error('Agent response closed before completion'));
+          }
+        });
+        res.once('end', () => {
+          ended = true;
+          const responseBody = Buffer.concat(chunks).toString('utf8');
+
           if ((res.statusCode ?? 500) >= 400) {
-            reject(new AgentRequestError(res.statusCode ?? 500, body));
+            rejectOnce(
+              new AgentRequestError(res.statusCode ?? 500, responseBody),
+            );
             return;
           }
 
           try {
-            resolve(schema.parse(JSON.parse(body)));
+            resolveOnce(schema.parse(JSON.parse(responseBody)));
           } catch (error) {
-            reject(
+            rejectOnce(
               new Error(
                 `Agent response failed contract validation: ${String(error)}`,
               ),
@@ -124,8 +210,11 @@ export class HttpAgentClient implements AgentClient {
           ? httpsRequest(options, onResponse)
           : httpRequest(options, onResponse);
 
-      req.on('timeout', () => req.destroy(new Error('Agent request timed out')));
-      req.on('error', reject);
+      req.on('timeout', () =>
+        req.destroy(new Error('Agent request timed out')),
+      );
+      req.on('error', (error) => rejectOnce(error));
+
       if (body !== undefined) {
         req.setHeader('Content-Type', 'application/json');
         req.end(JSON.stringify(body));
