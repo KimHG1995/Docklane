@@ -31,6 +31,8 @@ export interface AuditEventInput {
   actorId: string;
   clusterId: string;
   serviceId: string;
+  resourceType?: 'service' | 'node';
+  resourceId?: string;
   action: string;
   beforeJson?: unknown;
   afterJson?: unknown;
