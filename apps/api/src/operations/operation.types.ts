@@ -1,5 +1,11 @@
 export type OperationType = 'SCALE' | 'RESTART';
-export type OperationStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+export type OperationStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'VERIFYING'
+  | 'SUCCESS'
+  | 'FAILED'
+  | 'NEEDS_ATTENTION';
 
 export interface OperationRecord {
   id: string;
