@@ -1,0 +1,74 @@
+package model
+
+import "time"
+
+type ManagerQuorum struct {
+	Total int `json:"total"`
+	Reachable int `json:"reachable"`
+	Required int `json:"required"`
+	Available bool `json:"available"`
+	LeaderCount int `json:"leaderCount"`
+}
+
+type NodeSummary struct {
+	ID string `json:"id"`
+	Hostname string `json:"hostname"`
+	Address string `json:"address"`
+	Role string `json:"role"`
+	Availability string `json:"availability"`
+	State string `json:"state"`
+	Message string `json:"message,omitempty"`
+	Manager bool `json:"manager"`
+	Leader bool `json:"leader"`
+	Reachability string `json:"reachability,omitempty"`
+	EngineVersion string `json:"engineVersion,omitempty"`
+	NanoCPUs int64 `json:"nanoCpus"`
+	MemoryBytes int64 `json:"memoryBytes"`
+}
+
+type ClusterSummary struct {
+	ID string `json:"id"`
+	DockerVersion string `json:"dockerVersion"`
+	APIVersion string `json:"apiVersion"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Managers ManagerQuorum `json:"managers"`
+}
+
+type ClusterResponse struct {
+	Cluster ClusterSummary `json:"cluster"`
+	Nodes []NodeSummary `json:"nodes"`
+}
+
+type ServiceSummary struct {
+	ID string `json:"id"`
+	Name string `json:"name"`
+	Version uint64 `json:"version"`
+	Image string `json:"image,omitempty"`
+	Mode string `json:"mode"`
+	DesiredReplicas uint64 `json:"desiredReplicas"`
+	RunningReplicas uint64 `json:"runningReplicas"`
+	UpdateState string `json:"updateState,omitempty"`
+	UpdateMessage string `json:"updateMessage,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type TaskSummary struct {
+	ID string `json:"id"`
+	ServiceID string `json:"serviceId"`
+	Slot int `json:"slot"`
+	NodeID string `json:"nodeId,omitempty"`
+	DesiredState string `json:"desiredState"`
+	State string `json:"state"`
+	Message string `json:"message,omitempty"`
+	Error string `json:"error,omitempty"`
+	ContainerID string `json:"containerId,omitempty"`
+	Image string `json:"image,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type ServiceDetailResponse struct {
+	Service ServiceSummary `json:"service"`
+	Tasks []TaskSummary `json:"tasks"`
+}
