@@ -126,6 +126,23 @@ export class OperationRepository implements OnModuleInit {
     return rows.map(mapOperation);
   }
 
+  async findNonTerminalForServiceWithConnection(
+    connection: PoolConnection,
+    clusterId: string,
+    serviceId: string,
+  ): Promise<OperationRecord | null> {
+    const [rows] = await connection.query<OperationRow[]>(
+      `SELECT * FROM operations
+       WHERE cluster_id = ?
+         AND service_id = ?
+         AND status IN ('PENDING', 'RUNNING', 'VERIFYING', 'NEEDS_ATTENTION')
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [clusterId, serviceId],
+    );
+    return rows[0] ? mapOperation(rows[0]) : null;
+  }
+
   async create(
     connection: PoolConnection,
     input: {
