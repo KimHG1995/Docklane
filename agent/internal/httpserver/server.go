@@ -23,8 +23,10 @@ type DockerReader interface {
 	Services(context.Context) ([]model.ServiceSummary, error)
 	Service(context.Context, string) (model.ServiceDetailResponse, error)
 	ServiceTasks(context.Context, string) ([]model.TaskSummary, error)
-	ScaleService(context.Context, string, uint64, uint64) (model.ServiceMutationResponse, error)
-	RestartService(context.Context, string, uint64) (model.ServiceMutationResponse, error)
+	PlanScaleService(context.Context, string, uint64, uint64) (model.ServiceMutationPlan, error)
+	PlanRestartService(context.Context, string, uint64) (model.ServiceMutationPlan, error)
+	ScaleService(context.Context, string, model.ServiceMutationRequest) (model.ServiceMutationResponse, error)
+	RestartService(context.Context, string, model.ServiceMutationRequest) (model.ServiceMutationResponse, error)
 }
 
 type Server struct {
@@ -41,6 +43,8 @@ func New(cfg config.Config, reader DockerReader) *Server {
 	mux.HandleFunc("GET /v1/services", s.services)
 	mux.HandleFunc("GET /v1/services/{serviceId}", s.service)
 	mux.HandleFunc("GET /v1/services/{serviceId}/tasks", s.serviceTasks)
+	mux.HandleFunc("POST /v1/services/{serviceId}/plan-scale", s.planScaleService)
+	mux.HandleFunc("POST /v1/services/{serviceId}/plan-restart", s.planRestartService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/scale", s.scaleService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/restart", s.restartService)
 
@@ -144,6 +148,61 @@ func (s *Server) serviceTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+func (s *Server) planScaleService(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("serviceId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("serviceId is required"))
+		return
+	}
+
+	var input model.ServiceMutationRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if input.Replicas == nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("replicas is required"))
+		return
+	}
+
+	result, err := s.reader.PlanScaleService(
+		r.Context(),
+		id,
+		input.ExpectedVersion,
+		*input.Replicas,
+	)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) planRestartService(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("serviceId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("serviceId is required"))
+		return
+	}
+
+	var input model.ServiceMutationRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	result, err := s.reader.PlanRestartService(
+		r.Context(),
+		id,
+		input.ExpectedVersion,
+	)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) scaleService(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("serviceId")
 	if id == "" {
@@ -161,12 +220,7 @@ func (s *Server) scaleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.reader.ScaleService(
-		r.Context(),
-		id,
-		input.ExpectedVersion,
-		*input.Replicas,
-	)
+	result, err := s.reader.ScaleService(r.Context(), id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -187,11 +241,7 @@ func (s *Server) restartService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.reader.RestartService(
-		r.Context(),
-		id,
-		input.ExpectedVersion,
-	)
+	result, err := s.reader.RestartService(r.Context(), id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return

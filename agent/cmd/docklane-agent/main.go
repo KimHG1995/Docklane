@@ -16,16 +16,20 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load config", "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	reader, err := dockerengine.NewReader()
 	if err != nil {
 		slog.Error("create docker reader", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer reader.Close()
 
@@ -43,6 +47,9 @@ func main() {
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	exitCode := 0
 
 	select {
 	case sig := <-signals:
@@ -50,6 +57,7 @@ func main() {
 	case err := <-serverErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("agent server stopped", "error", err)
+			exitCode = 1
 		}
 	}
 
@@ -58,5 +66,8 @@ func main() {
 
 	if err := server.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown", "error", err)
+		exitCode = 1
 	}
+
+	return exitCode
 }

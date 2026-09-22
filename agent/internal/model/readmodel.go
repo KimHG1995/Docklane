@@ -44,6 +44,8 @@ type ServiceSummary struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
 	Version         uint64    `json:"version"`
+	SpecHash        string    `json:"specHash"`
+	ForceUpdate     uint64    `json:"forceUpdate"`
 	Image           string    `json:"image,omitempty"`
 	Mode            string    `json:"mode"`
 	DesiredReplicas uint64    `json:"desiredReplicas"`
@@ -61,6 +63,7 @@ type TaskSummary struct {
 	NodeID       string    `json:"nodeId,omitempty"`
 	DesiredState string    `json:"desiredState"`
 	State        string    `json:"state"`
+	ForceUpdate  uint64    `json:"forceUpdate"`
 	Message      string    `json:"message,omitempty"`
 	Error        string    `json:"error,omitempty"`
 	ContainerID  string    `json:"containerId,omitempty"`
@@ -74,12 +77,25 @@ type ServiceDetailResponse struct {
 }
 
 type ServiceMutationRequest struct {
-	ExpectedVersion uint64  `json:"expectedVersion"`
-	Replicas        *uint64 `json:"replicas,omitempty"`
+	ExpectedVersion  uint64  `json:"expectedVersion"`
+	ExpectedSpecHash string  `json:"expectedSpecHash"`
+	TargetSpecHash   string  `json:"targetSpecHash"`
+	Replicas         *uint64 `json:"replicas,omitempty"`
+}
+
+type ServiceMutationPlan struct {
+	ServiceID         string  `json:"serviceId"`
+	Version           uint64  `json:"version"`
+	BeforeSpecHash    string  `json:"beforeSpecHash"`
+	TargetSpecHash    string  `json:"targetSpecHash"`
+	TargetForceUpdate uint64  `json:"targetForceUpdate"`
+	TargetReplicas    *uint64 `json:"targetReplicas,omitempty"`
 }
 
 type ServiceMutationResponse struct {
-	ServiceID string   `json:"serviceId"`
-	Version   uint64   `json:"version"`
-	Warnings  []string `json:"warnings,omitempty"`
+	ServiceID         string   `json:"serviceId"`
+	Version           uint64   `json:"version"`
+	TargetSpecHash    string   `json:"targetSpecHash"`
+	TargetForceUpdate uint64   `json:"targetForceUpdate"`
+	Warnings          []string `json:"warnings,omitempty"`
 }

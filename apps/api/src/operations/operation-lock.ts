@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import {
   ConflictException,
+  Inject,
   Injectable,
   InternalServerErrorException,
 } from '@nestjs/common';
@@ -12,23 +14,23 @@ interface LockRow extends RowDataPacket {
 
 @Injectable()
 export class OperationLock {
-  constructor(private readonly db: Database) {}
+  constructor(@Inject(Database) private readonly db: Database) {}
 
   async withServiceLock<T>(
     clusterId: string,
-    serviceId: string,
+    canonicalServiceId: string,
     fn: (connection: PoolConnection) => Promise<T>,
   ): Promise<T> {
     const connection = await this.db.getConnection();
-    const lockName = `docklane:${clusterId}:${serviceId}`;
+    const lockName = serviceLockName(clusterId, canonicalServiceId);
+    let reusable = true;
 
     try {
       const [rows] = await connection.query<LockRow[]>(
         'SELECT GET_LOCK(?, 2) AS acquired',
         [lockName],
       );
-      const acquired = rows[0]?.acquired;
-      if (acquired !== 1) {
+      if (rows[0]?.acquired !== 1) {
         throw new ConflictException('Another service mutation is in progress');
       }
       return await fn(connection);
@@ -36,9 +38,12 @@ export class OperationLock {
       try {
         await connection.query('SELECT RELEASE_LOCK(?)', [lockName]);
       } catch {
-        // connection close below releases named locks as a final fallback
+        reusable = false;
+        connection.destroy();
       }
-      connection.release();
+      if (reusable) {
+        connection.release();
+      }
     }
   }
 
@@ -51,4 +56,14 @@ export class OperationLock {
       );
     }
   }
+}
+
+
+function serviceLockName(clusterId: string, serviceId: string): string {
+  const digest = createHash('sha256')
+    .update(clusterId)
+    .update('\0')
+    .update(serviceId)
+    .digest('hex');
+  return `docklane:${digest.slice(0, 55)}`;
 }

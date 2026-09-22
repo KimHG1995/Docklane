@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   ForbiddenException,
+  Inject,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -15,8 +16,8 @@ const ROLE_RANK: Record<Role, number> = { VIEWER: 1, OPERATOR: 2, ADMIN: 3 };
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
-    private readonly reflector: Reflector,
-    private readonly tokens: TokenRegistry,
+    @Inject(Reflector) private readonly reflector: Reflector,
+    @Inject(TokenRegistry) private readonly tokens: TokenRegistry,
   ) {}
 
   canActivate(context: ExecutionContext): boolean {

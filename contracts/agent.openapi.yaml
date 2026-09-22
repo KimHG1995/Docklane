@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.3.0
+  version: 0.4.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -51,7 +51,7 @@ paths:
         - $ref: '#/components/parameters/ServiceId'
       responses:
         '200':
-          description: Normalized service and its tasks.
+          description: Normalized service and tasks.
           content:
             application/json:
               schema:
@@ -64,13 +64,55 @@ paths:
         - $ref: '#/components/parameters/ServiceId'
       responses:
         '200':
-          description: Normalized tasks associated with the service.
+          description: Normalized service tasks.
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/TaskSummary'
+
+  /v1/services/{serviceId}/plan-scale:
+    post:
+      operationId: planScaleService
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScalePlanRequest'
+      responses:
+        '200':
+          description: Canonical service identity and deterministic target spec.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationPlan'
+        '409':
+          description: Expected service version is stale.
+
+  /v1/services/{serviceId}/plan-restart:
+    post:
+      operationId: planRestartService
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestartPlanRequest'
+      responses:
+        '200':
+          description: Canonical service identity and deterministic target spec.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationPlan'
+        '409':
+          description: Expected service version is stale.
 
   /v1/services/{serviceId}/scale:
     post:
@@ -82,10 +124,10 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ScaleServiceRequest'
+              $ref: '#/components/schemas/ScaleMutationRequest'
       responses:
         '200':
-          description: Docker accepted the service update.
+          description: Docker accepted the exact planned service update.
           content:
             application/json:
               schema:
@@ -93,7 +135,7 @@ paths:
         '400':
           description: Invalid service mode or request.
         '409':
-          description: Service version precondition failed.
+          description: Version or spec precondition failed.
 
   /v1/services/{serviceId}/restart:
     post:
@@ -105,16 +147,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RestartServiceRequest'
+              $ref: '#/components/schemas/RestartMutationRequest'
       responses:
         '200':
-          description: Docker accepted the forced service update.
+          description: Docker accepted the exact planned forced update.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServiceMutationResponse'
         '409':
-          description: Service version precondition failed.
+          description: Version or spec precondition failed.
 
 components:
   securitySchemes:
@@ -148,20 +190,11 @@ components:
       additionalProperties: false
       required: [total, reachable, required, available, leaderCount]
       properties:
-        total:
-          type: integer
-          minimum: 0
-        reachable:
-          type: integer
-          minimum: 0
-        required:
-          type: integer
-          minimum: 0
-        available:
-          type: boolean
-        leaderCount:
-          type: integer
-          minimum: 0
+        total: { type: integer, minimum: 0 }
+        reachable: { type: integer, minimum: 0 }
+        required: { type: integer, minimum: 0 }
+        available: { type: boolean }
+        leaderCount: { type: integer, minimum: 0 }
 
     NodeSummary:
       type: object
@@ -212,21 +245,17 @@ components:
       type: object
       additionalProperties: false
       required:
-        [id, name, version, mode, desiredReplicas, runningReplicas, createdAt, updatedAt]
+        [id, name, version, specHash, forceUpdate, mode, desiredReplicas, runningReplicas, createdAt, updatedAt]
       properties:
         id: { type: string }
         name: { type: string }
-        version:
-          type: integer
-          minimum: 0
+        version: { type: integer, minimum: 0 }
+        specHash: { type: string, minLength: 1 }
+        forceUpdate: { type: integer, minimum: 0 }
         image: { type: string }
         mode: { type: string }
-        desiredReplicas:
-          type: integer
-          minimum: 0
-        runningReplicas:
-          type: integer
-          minimum: 0
+        desiredReplicas: { type: integer, minimum: 0 }
+        runningReplicas: { type: integer, minimum: 0 }
         updateState: { type: string }
         updateMessage: { type: string }
         createdAt: { type: string, format: date-time }
@@ -235,7 +264,8 @@ components:
     TaskSummary:
       type: object
       additionalProperties: false
-      required: [id, serviceId, slot, desiredState, state, timestamp]
+      required:
+        [id, serviceId, slot, desiredState, state, forceUpdate, timestamp]
       properties:
         id: { type: string }
         serviceId: { type: string }
@@ -243,6 +273,7 @@ components:
         nodeId: { type: string }
         desiredState: { type: string }
         state: { type: string }
+        forceUpdate: { type: integer, minimum: 0 }
         message: { type: string }
         error: { type: string }
         containerId: { type: string }
@@ -261,37 +292,64 @@ components:
           items:
             $ref: '#/components/schemas/TaskSummary'
 
-    ScaleServiceRequest:
+    ScalePlanRequest:
       type: object
       additionalProperties: false
       required: [expectedVersion, replicas]
       properties:
-        expectedVersion:
-          type: integer
-          minimum: 0
-        replicas:
-          type: integer
-          minimum: 0
+        expectedVersion: { type: integer, minimum: 0 }
+        replicas: { type: integer, minimum: 0 }
 
-    RestartServiceRequest:
+    RestartPlanRequest:
       type: object
       additionalProperties: false
       required: [expectedVersion]
       properties:
-        expectedVersion:
-          type: integer
-          minimum: 0
+        expectedVersion: { type: integer, minimum: 0 }
+
+    ScaleMutationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [expectedVersion, expectedSpecHash, targetSpecHash, replicas]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        replicas: { type: integer, minimum: 0 }
+
+    RestartMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedSpecHash, targetSpecHash]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+
+    ServiceMutationPlan:
+      type: object
+      additionalProperties: false
+      required:
+        [serviceId, version, beforeSpecHash, targetSpecHash, targetForceUpdate]
+      properties:
+        serviceId: { type: string }
+        version: { type: integer, minimum: 0 }
+        beforeSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        targetForceUpdate: { type: integer, minimum: 0 }
+        targetReplicas: { type: integer, minimum: 0 }
 
     ServiceMutationResponse:
       type: object
       additionalProperties: false
-      required: [serviceId, version]
+      required:
+        [serviceId, version, targetSpecHash, targetForceUpdate]
       properties:
         serviceId: { type: string }
-        version:
-          type: integer
-          minimum: 0
+        version: { type: integer, minimum: 0 }
+        targetSpecHash: { type: string, minLength: 1 }
+        targetForceUpdate: { type: integer, minimum: 0 }
         warnings:
           type: array
-          items:
-            type: string
+          items: { type: string }

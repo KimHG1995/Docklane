@@ -15,6 +15,9 @@ export interface OperationRecord {
   status: OperationStatus;
   actorId: string;
   expectedVersion: number;
+  beforeSpecHash: string;
+  targetSpecHash: string;
+  targetForceUpdate: number;
   targetReplicas: number | null;
   resultVersion: number | null;
   errorCode: string | null;
