@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  Inject,
   Injectable,
   InternalServerErrorException,
 } from '@nestjs/common';
@@ -12,23 +13,22 @@ interface LockRow extends RowDataPacket {
 
 @Injectable()
 export class OperationLock {
-  constructor(private readonly db: Database) {}
+  constructor(@Inject(Database) private readonly db: Database) {}
 
   async withServiceLock<T>(
     clusterId: string,
-    serviceId: string,
+    canonicalServiceId: string,
     fn: (connection: PoolConnection) => Promise<T>,
   ): Promise<T> {
     const connection = await this.db.getConnection();
-    const lockName = `docklane:${clusterId}:${serviceId}`;
+    const lockName = `docklane:${clusterId}:${canonicalServiceId}`;
 
     try {
       const [rows] = await connection.query<LockRow[]>(
         'SELECT GET_LOCK(?, 2) AS acquired',
         [lockName],
       );
-      const acquired = rows[0]?.acquired;
-      if (acquired !== 1) {
+      if (rows[0]?.acquired !== 1) {
         throw new ConflictException('Another service mutation is in progress');
       }
       return await fn(connection);
@@ -36,7 +36,7 @@ export class OperationLock {
       try {
         await connection.query('SELECT RELEASE_LOCK(?)', [lockName]);
       } catch {
-        // connection close below releases named locks as a final fallback
+        // Releasing the connection closes any remaining named lock ownership.
       }
       connection.release();
     }
