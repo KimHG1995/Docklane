@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Inject,
   Param,
   Post,
   Req,
@@ -19,7 +20,7 @@ import type { OperationRecord } from './operation.types.js';
 
 @Controller('v1/clusters/:clusterId')
 export class MutationController {
-  constructor(private readonly mutations: MutationService) {}
+  constructor(@Inject(MutationService) private readonly mutations: MutationService) {}
 
   @Get('operations/:operationId')
   @RequireRole('VIEWER')
