@@ -77,6 +77,7 @@ Docklane의 핵심 단계다.
 - [ ] application health stability window
 - [ ] SSE progress
 - [ ] deployment timeout
+- [ ] no-op deployment detection / verification
 - [ ] deployment history
 
 Exit criteria:
@@ -153,6 +154,8 @@ worker-02
 - [ ] node drain
 - [ ] authorization rejection
 - [ ] audit completeness
+- [ ] same digest/spec no-op redeploy
+- [ ] Swarm internal ports blocked from untrusted/public networks
 
 이 단계까지가 **기능 MVP**다.
 
