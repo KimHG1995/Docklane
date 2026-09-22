@@ -26,6 +26,7 @@ import type {
   RestartServiceRequest,
   ScaleServiceRequest,
 } from './mutation.dto.js';
+import { classifyMutationSnapshot } from './mutation-verification.js';
 
 const VERIFY_TIMEOUT_MS = 30_000;
 const VERIFY_INTERVAL_MS = 500;
@@ -135,11 +136,16 @@ export class MutationService implements OnApplicationBootstrap {
           canonicalServiceId,
         );
 
-        const plan = await this.agentClient.planScaleService(
-          canonicalServiceId,
-          input.expectedVersion,
-          input.replicas,
-        );
+        let plan: ServiceMutationPlan;
+        try {
+          plan = await this.agentClient.planScaleService(
+            canonicalServiceId,
+            input.expectedVersion,
+            input.replicas,
+          );
+        } catch (error) {
+          throw mapPlanningError(error);
+        }
         const before = await this.agentClient.inspectService(canonicalServiceId);
         this.assertPlanMatchesCurrent(plan, before);
 
@@ -233,10 +239,15 @@ export class MutationService implements OnApplicationBootstrap {
           canonicalServiceId,
         );
 
-        const plan = await this.agentClient.planRestartService(
-          canonicalServiceId,
-          input.expectedVersion,
-        );
+        let plan: ServiceMutationPlan;
+        try {
+          plan = await this.agentClient.planRestartService(
+            canonicalServiceId,
+            input.expectedVersion,
+          );
+        } catch (error) {
+          throw mapPlanningError(error);
+        }
         const before = await this.agentClient.inspectService(canonicalServiceId);
         this.assertPlanMatchesCurrent(plan, before);
 
@@ -462,41 +473,22 @@ export class MutationService implements OnApplicationBootstrap {
         last = current;
         lastError = null;
 
-        if (current.service.specHash !== operation.targetSpecHash) {
+        const decision = classifyMutationSnapshot(operation, current);
+        if (decision.status === 'EXTERNAL_CONFLICT') {
           return {
             status: 'EXTERNAL_CONFLICT',
             current,
-            message:
-              'Current service spec no longer matches the recorded mutation target',
+            message: decision.message,
           };
         }
-
-        if (
-          operation.resultVersion !== null &&
-          current.service.version !== operation.resultVersion
-        ) {
-          return {
-            status: 'EXTERNAL_CONFLICT',
-            current,
-            message:
-              `Service version changed after Docklane mutation: expected ${operation.resultVersion}, got ${current.service.version}`,
-          };
-        }
-
-        const state = current.service.updateState;
-        if (
-          state === 'paused' ||
-          state === 'rollback_started' ||
-          state === 'rollback_completed'
-        ) {
+        if (decision.status === 'FAILED') {
           return {
             status: 'FAILED',
             current,
-            message: `Unexpected update state: ${state}`,
+            message: decision.message,
           };
         }
-
-        if (this.hasConverged(operation, current)) {
+        if (decision.status === 'SUCCESS') {
           return { status: 'SUCCESS', current };
         }
       } catch (error) {
@@ -513,39 +505,6 @@ export class MutationService implements OnApplicationBootstrap {
         ? `Verification timed out after Agent errors: ${lastError}`
         : 'Service mutation was accepted but convergence was not confirmed',
     };
-  }
-
-  private hasConverged(
-    operation: OperationRecord,
-    current: ServiceDetailResponse,
-  ): boolean {
-    if (current.service.forceUpdate !== operation.targetForceUpdate) {
-      return false;
-    }
-
-    if (
-      current.service.desiredReplicas !== current.service.runningReplicas
-    ) {
-      return false;
-    }
-
-    if (operation.type === 'SCALE') {
-      return current.service.desiredReplicas === operation.targetReplicas;
-    }
-
-    if (current.service.updateState !== 'completed') {
-      return false;
-    }
-
-    const runningTasks = current.tasks.filter(
-      (task) => task.state === 'running',
-    );
-    return (
-      runningTasks.length === current.service.desiredReplicas &&
-      runningTasks.every(
-        (task) => task.forceUpdate === operation.targetForceUpdate,
-      )
-    );
   }
 
   private async persistIntent(
@@ -799,7 +758,25 @@ function mapAgentError(error: AgentRequestError): Error {
   if (error.statusCode === 409) {
     return new ConflictException('Agent rejected stale service state');
   }
-  return new BadGatewayException('Agent rejected mutation request');
+  if (error.statusCode === 400) {
+    return new BadGatewayException('Agent rejected mutation request');
+  }
+  return new BadGatewayException('Agent mutation failed');
+}
+
+function mapPlanningError(error: unknown): Error {
+  if (error instanceof AgentRequestError) {
+    if (error.statusCode === 409) {
+      return new ConflictException('Service changed before mutation planning');
+    }
+    if (error.statusCode === 400) {
+      return new BadGatewayException('Agent rejected mutation planning');
+    }
+    return new BadGatewayException('Agent mutation planning failed');
+  }
+  return error instanceof Error
+    ? error
+    : new BadGatewayException('Agent mutation planning failed');
 }
 
 function errorMessage(error: unknown): string {
