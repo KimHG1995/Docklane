@@ -1,79 +1,80 @@
 # Docklane Product & Technical Specification
 
-Version: **0.1**  
+Version: **0.2**  
 Status: **Draft / pre-alpha**
 
 ## 1. Summary
 
 Docklane은 비용 제약 환경에서 기존 Linux VM과 Docker Swarm을 활용해 컨테이너 배포와 운영에 필요한 핵심 기능을 제공하는 경량 self-hosted deployment control plane이다.
 
-목표는 Kubernetes나 관리형 오케스트레이션 서비스를 복제하는 것이 아니라, Docker Swarm이 제공하는 실행 엔진 위에 운영자가 실제로 필요한 release, deployment, rollback, node lifecycle, audit workflow를 제공하는 것이다.
+목표는 Kubernetes나 관리형 오케스트레이션 서비스를 복제하는 것이 아니라, Docker Swarm이 제공하는 실행·스케줄링 기능 위에 release, deployment, rollback verification, mutation coordination, audit workflow를 제공하는 것이다.
 
-## 2. Problem
+"저비용"은 현재 제품 목표와 검증 가설이다. VM 재사용만으로 총비용 우위를 주장하지 않으며, 운영 도입 전 인프라 비용과 플랫폼 유지보수·백업·인증서·장애 대응 비용을 함께 측정한다.
 
-기존 VM 중심 운영은 다음 반복 비용을 만든다.
+## 2. MVP Scope
 
-- 신규 서버마다 Docker/runtime/configuration 구성
-- 여러 서버에 동일 버전을 수동 또는 스크립트로 배포
-- 서버 장애 시 workload 상태 확인과 재배치 판단
-- 배포 실패 시 수동 rollback
-- 어느 image/commit이 언제 배포되었는지 추적 어려움
-- 서버 점검 시 workload 이동 절차 반복
-- 운영 변경 이력과 담당자 추적 분산
+첫 구현은 의도적으로 다음 범위로 제한한다.
 
-관리형 플랫폼은 이를 줄여주지만 비용, 네트워크 제약, 폐쇄망 또는 서비스 제약 때문에 도입하기 어려운 환경이 존재한다.
+- single Swarm cluster
+- application당 single stateless replicated service
+- 기존 OCI registry
+- 기존 external load balancer
+- Swarm ingress routing mesh
+- 기존 Swarm service를 DeploymentTarget으로 등록
+- production deployment는 immutable image digest 필수
+- 수동 Swarm join
+- Docker Engine / API 지원 버전 명시
+
+MVP에서 service 생성, multi-service Stack, host publish mode, environment promotion, bootstrap 자동화는 지원하지 않는다.
 
 ## 3. Goals
 
 ### P0
 
-- Swarm cluster/node/service/task 상태 조회
+- Authentication / 기본 RBAC / resource scope
+- Control Plane ↔ Agent mTLS
+- Swarm cluster/node/service/task 조회
 - Manager quorum 상태 표시
-- Node label 관리
-- Node active/drain 전환
-- Service replica scale
-- Service restart
-- Release 등록
-- Image tag/digest 추적
-- Rolling deployment
-- Application-level health verification
-- Automatic rollback
-- Manual rollback
-- Historical redeploy
+- DeploymentTarget 등록
+- Service replica scale / restart
+- Node active/drain
+- immutable Release 등록
+- digest 기반 rolling deployment
+- 목표 digest / service spec 수렴 검증
+- application health stable-window 검증
+- automatic rollback 관찰 및 Docklane rollback 조정
+- rollback verification
+- mutation serialization
+- API/Agent 재시작 후 reconciliation
 - Deployment ticket/history
 - Audit log
-- One-time bootstrap token과 node join script
-- 기본 RBAC
 
 ### P1
 
+- Bootstrap automation
 - Docker Config / Secret 관리
 - Registry browser
 - Environment promotion
-- Scheduled deployment
-- Approval workflow
+- Approval / scheduled deployment
 - Deployment diff
-- Stack YAML editor/validator
 - Capacity dashboard
-- Notification integration
-- Swarm backup status
+- Swarm backup/restore guide and status
+- 3-manager HA validation
 
 ### P2
 
+- Multi-service application / Stack
 - Cloud VM provisioning adapter
 - Load balancer registration adapter
 - Horizontal auto scaling
 - Metrics/logging integrations
 - Vulnerability scanner integration
-- Multi-cluster global dashboard
+- Multi-cluster dashboard
 
 ## 4. Non-goals
 
 - Kubernetes API/CRD 호환
-- 자체 scheduler
-- 자체 service discovery
-- 자체 overlay network
-- 자체 container runtime
+- 자체 scheduler/service discovery/overlay network/container runtime
 - CI/build server
 - container registry
 - Terraform 대체
@@ -84,26 +85,21 @@ Docklane은 비용 제약 환경에서 기존 Linux VM과 Docker Swarm을 활용
 
 ## 5. System Boundary
 
-```text
+~~~text
 Source Code
-   │
-   ▼
+   ↓
 Existing CI
-   │ build/test/push
-   ▼
+   ↓ build/test/push
 OCI Registry
-   │
-   ▼
+   ↓ immutable digest
 Docklane Release
-   │
-   ▼
-Deployment
-   │
-   ▼
-Docker Swarm
-```
+   ↓
+DeploymentTarget
+   ↓
+Docker Swarm Service
+~~~
 
-Docklane의 기본 책임은 image가 registry에 push된 이후부터 시작한다.
+Docklane의 책임은 image가 registry에 push되고 digest가 확정된 이후부터 시작한다.
 
 ## 6. Core Domain
 
@@ -111,24 +107,20 @@ Docklane의 기본 책임은 image가 registry에 push된 이후부터 시작한
 
 하나의 Docker Swarm cluster.
 
-Fields:
-
-```text
+~~~text
 id
 name
-environment
 status
 managerCount
 workerCount
+supportedDockerApiVersion
 createdAt
 updatedAt
-```
+~~~
 
 ### Node
 
-Swarm node의 Docklane projection.
-
-```text
+~~~text
 id
 clusterId
 dockerNodeId
@@ -142,57 +134,49 @@ cpu
 memory
 createdAt
 updatedAt
-```
+~~~
 
-Role:
-
-- MANAGER
-- WORKER
-
-Availability:
-
-- ACTIVE
-- PAUSE
-- DRAIN
+Role: MANAGER | WORKER  
+Availability: ACTIVE | PAUSE | DRAIN
 
 ### Application
 
-운영자가 인식하는 애플리케이션 단위. 하나 이상의 Swarm service를 포함할 수 있다.
+환경과 cluster에 종속되지 않는 논리적 애플리케이션이다.
 
-```text
+MVP에서는 Application 하나가 DeploymentTarget별로 하나의 stateless replicated service와 연결된다.
+
+~~~text
 id
-clusterId
 name
 description
-stackName
 createdAt
 updatedAt
-```
+~~~
 
-### Service
+### DeploymentTarget
 
-```text
+Application을 실제 Swarm service와 연결하는 환경별 binding이다.
+
+~~~text
 id
 applicationId
+clusterId
+environment
 dockerServiceId
-name
-image
-replicas
-cpuLimit
-memoryLimit
+serviceName
+publishMode
 healthCheck
-updatePolicy
-rollbackPolicy
-placement
 createdAt
 updatedAt
-```
+~~~
+
+MVP의 publishMode는 INGRESS만 허용한다.
 
 ### Release
 
-배포 가능한 immutable application version.
+환경에 종속되지 않는 immutable application version이다.
 
-```text
+~~~text
 id
 applicationId
 version
@@ -203,30 +187,34 @@ gitCommit
 buildNumber
 createdBy
 createdAt
-```
+~~~
 
-Release와 Deployment는 분리한다. 동일 Release를 staging과 production에 각각 배포할 수 있어야 한다.
+운영 가능한 Release는 imageDigest가 반드시 존재해야 한다. imageTag는 표시용 metadata이며 배포 시 다시 resolve하지 않는다.
 
 ### Deployment
 
-특정 Release를 특정 cluster/environment에 반영하는 행위.
+특정 immutable Release를 특정 DeploymentTarget에 적용하는 행위다.
 
-```text
+~~~text
 id
+operationId
 releaseId
-clusterId
+targetId
 previousReleaseId
+beforeServiceVersion
+beforeSpecFingerprint
+targetSpecFingerprint
 status
 reason
 startedAt
 finishedAt
 createdBy
 createdAt
-```
+~~~
 
 Status:
 
-```text
+~~~text
 PENDING
 READY
 DEPLOYING
@@ -234,24 +222,48 @@ VERIFYING
 SUCCESS
 FAILED
 ROLLING_BACK
+ROLLBACK_VERIFYING
 ROLLED_BACK
+ROLLBACK_FAILED
+NEEDS_ATTENTION
 CANCELLED
-```
+~~~
 
-### DeploymentEvent
+### Operation
 
-```text
+모든 인프라 mutation의 durable execution intent다.
+
+Kind 예:
+
+- DEPLOY
+- ROLLBACK
+- SCALE
+- RESTART
+- NODE_DRAIN
+- NODE_ACTIVATE
+
+~~~text
 id
-deploymentId
-type
-message
-metadata
+kind
+resourceKey
+idempotencyKey
+status
+intent
+expectedResourceVersion
+attempt
+leaseOwner
+leaseExpiresAt
+lastReconciledAt
+createdBy
 createdAt
-```
+updatedAt
+~~~
+
+Docker event stream은 보조 신호로만 사용한다. Operation의 최종 상태는 실제 Docker state를 inspect하여 reconcile한다.
 
 ### AuditEvent
 
-```text
+~~~text
 id
 actorId
 clusterId
@@ -261,116 +273,72 @@ action
 before
 after
 sourceIp
+operationId
 createdAt
-```
+~~~
 
-## 7. Functional Requirements
+## 7. Service Mutation Coordination
 
-### 7.1 Dashboard
+deploy, rollback, scale, restart는 동일 service mutation path를 사용하고 반드시 직렬화한다.
 
-표시 항목:
+Logical resource key:
 
-- cluster health
-- node healthy/total
+~~~text
+service:{clusterId}:{dockerServiceId}
+~~~
+
+Node drain은 node-level lock을 사용하며, 영향을 받는 service에 진행 중 mutation이 있으면 기본적으로 거절한다.
+
+DB lock만으로 외부 CLI 변경을 방지할 수 있다고 가정하지 않는다. Mutation 직전 Docker service의 Version.Index와 normalized spec fingerprint를 읽고, 실행 시 expected version을 조건으로 사용한다.
+
+외부 변경이 감지되면:
+
+- mutation 중단
+- CONFLICT로 기록
+- 다른 운영자의 변경을 덮어쓰지 않음
+- 최신 state를 다시 읽은 뒤 사용자가 재시도
+
+## 8. Release Rules
+
+Production Deployment 규칙:
+
+1. image digest 필수
+2. Release 생성 시 digest 고정
+3. 배포 시 tag 재해석 금지
+4. registry에서 artifact 접근 가능 여부는 별도 검증
+5. historical redeploy도 저장된 digest 사용
+
+MVP의 Historical Redeploy 의미는 다음과 같다.
+
+> 과거 Release의 immutable image digest를 **현재 DeploymentTarget의 runtime configuration**에 다시 배포한다.
+
+과거 env/secret/network/config 전체를 자동 복원하지 않는다. 전체 service spec 복원은 별도 기능으로 취급한다.
+
+Image rollback은 DB schema/data를 되돌리지 않는다. 운영 서비스는 backward-compatible migration 또는 별도 DB rollback 절차를 가져야 한다.
+
+## 9. Deployment Preflight
+
+배포 시작 전 확인:
+
+- 사용자 authorization / resource scope
 - manager quorum
-- services count
-- running/desired tasks
-- degraded services
-- recent deployments
-- recent failures/rollbacks
+- Agent availability
+- DeploymentTarget 존재 및 replicated service 여부
+- release digest 존재
+- registry artifact 접근 가능
+- 현재 service Version.Index
+- current spec fingerprint
+- running service operation 없음
+- placement / resource reservation의 명백한 capacity 문제
+- ingress publish mode
 
-### 7.2 Node Management
+start-first를 사용할 자원이 부족하다고 판단되어도 자동으로 stop-first로 변경하지 않는다. 정책을 변경하려면 명시적 사용자 선택이 필요하다.
 
-- node list/detail
-- labels 조회/변경
-- Active → Drain
-- Drain → Active
-- running task 확인
-- role/status 표시
+## 10. Rolling Deployment
 
-Drain은 Docker Swarm의 scheduler 동작을 사용한다. Docklane이 task migration 로직을 직접 구현하지 않는다.
+기본 정책:
 
-### 7.3 Node Bootstrap
-
-VM 생성은 MVP 범위 밖이다.
-
-흐름:
-
-```text
-Create VM
-  -> Generate one-time bootstrap token
-  -> Run bootstrap script
-  -> Install/validate Docker
-  -> Join Swarm
-  -> Apply labels
-  -> Report health
-```
-
-Bootstrap token 조건:
-
-- one-time
-- short TTL
-- target cluster 고정
-- role 고정
-- allowed labels 고정
-- 사용 후 폐기
-
-### 7.4 Service Management
-
-조회:
-
-- image
-- replicas
-- task status
-- ports
-- networks
-- CPU/memory limits
-- placement
-- health
-- update/rollback policy
-
-Mutation:
-
-- scale
-- force restart
-- image update through deployment only
-
-운영 image 변경은 Service 화면의 임의 수정이 아니라 Release → Deployment 흐름을 기본으로 한다.
-
-### 7.5 Release
-
-Release 생성 시 가능한 경우 registry에서 digest를 resolve한다.
-
-저장:
-
-- repository
-- tag
-- digest
-- git commit
-- build number
-
-운영 배포의 canonical identifier는 가능하면 digest를 사용한다.
-
-### 7.6 Deployment Ticket
-
-최소 필드:
-
-- requester
-- reason
-- release
-- environment
-- current version
-- target version
-- created/started/finished time
-- result
-
-MVP에서는 복잡한 전자결재 시스템을 구현하지 않는다.
-
-### 7.7 Rolling Deployment
-
-기본 권장 설정:
-
-```yaml
+~~~yaml
 deploy:
   update_config:
     parallelism: 1
@@ -379,266 +347,305 @@ deploy:
   rollback_config:
     parallelism: 1
     order: stop-first
-```
+    failure_action: pause
+~~~
 
-사용자가 정책을 변경할 수 있더라도 unsafe 값에 대한 validation과 경고를 제공한다.
+Docklane은 Swarm의 update/rollback 기능을 사용하되 명령 수락을 성공으로 보지 않는다.
 
-### 7.8 Health Verification
+## 11. Deployment Success Contract
 
-배포 성공 조건은 Docker task 상태만으로 판단하지 않는다.
+Deployment SUCCESS는 최소 다음을 모두 만족해야 한다.
 
-```text
-desired replicas == running replicas
-AND
-application health verification == success
-```
+1. 관찰된 service spec image가 Release의 target digest와 일치
+2. 관찰된 service spec fingerprint가 target fingerprint와 일치
+3. Swarm update가 target spec 기준 terminal successful state로 수렴
+4. desired replica와 running task가 수렴
+5. rollback이 시작되거나 완료된 상태가 아님
+6. application health probe가 설정된 stable window 동안 성공
 
-Application health configuration:
+단순히 replica 수와 LB health가 정상이라는 이유만으로 SUCCESS로 기록하지 않는다.
 
-```text
+LB health는 서비스 가용성 신호이지 개별 새 task가 target version이라는 증거로 사용하지 않는다.
+
+## 12. Health Verification
+
+MVP는 두 계층을 사용한다.
+
+### Swarm convergence
+
+- service image digest
+- service spec fingerprint
+- update status
+- desired/running task convergence
+- timeout
+- pending/error reason
+
+### Application availability
+
+기존 LB 또는 명시된 application endpoint를 통해 stable-window health를 검증한다.
+
+~~~text
 path
 interval
 timeout
-retries
+successThreshold
+failureThreshold
+stableWindow
 expectedStatus
-```
+~~~
 
-### 7.9 Rollback
+## 13. Rollback Contract
 
-두 종류를 구분한다.
+Rollback 주체를 구분한다.
 
-**Immediate rollback**
+### Swarm automatic rollback
 
-Docker Swarm의 직전 service configuration rollback을 사용한다.
+Swarm이 이미 rollback을 시작한 경우 Docklane은 동일 rollback 명령을 중복 실행하지 않고 상태를 관찰한다.
 
-**Historical redeploy**
+### Docklane initiated rollback
 
-Docklane Release History에서 과거 Release를 선택하고 새로운 Deployment를 생성한다.
+Swarm update가 성공했지만 application verification에서 실패하는 등 Docklane이 rollback을 시작해야 하는 경우에만 명시적으로 rollback을 요청한다.
 
-과거 deployment row를 수정하거나 current state를 덮어쓰지 않는다.
+Rollback 완료 조건:
 
-### 7.10 Deployment Progress
+1. 이전 spec/image로 수렴
+2. expected replica 수 수렴
+3. rollback update state가 terminal
+4. recovery health stable-window 성공
 
-MVP는 SSE를 사용한다.
+흐름:
 
-표시:
+~~~text
+FAILED
+  ↓
+ROLLING_BACK
+  ↓
+ROLLBACK_VERIFYING
+  ├─ success → ROLLED_BACK
+  └─ failure/timeout → ROLLBACK_FAILED
+                       ↓
+                 NEEDS_ATTENTION
+~~~
 
-- deployment state
-- service
-- task
-- node
-- previous/current image
-- update progress
-- health result
-- rollback progress
-- error reason
+명령이 수락되었다는 사실은 rollback 완료가 아니다.
 
-### 7.11 Deployment Lock
+## 14. Reconciliation & Crash Recovery
 
-동일 cluster/service에서 동시에 두 개의 mutation deployment를 실행하지 않는다.
+Control Plane 또는 Agent가 재시작되어도 진행 중 Operation의 의미가 사라지지 않아야 한다.
 
-Logical key:
+Mutation 시작 전 짧은 DB transaction으로 다음을 먼저 기록한다.
 
-```text
-deployment:{clusterId}:{serviceId}
-```
+- operation ID
+- actor
+- target resource
+- intended state
+- before version/spec
+- target version/spec
+- idempotency key
+- audit start event
 
-### 7.12 Stack
+실행 중에는 event stream과 polling을 함께 사용한다.
 
-Docklane은 필요 시 application을 Docker Stack으로 배포할 수 있다.
+재시작 시:
 
-주의:
+1. non-terminal Operation 조회
+2. 현재 service inspect
+3. expected version/spec와 비교
+4. 이미 목표 상태면 verification 재개
+5. 이전 상태로 복구 중이면 rollback 관찰
+6. 예상 외 변경이면 CONFLICT / NEEDS_ATTENTION
+7. 필요할 때만 안전한 mutation 재시도
 
-- `docker stack deploy`는 Swarm manager에서 수행
-- Stack file의 `build:`를 production deployment source로 사용하지 않음
-- registry에 이미 존재하는 image 사용
-- 최신 Compose Specification 전체가 아니라 Docker Stack이 지원하는 Compose v3 호환 범위로 validation
+Docker events의 유실 또는 제한된 history에 의존해 복구하지 않는다.
 
-## 8. RBAC
+Agent mutation 요청에는 operation ID, attempt/generation, expected Docker service version, target resource scope를 포함한다. 늦은 응답은 현재 generation과 맞지 않으면 무시한다.
+
+## 15. Service Operations
+
+### Scale
+
+- service mutation lock 필요
+- expected service version 필요
+- operation/audit 기록
+- 수렴 timeout 필요
+
+### Restart
+
+Swarm service force update를 사용한다.
+
+- service mutation lock 필요
+- expected version 필요
+- deployment VERIFYING/ROLLING_BACK 중 실행 금지
+
+### Node Drain
+
+Drain은 Swarm service task에만 영향을 준다. docker run 또는 docker compose로 생성한 standalone container의 이동 기능으로 설명하지 않는다.
+
+Drain 전:
+
+- affected service 확인
+- 진행 중 service mutation 확인
+- placement/capacity preflight
+- node mutation lock
+
+## 16. Networking & Load Balancer
+
+MVP는 **Swarm ingress routing mesh만 지원**한다.
+
+Existing external LB → Swarm node published port → routing mesh → active task
+
+MVP에서는 host publish mode와 dnsrr 직접 연동을 지원하지 않는다.
+
+LB 경유 실제 traffic 검증은 별도 acceptance test로 수행한다. start-first는 신·구 task가 동시에 존재할 수 있는 여유 자원을 전제로 한다.
+
+## 17. Node Bootstrap
+
+Bootstrap automation은 P1 이후로 이동한다. MVP PoC는 수동 Swarm join을 사용한다.
+
+향후 Docklane bootstrap token과 native Swarm join token은 별개의 credential로 취급한다.
+
+Docklane token:
+
+- one-time
+- short TTL
+- cluster/role/label scope
+
+Native Swarm token:
+
+- worker/manager별 cluster credential
+- Docklane token 만료와 독립적
+- 노출 의심 시 rotation 필요
+
+Bootstrap 프로토콜은 동시 가입, retry, 부분 실패, role 검증, label 적용, token rotation 정책을 별도로 정의한 뒤 구현한다.
+
+## 18. RBAC
+
+기본 RBAC는 **최초 mutation 이전**에 구현한다.
 
 ### VIEWER
 
-- dashboard
-- cluster/node/service 조회
-- release/deployment/audit 조회
+- read-only cluster/node/service/release/deployment/audit
 
 ### OPERATOR
 
 VIEWER +
 
-- deploy
-- rollback
-- scale
-- restart
+- deploy / rollback
+- scale / restart
 - node drain/activate
 
 ### ADMIN
 
 OPERATOR +
 
-- cluster 등록
-- bootstrap token
+- cluster/target 등록
+- credentials
 - secret/config
 - user/role
 - system settings
 
-## 9. API Draft
+모든 mutation은 API와 Agent 양쪽에서 resource scope를 검증한다.
 
-Prefix:
+Agent는 전체 Docker spec 또는 임의 Docker 옵션을 그대로 전달받아 실행하지 않는다. 허용 operation별로 수정 가능한 field를 명시적으로 제한한다.
 
-```text
-/api/v1
-```
+## 19. Agent Security
 
-Cluster:
+- Docker TCP 2375 외부 노출 금지
+- Control Plane ↔ Agent mTLS
+- private network 우선
+- arbitrary shell endpoint 금지
+- operation allow-list + field allow-list
+- cluster/service resource scope 검증
+- request expiry / replay protection
+- certificate 발급·갱신·폐기·만료 정책 정의
 
-```http
+## 20. API Draft
+
+Prefix: /api/v1
+
+핵심 endpoint:
+
+~~~text
 GET  /clusters
-POST /clusters
-GET  /clusters/:clusterId
-GET  /clusters/:clusterId/health
-```
-
-Node:
-
-```http
 GET  /clusters/:clusterId/nodes
-GET  /clusters/:clusterId/nodes/:nodeId
 POST /clusters/:clusterId/nodes/:nodeId/drain
 POST /clusters/:clusterId/nodes/:nodeId/activate
-POST /clusters/:clusterId/join-tokens
-```
 
-Application/Service:
-
-```http
 GET  /applications
 POST /applications
-GET  /applications/:applicationId
+GET  /applications/:applicationId/targets
+POST /applications/:applicationId/targets
 
-GET  /services/:serviceId
-POST /services/:serviceId/scale
-POST /services/:serviceId/restart
-```
+GET  /targets/:targetId
+POST /targets/:targetId/scale
+POST /targets/:targetId/restart
 
-Release:
-
-```http
 GET  /applications/:applicationId/releases
 POST /applications/:applicationId/releases
-GET  /releases/:releaseId
-```
 
-Deployment:
-
-```http
 GET  /deployments
 POST /deployments
 GET  /deployments/:deploymentId
 GET  /deployments/:deploymentId/events
 POST /deployments/:deploymentId/rollback
-POST /deployments/:deploymentId/cancel
-```
 
-Audit:
+GET  /operations/:operationId
+GET  /audit-events
+~~~
 
-```http
-GET /audit-events
-```
+## 21. Functional PoC vs Production Readiness
 
-## 10. Failure Handling
+### Functional PoC
 
-### Agent unavailable
+최소 구성:
 
-- mutation 차단
-- `AGENT_UNAVAILABLE` 표시
-
-### Registry resolve failure
-
-- deployment 시작 전 실패
-- `IMAGE_RESOLVE_FAILED`
-
-### Insufficient capacity
-
-- task가 scheduling되지 못하면 cluster capacity 문제로 분류
-- pending reason 표시
-
-### Application health failure
-
-```text
-VERIFYING
-  -> FAILED
-  -> ROLLING_BACK
-  -> ROLLED_BACK
-```
-
-### Lost manager quorum
-
-- cluster를 DEGRADED 또는 READ_ONLY로 표시
-- deploy/scale/drain 등 mutation 차단
-- 기존 running workload와 control-plane mutability를 구분해서 보여줌
-
-## 11. Security Requirements
-
-- Docker daemon TCP 2375 외부 노출 금지
-- Control Plane ↔ Agent mTLS
-- Agent는 allow-listed operation만 제공
-- arbitrary shell endpoint 금지
-- bootstrap token one-time + TTL
-- secret 값 API 응답 금지
-- secret 값 audit/log 금지
-- registry credential encrypted at rest
-- RBAC
-- mutation audit
-- session/access token expiration
-- CSRF/authorization validation
-- Swarm network ports는 trusted private network에서만 허용
-
-## 12. MVP Acceptance Criteria
-
-최소 3개 VM에서 검증한다.
-
-```text
+~~~text
 manager-01
 worker-01
 worker-02
-```
+~~~
 
-Required cases:
+이 구성은 배포, worker 장애, drain, rollback 같은 기능 검증용이다. manager 장애 허용을 검증하는 HA 구성으로 보지 않는다.
 
-1. 정상 release를 rolling deployment
-2. broken release 배포 후 automatic rollback
-3. worker 장애 시 task 재스케줄 확인
-4. worker drain 후 task 이동 확인
-5. replica 4 → 8 → 3 변경
-6. 과거 release로 historical redeploy
-7. 모든 mutation의 audit event 생성
-8. manager quorum degraded 상태에서 mutation 차단
+### Production readiness validation
 
-CLI 없이 Web UI에서 다음 흐름이 완료되어야 v0.1의 핵심 기능이 충족된 것으로 본다.
+최소 3 managers에서 다음을 별도로 검증한다.
 
-```text
-Select Application
-  -> Select Release
-  -> Create Deployment
-  -> Rolling Update
-  -> Verify Health
-  -> Success
-```
+- leader 1대 상실
+- quorum 유지 상태의 mutation
+- quorum 상실 시 mutation 차단
+- network partition
+- Agent/manager endpoint failover
+- manager resource starvation 방지
+- Swarm backup/restore
+- Docklane DB / encryption key / agent trust 복구
 
-실패 시:
+Manager와 workload를 동일 VM에서 겸할 경우 manager 자원을 reservation/운영 정책으로 보호해야 한다.
 
-```text
-Deploy
-  -> Health Failure
-  -> Automatic Rollback
-  -> Verify Rollback
-```
+## 22. Acceptance Criteria
 
-## 13. Official References
+기능 검증:
+
+1. 정상 digest deployment는 target digest/spec/health가 모두 일치할 때만 SUCCESS
+2. broken release의 Swarm automatic rollback을 새 Release 성공으로 오판하지 않음
+3. VERIFYING 중 scale/restart/동시 deployment 거절
+4. 외부 CLI 변경 시 version/spec conflict 감지
+5. Docker update 수락 직후 Control Plane 종료 후 reconcile
+6. Agent 응답 유실/event gap에서 actual state로 복구
+7. rollback 실패/timeout을 ROLLBACK_FAILED 또는 NEEDS_ATTENTION으로 표시
+8. start-first capacity 부족과 placement 제약에 timeout/원인 표시
+9. LB 경유 실제 traffic에서 rolling update 오류율/연결 종료 관찰
+10. 권한 없는 mutation을 API/Agent 양쪽에서 거절
+11. 모든 mutation에 secret 없는 audit event 생성
+
+Production readiness는 별도 3-manager HA/backup/restore validation을 통과해야 한다.
+
+## 23. References
 
 - https://docs.docker.com/engine/swarm/
 - https://docs.docker.com/engine/swarm/services/
-- https://docs.docker.com/engine/swarm/stack-deploy/
-- https://docs.docker.com/engine/swarm/secrets/
-- https://docs.docker.com/engine/swarm/configs/
+- https://docs.docker.com/engine/swarm/ingress/
+- https://docs.docker.com/engine/swarm/admin_guide/
+- https://docs.docker.com/reference/cli/docker/service/update/
+- https://docs.docker.com/reference/cli/docker/system/events/
+- https://docs.docker.com/reference/cli/docker/swarm/join-token/
