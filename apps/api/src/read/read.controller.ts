@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Inject, Param } from '@nestjs/common';
 import { RequireRole } from '../auth/auth.decorators.js';
 import type {
   ClusterResponse,
@@ -11,7 +11,7 @@ import { ReadService } from './read.service.js';
 @Controller('v1/clusters/:clusterId')
 @RequireRole('VIEWER')
 export class ReadController {
-  constructor(private readonly readService: ReadService) {}
+  constructor(@Inject(ReadService) private readonly readService: ReadService) {}
 
   @Get()
   cluster(@Param('clusterId') clusterId: string): Promise<ClusterResponse> {
