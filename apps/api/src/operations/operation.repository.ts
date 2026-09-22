@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, type OnModuleInit } from '@nestjs/common';
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
 import type {
@@ -25,8 +25,12 @@ interface OperationRow extends RowDataPacket {
 }
 
 @Injectable()
-export class OperationRepository {
+export class OperationRepository implements OnModuleInit {
   constructor(private readonly db: Database) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.initialize();
+  }
 
   async initialize(): Promise<void> {
     await this.db.pool.query(`
@@ -110,6 +114,17 @@ export class OperationRepository {
     );
   }
 
+  async markVerifying(
+    connection: PoolConnection,
+    id: string,
+    resultVersion: number,
+  ): Promise<void> {
+    await connection.execute(
+      "UPDATE operations SET status = 'VERIFYING', result_version = ? WHERE id = ?",
+      [resultVersion, id],
+    );
+  }
+
   async markSuccess(
     connection: PoolConnection,
     id: string,
@@ -120,6 +135,20 @@ export class OperationRepository {
        SET status = 'SUCCESS', result_version = ?, error_code = NULL, error_message = NULL
        WHERE id = ?`,
       [resultVersion, id],
+    );
+  }
+
+  async markNeedsAttention(
+    connection: PoolConnection,
+    id: string,
+    code: string,
+    message: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE operations
+       SET status = 'NEEDS_ATTENTION', error_code = ?, error_message = ?
+       WHERE id = ?`,
+      [code, message, id],
     );
   }
 
