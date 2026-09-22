@@ -129,6 +129,12 @@ export class MutationService implements OnApplicationBootstrap {
             : this.reconcileLocked(connection, existing);
         }
 
+        await this.resolvePriorServiceOperation(
+          connection,
+          clusterId,
+          canonicalServiceId,
+        );
+
         const plan = await this.agentClient.planScaleService(
           canonicalServiceId,
           input.expectedVersion,
@@ -221,6 +227,12 @@ export class MutationService implements OnApplicationBootstrap {
             : this.reconcileLocked(connection, existing);
         }
 
+        await this.resolvePriorServiceOperation(
+          connection,
+          clusterId,
+          canonicalServiceId,
+        );
+
         const plan = await this.agentClient.planRestartService(
           canonicalServiceId,
           input.expectedVersion,
@@ -277,10 +289,45 @@ export class MutationService implements OnApplicationBootstrap {
     );
   }
 
+  private async resolvePriorServiceOperation(
+    connection: PoolConnection,
+    clusterId: string,
+    serviceId: string,
+  ): Promise<void> {
+    const prior =
+      await this.operations.findNonTerminalForServiceWithConnection(
+        connection,
+        clusterId,
+        serviceId,
+      );
+    if (!prior) {
+      return;
+    }
+
+    const reconciled = await this.reconcileLocked(connection, prior);
+    if (!isTerminal(reconciled)) {
+      throw new ConflictException(
+        `Service has unresolved operation ${reconciled.id} (${reconciled.status})`,
+      );
+    }
+  }
+
   private async reconcileLocked(
     connection: PoolConnection,
     operation: OperationRecord,
   ): Promise<OperationRecord> {
+    if (
+      !operation.beforeSpecHash ||
+      !operation.targetSpecHash
+    ) {
+      await this.markNeedsAttention(
+        connection,
+        operation,
+        'LEGACY_OPERATION_MISSING_TARGET',
+        'Operation predates service fingerprint tracking and cannot be reconciled automatically',
+      );
+      return this.requireOperation(connection, operation.id);
+    }
     let current: ServiceDetailResponse;
 
     try {
