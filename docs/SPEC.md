@@ -421,7 +421,24 @@ Roles:
 
 를 검증한다.
 
-## 15. Agent Security Contract
+## 15. Agent Implementation & Security Contract
+
+Agent 구현 언어는 **Go**로 고정한다.
+
+초기 구현 기준:
+
+```text
+runtime        Go native binary
+transport      HTTPS + JSON
+authentication mTLS
+contract       OpenAPI
+docker access  local Unix socket
+process        systemd managed daemon
+```
+
+Go 선택의 주된 목적은 CPU benchmark가 아니라 manager host의 runtime 의존성 최소화, 단일 바이너리 배포, 작은 agent footprint와 운영 단순성이다.
+
+Control Plane은 TypeScript/NestJS를 유지하며 Agent와 내부 코드를 공유하지 않는다. 언어 경계는 OpenAPI 계약으로 관리한다.
 
 Agent는 high-level allow-listed operations만 제공한다.
 
@@ -442,7 +459,11 @@ activateNode
 
 각 operation은 허용 가능한 field, cluster, service target을 다시 검증한다.
 
-Control Plane ↔ Agent는 mTLS를 사용하고 다음 lifecycle을 정의한다.
+Control Plane ↔ Agent는 HTTPS + mTLS를 사용하고 요청/응답 schema는 OpenAPI로 검증한다.
+
+gRPC는 MVP 범위에서 제외하고, streaming 또는 protocol 성능 요구가 확인될 경우 후속 검토한다.
+
+Control Plane ↔ Agent 인증서는 다음 lifecycle을 정의한다.
 
 - certificate issuance
 - rotation
