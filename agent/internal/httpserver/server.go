@@ -148,7 +148,6 @@ func (s *Server) serviceTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
-
 func (s *Server) planScaleService(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("serviceId")
 	if id == "" {
