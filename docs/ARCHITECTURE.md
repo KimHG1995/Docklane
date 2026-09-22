@@ -59,6 +59,17 @@ runtime state를 DB 값만으로 판단하지 않는다. non-terminal operation�
 
 ### Swarm Agent
 
+Agent 구현 언어는 **Go**로 고정한다.
+
+선택 이유는 raw request 처리 성능보다 운영 특성에 있다.
+
+- 단일 바이너리 배포
+- manager host에 별도 Node.js runtime 불필요
+- 작은 runtime footprint
+- 장기 실행 daemon에 적합
+- Docker Engine API와의 자연스러운 연동
+- manager별 agent 배포/업그레이드 단순화
+
 Agent는 arbitrary Docker proxy가 아니다.
 
 허용된 high-level operation만 제공한다.
@@ -78,16 +89,21 @@ activateNode
 사용자가 전달한 shell command, Docker CLI argument, 전체 service spec을 그대로 실행하지 않는다.
 
 ```text
-Control Plane
+NestJS Control Plane
     │
+    │ HTTPS + JSON
     │ mTLS
     ▼
-Agent
+Go Agent
     │
     │ Docker Engine API
     ▼
 /var/run/docker.sock
 ```
+
+초기 Agent protocol은 HTTP/JSON을 사용한다. Control Plane과 Agent 간 요청/응답 계약은 OpenAPI 문서를 source of truth로 두며, TypeScript와 Go가 동일 소스 코드를 직접 공유하지 않는다.
+
+gRPC는 streaming 또는 protocol 성능 요구가 실제로 확인될 경우 후속 검토한다.
 
 ## Trust Boundaries
 
@@ -406,3 +422,55 @@ production stack에서 `build:`는 지원하지 않는다.
 - https://docs.docker.com/engine/swarm/admin_guide/
 - https://docs.docker.com/engine/security/
 - https://docs.docker.com/engine/swarm/swarm-tutorial/
+
+
+## Agent Implementation
+
+초기 구현 기준:
+
+```text
+Language        Go
+Packaging       Single Linux binary
+Process model   Long-running daemon
+Transport       HTTPS + JSON
+Authentication  mTLS
+Contract        OpenAPI
+Docker access   Local Unix socket
+Service manager systemd
+```
+
+Agent는 manager host의 `/var/run/docker.sock`에 로컬로 접근한다.
+
+배포 예시:
+
+```text
+/usr/local/bin/docklane-agent
+/etc/docklane/agent.yaml
+/etc/docklane/pki/...
+```
+
+systemd가 process lifecycle을 관리하고 Agent 자체에서 process supervisor를 중복 구현하지 않는다.
+
+운영 HA 단계에서는 각 Swarm manager에 Agent를 배치할 수 있도록 stateless에 가깝게 설계한다. 영속적인 deployment intent와 audit의 source of record는 Control Plane DB이며, Agent 로컬 상태를 복구의 source of truth로 사용하지 않는다.
+
+## Cross-language Contract
+
+TypeScript Control Plane과 Go Agent 사이의 계약은 OpenAPI로 관리한다.
+
+예상 repository layout:
+
+```text
+.
+├── apps/
+│   ├── web/          # Next.js / TypeScript
+│   └── api/          # NestJS / TypeScript
+├── agent/            # Go
+├── contracts/
+│   └── agent.openapi.yaml
+├── packages/
+│   ├── config/
+│   └── ui/
+└── docs/
+```
+
+OpenAPI 변경 시 TypeScript client와 Go server model의 호환성을 CI에서 검증한다.
