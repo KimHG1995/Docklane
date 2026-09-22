@@ -1,6 +1,9 @@
 import type {
   ClusterResponse,
   HealthResponse,
+  NodeDetailResponse,
+  NodeMutationPlan,
+  NodeMutationResponse,
   ServiceDetailResponse,
   ServiceMutationPlan,
   ServiceMutationResponse,
@@ -14,6 +17,26 @@ export interface AgentClient {
   listServices(): Promise<ServiceSummary[]>;
   inspectService(serviceId: string): Promise<ServiceDetailResponse>;
   listServiceTasks(serviceId: string): Promise<TaskSummary[]>;
+  inspectNode(nodeId: string): Promise<NodeDetailResponse>;
+  planDrainNode(nodeId: string, expectedVersion: number): Promise<NodeMutationPlan>;
+  drainNode(
+    nodeId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+    },
+  ): Promise<NodeMutationResponse>;
+  planActivateNode(nodeId: string, expectedVersion: number): Promise<NodeMutationPlan>;
+  activateNode(
+    nodeId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+    },
+  ): Promise<NodeMutationResponse>;
+
 
   planScaleService(
     serviceId: string,
