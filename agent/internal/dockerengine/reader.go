@@ -3,6 +3,7 @@ package dockerengine
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/KimHG1995/Docklane/agent/internal/model"
 	"github.com/moby/moby/api/types/swarm"
@@ -90,6 +91,70 @@ func (r *Reader) Cluster(ctx context.Context) (model.ClusterResponse, error) {
 	}, nil
 }
 
+func (r *Reader) Node(ctx context.Context, nodeRef string) (model.NodeDetailResponse, error) {
+	node, err := r.resolveNode(ctx, nodeRef)
+	if err != nil {
+		return model.NodeDetailResponse{}, err
+	}
+
+	taskResult, err := r.client.TaskList(ctx, client.TaskListOptions{})
+	if err != nil {
+		return model.NodeDetailResponse{}, fmt.Errorf("list node tasks: %w", err)
+	}
+
+	tasks := make([]model.TaskSummary, 0)
+	serviceSet := make(map[string]struct{})
+	for _, task := range taskResult.Items {
+		if task.NodeID != node.ID || isTerminalTaskState(task.Status.State) {
+			continue
+		}
+		tasks = append(tasks, toTaskSummary(task))
+		if task.ServiceID != "" {
+			serviceSet[task.ServiceID] = struct{}{}
+		}
+	}
+
+	serviceIDs := make([]string, 0, len(serviceSet))
+	for serviceID := range serviceSet {
+		serviceIDs = append(serviceIDs, serviceID)
+	}
+	sort.Strings(serviceIDs)
+
+	return model.NodeDetailResponse{
+		Node:       toNodeSummary(node),
+		Tasks:      tasks,
+		ServiceIDs: serviceIDs,
+	}, nil
+}
+
+func (r *Reader) resolveNode(ctx context.Context, nodeRef string) (swarm.Node, error) {
+	result, err := r.client.NodeList(ctx, client.NodeListOptions{})
+	if err != nil {
+		return swarm.Node{}, fmt.Errorf("list swarm nodes: %w", err)
+	}
+
+	for _, node := range result.Items {
+		if node.ID == nodeRef || node.Description.Hostname == nodeRef {
+			return node, nil
+		}
+	}
+	return swarm.Node{}, fmt.Errorf("node %q not found", nodeRef)
+}
+
+func isTerminalTaskState(state swarm.TaskState) bool {
+	switch state {
+	case swarm.TaskStateComplete,
+		swarm.TaskStateShutdown,
+		swarm.TaskStateFailed,
+		swarm.TaskStateRejected,
+		swarm.TaskStateRemove,
+		swarm.TaskStateOrphaned:
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *Reader) Services(ctx context.Context) ([]model.ServiceSummary, error) {
 	result, err := r.client.ServiceList(ctx, client.ServiceListOptions{Status: true})
 	if err != nil {
@@ -147,6 +212,7 @@ func (r *Reader) ServiceTasks(ctx context.Context, serviceID string) ([]model.Ta
 }
 
 func toNodeSummary(node swarm.Node) model.NodeSummary {
+	specHash, _ := nodeSpecHash(node.Spec)
 	leader := false
 	reachability := ""
 
@@ -157,6 +223,8 @@ func toNodeSummary(node swarm.Node) model.NodeSummary {
 
 	return model.NodeSummary{
 		ID:            node.ID,
+		Version:       node.Version.Index,
+		SpecHash:      specHash,
 		Hostname:      node.Description.Hostname,
 		Address:       node.Status.Addr,
 		Role:          string(node.Spec.Role),
