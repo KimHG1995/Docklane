@@ -4,6 +4,7 @@ export const HealthResponseSchema = z.object({
   status: z.literal('ok'),
   component: z.literal('docklane-agent'),
 });
+
 export const ManagerQuorumSchema = z.object({
   total: z.number().int().nonnegative(),
   reachable: z.number().int().nonnegative(),
@@ -11,6 +12,7 @@ export const ManagerQuorumSchema = z.object({
   available: z.boolean(),
   leaderCount: z.number().int().nonnegative(),
 });
+
 export const NodeSummarySchema = z.object({
   id: z.string(),
   hostname: z.string(),
@@ -26,6 +28,7 @@ export const NodeSummarySchema = z.object({
   nanoCpus: z.number().int(),
   memoryBytes: z.number().int(),
 });
+
 export const ClusterResponseSchema = z.object({
   cluster: z.object({
     id: z.string(),
@@ -37,10 +40,13 @@ export const ClusterResponseSchema = z.object({
   }),
   nodes: z.array(NodeSummarySchema),
 });
+
 export const ServiceSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
   version: z.number().int().nonnegative(),
+  specHash: z.string().min(1),
+  forceUpdate: z.number().int().nonnegative(),
   image: z.string().optional(),
   mode: z.string(),
   desiredReplicas: z.number().int().nonnegative(),
@@ -50,6 +56,7 @@ export const ServiceSummarySchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
+
 export const TaskSummarySchema = z.object({
   id: z.string(),
   serviceId: z.string(),
@@ -57,29 +64,40 @@ export const TaskSummarySchema = z.object({
   nodeId: z.string().optional(),
   desiredState: z.string(),
   state: z.string(),
+  forceUpdate: z.number().int().nonnegative(),
   message: z.string().optional(),
   error: z.string().optional(),
   containerId: z.string().optional(),
   image: z.string().optional(),
   timestamp: z.string(),
 });
+
 export const ServiceDetailResponseSchema = z.object({
   service: ServiceSummarySchema,
   tasks: z.array(TaskSummarySchema),
 });
+
+export const ServiceMutationPlanSchema = z.object({
+  serviceId: z.string(),
+  version: z.number().int().nonnegative(),
+  beforeSpecHash: z.string().min(1),
+  targetSpecHash: z.string().min(1),
+  targetForceUpdate: z.number().int().nonnegative(),
+  targetReplicas: z.number().int().nonnegative().optional(),
+});
+
+export const ServiceMutationResponseSchema = z.object({
+  serviceId: z.string(),
+  version: z.number().int().nonnegative(),
+  targetSpecHash: z.string().min(1),
+  targetForceUpdate: z.number().int().nonnegative(),
+  warnings: z.array(z.string()).optional(),
+});
+
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 export type ClusterResponse = z.infer<typeof ClusterResponseSchema>;
 export type ServiceSummary = z.infer<typeof ServiceSummarySchema>;
 export type TaskSummary = z.infer<typeof TaskSummarySchema>;
 export type ServiceDetailResponse = z.infer<typeof ServiceDetailResponseSchema>;
-
-
-export const ServiceMutationResponseSchema = z.object({
-  serviceId: z.string(),
-  version: z.number().int().nonnegative(),
-  warnings: z.array(z.string()).optional(),
-});
-
-export type ServiceMutationResponse = z.infer<
-  typeof ServiceMutationResponseSchema
->;
+export type ServiceMutationPlan = z.infer<typeof ServiceMutationPlanSchema>;
+export type ServiceMutationResponse = z.infer<typeof ServiceMutationResponseSchema>;
