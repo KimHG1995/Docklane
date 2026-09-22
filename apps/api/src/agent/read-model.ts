@@ -72,3 +72,14 @@ export type ClusterResponse = z.infer<typeof ClusterResponseSchema>;
 export type ServiceSummary = z.infer<typeof ServiceSummarySchema>;
 export type TaskSummary = z.infer<typeof TaskSummarySchema>;
 export type ServiceDetailResponse = z.infer<typeof ServiceDetailResponseSchema>;
+
+
+export const ServiceMutationResponseSchema = z.object({
+  serviceId: z.string(),
+  version: z.number().int().nonnegative(),
+  warnings: z.array(z.string()).optional(),
+});
+
+export type ServiceMutationResponse = z.infer<
+  typeof ServiceMutationResponseSchema
+>;

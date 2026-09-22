@@ -34,6 +34,14 @@ func (fakeReader) ServiceTasks(context.Context, string) ([]model.TaskSummary, er
 	return []model.TaskSummary{}, nil
 }
 
+func (fakeReader) ScaleService(context.Context, string, uint64, uint64) (model.ServiceMutationResponse, error) {
+	return model.ServiceMutationResponse{ServiceID: "service-1", Version: 2}, nil
+}
+
+func (fakeReader) RestartService(context.Context, string, uint64) (model.ServiceMutationResponse, error) {
+	return model.ServiceMutationResponse{ServiceID: "service-1", Version: 2}, nil
+}
+
 func TestHealth(t *testing.T) {
 	s := New(config.Config{InsecureDev: true}, fakeReader{})
 	req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
