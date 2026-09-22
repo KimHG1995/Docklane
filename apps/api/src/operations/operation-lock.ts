@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   ConflictException,
   Inject,
@@ -21,7 +22,8 @@ export class OperationLock {
     fn: (connection: PoolConnection) => Promise<T>,
   ): Promise<T> {
     const connection = await this.db.getConnection();
-    const lockName = `docklane:${clusterId}:${canonicalServiceId}`;
+    const lockName = serviceLockName(clusterId, canonicalServiceId);
+    let reusable = true;
 
     try {
       const [rows] = await connection.query<LockRow[]>(
@@ -36,9 +38,12 @@ export class OperationLock {
       try {
         await connection.query('SELECT RELEASE_LOCK(?)', [lockName]);
       } catch {
-        // Releasing the connection closes any remaining named lock ownership.
+        reusable = false;
+        connection.destroy();
       }
-      connection.release();
+      if (reusable) {
+        connection.release();
+      }
     }
   }
 
@@ -51,4 +56,14 @@ export class OperationLock {
       );
     }
   }
+}
+
+
+function serviceLockName(clusterId: string, serviceId: string): string {
+  const digest = createHash('sha256')
+    .update(clusterId)
+    .update('\0')
+    .update(serviceId)
+    .digest('hex');
+  return `docklane:${digest.slice(0, 55)}`;
 }
