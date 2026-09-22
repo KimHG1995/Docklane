@@ -1,12 +1,10 @@
 # Security Policy
 
-Docklane은 Docker Swarm과 운영 인프라를 변경할 수 있는 control plane을 목표로 합니다. 따라서 보안 문제는 일반적인 UI 결함보다 큰 영향을 줄 수 있습니다.
+Docklane은 Docker Swarm과 운영 인프라를 변경할 수 있는 control plane을 목표로 합니다. 따라서 모든 mutation 기능은 보안 경계가 구현된 이후에만 노출합니다.
 
 ## Project Status
 
-Docklane은 현재 **pre-alpha / specification 단계**입니다.
-
-아직 안정화된 production release가 없으며, 현재 버전은 운영 환경 사용을 지원하지 않습니다.
+Docklane은 현재 **pre-alpha / specification 단계**이며 production 사용을 지원하지 않습니다.
 
 | Version | Supported |
 | --- | --- |
@@ -15,47 +13,85 @@ Docklane은 현재 **pre-alpha / specification 단계**입니다.
 
 ## Reporting a Vulnerability
 
-민감한 보안 취약점은 공개 Issue에 상세 내용을 작성하지 마세요.
+민감한 취약점은 공개 Issue에 상세 내용을 작성하지 마세요.
 
-1. 저장소에서 GitHub의 **Report a vulnerability / Private vulnerability reporting** 기능을 사용할 수 있다면 해당 경로를 우선 사용합니다.
-2. 해당 기능이 보이지 않는 경우, 저장소 maintainer의 GitHub 프로필을 통해 비공개 연락 경로를 요청하되 취약점 세부 정보나 exploit을 공개 Issue에 포함하지 마세요.
-
-다음 정보를 포함하면 확인에 도움이 됩니다.
-
-- 영향을 받는 component
-- 재현 조건
-- 예상 영향
-- 가능한 최소 재현 방법
-- 제안하는 완화 방법이 있다면 해당 내용
-
-비밀키, 실제 운영 credential, 개인정보 또는 제3자의 민감 데이터를 재현 자료에 포함하지 마세요.
+GitHub의 **Private vulnerability reporting** 기능이 활성화되어 있다면 이를 우선 사용합니다. 사용할 수 없는 경우 maintainer에게 비공개 연락 경로를 요청하되 exploit, credential, 개인정보를 공개 Issue에 포함하지 마세요.
 
 ## Security Baseline
 
-Docklane 구현은 최소한 다음 원칙을 따라야 합니다.
+최초 mutation release 전에 다음이 필수다.
 
-- Docker daemon의 unauthenticated TCP endpoint를 노출하지 않는다.
-- Control Plane과 Swarm Agent 사이에 상호 인증을 사용한다.
-- Agent는 arbitrary shell execution API를 제공하지 않는다.
-- Bootstrap token은 짧은 TTL과 one-time semantics를 가진다.
-- Secret value는 API response, log, audit event에 기록하지 않는다.
-- Registry credential은 암호화하여 저장한다.
-- 모든 mutation endpoint는 RBAC 검증을 수행한다.
-- Deploy, rollback, scale, drain 등 인프라 변경 작업은 audit event를 남긴다.
-- Swarm 내부 통신 포트는 trusted/private network로 제한한다.
-- Manager quorum을 잃은 cluster에는 mutation을 수행하지 않는다.
+- authentication
+- 기본 RBAC
+- cluster/resource scope validation
+- 모든 mutation audit
+- Docker daemon unauthenticated TCP endpoint 금지
+- Control Plane ↔ Agent mTLS
+- Agent arbitrary shell execution 금지
+- Agent operation별 field/target allow-list
+- registry credential encrypted at rest
+- secret value API/log/audit 출력 금지
+- manager quorum 상실 시 mutation 차단
+- service version/spec precondition 검증
+
+## Agent Boundary
+
+Agent는 Docker API를 범용 프록시하지 않는다.
+
+허용된 high-level operation만 제공하고 각 요청에서 다음을 다시 검증한다.
+
+- authenticated control-plane identity
+- cluster binding
+- target service/node
+- allowed fields
+- expected resource/version precondition
+
+클라이언트가 제공한 shell command, Docker CLI argument 또는 임의 service spec을 그대로 실행해서는 안 된다.
+
+## mTLS Lifecycle
+
+설계/구현 시 다음 lifecycle을 포함한다.
+
+- certificate issuance
+- expiration
+- rotation
+- revocation
+- compromised credential replacement
+
+인증서를 한번 발급하고 영구 사용하는 구조는 허용하지 않는다.
+
+## Bootstrap Credentials
+
+Docklane bootstrap token과 Docker native Swarm join token은 별개다.
+
+Docklane token의 one-time/TTL 특성이 native join token까지 자동 무효화한다고 가정하지 않는다.
+
+Bootstrap 구현 시 native token 전달, rotation, 동시 join, partial failure, post-join identity verification을 별도 threat model로 검토한다.
+
+## Mutation Safety as Security
+
+인증된 운영자라도 stale state를 기반으로 다른 운영자의 변경을 덮어써서는 안 된다.
+
+따라서 mutation은:
+
+- current Docker service version/spec 확인
+- expected precondition 검증
+- service-level serialization
+- external change conflict detection
+
+을 수행한다.
 
 ## Dependency Security
 
-구현 단계부터 다음 자동화를 추가할 예정이다.
+구현 단계부터 다음 자동화를 목표로 한다.
 
+- lockfile reproducible install
 - dependency update automation
-- lockfile 기반 reproducible install
 - secret scanning
 - dependency vulnerability scanning
 - container image scanning
-- CI에서 lint, typecheck, test
+- lint / typecheck / test CI
 
 ## Scope
 
-보안 관련 설계 결정은 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)와 [docs/SPEC.md](docs/SPEC.md)에서 관리합니다.
+보안/복구 계약은 [docs/SPEC.md](docs/SPEC.md)와 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)를 함께 따른다.
