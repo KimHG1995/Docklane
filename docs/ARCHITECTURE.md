@@ -104,6 +104,8 @@ flowchart LR
 
 - Docker daemon TCP 2375 외부 노출 금지
 - Agent private endpoint
+- Swarm control/data-path 통신은 허가된 cluster node의 trusted/private network로 제한
+- TCP 2377, TCP/UDP 7946, UDP 4789 또는 설정된 data-path port의 public/untrusted 접근 차단
 - mTLS certificate issuance/rotation/revocation 정의
 - Agent operation/field/target validation
 - secret value event/log 금지
@@ -192,7 +194,31 @@ stateDiagram-v2
 
 ## Success Verification
 
-`SUCCESS` 조건:
+배포 전에 `beforeSpec`과 `targetSpec`을 비교한다.
+
+### No-op
+
+두 spec이 동일하면 Docker update를 실행하지 않는다. 이 경우 Swarm `UpdateStatus`가 새로 생성되거나 `completed`가 되는 것을 성공 조건으로 요구하지 않는다.
+
+```text
+current spec == target spec
+AND
+service image == target digest
+AND
+all expected running tasks use target digest/spec
+AND
+desired == expected running replicas
+AND
+application health stable for configured window
+AND
+no external conflict
+```
+
+이면 no-op `SUCCESS`로 기록한다.
+
+### Mutating update
+
+실제 spec 변경이 있을 때만 다음 조건을 적용한다.
 
 ```text
 service image == target digest
@@ -379,3 +405,4 @@ production stack에서 `build:`는 지원하지 않는다.
 - https://docs.docker.com/engine/swarm/ingress/
 - https://docs.docker.com/engine/swarm/admin_guide/
 - https://docs.docker.com/engine/security/
+- https://docs.docker.com/engine/swarm/swarm-tutorial/

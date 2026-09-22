@@ -223,7 +223,30 @@ DB schema/data migration은 image rollback 대상이 아니며 애플리케이�
 
 ## 8. Deployment Success Contract
 
-다음 조건을 모두 만족할 때만 `SUCCESS`로 기록한다.
+배포 시작 전에 `beforeSpec`과 `targetSpec`을 비교하여 실제 service spec 변경 여부를 구분한다.
+
+### No-op Deployment
+
+`beforeSpec == targetSpec`이면 Docker service update를 호출하지 않는다.
+
+동일 Release 재배포를 오류로 취급하지 않고 명시적인 **no-op deployment**로 기록한다. 이 경우 Swarm `UpdateStatus == completed`는 요구하지 않는다.
+
+다음 조건을 모두 만족하면 `SUCCESS`로 기록한다.
+
+```text
+1. current service spec image == target digest
+2. current service spec == target spec
+3. desired replicas == expected running replicas
+4. expected running tasks use target digest/spec
+5. application health succeeds during a stability window
+6. no conflicting external service version/spec change is detected
+```
+
+Deployment/Event에는 실제 mutation이 발생하지 않았음을 구분할 수 있도록 `NO_OP` 또는 이에 준하는 결과 metadata를 남긴다.
+
+### Mutating Deployment
+
+`beforeSpec != targetSpec`이면 Docker service update를 실행하며 다음 조건을 모두 만족할 때만 `SUCCESS`로 기록한다.
 
 ```text
 1. service spec image == target digest
@@ -515,6 +538,7 @@ Manager quorum 상실 시 기존 workload 실행 여부와 control-plane mutabil
 11. unauthorized mutation → API와 Agent 경계 모두 거절
 12. 3 managers에서 leader loss와 quorum loss 검증
 13. DB/Swarm state/key restore drill
+14. 동일 digest/spec 재배포 → Docker update 없이 no-op SUCCESS, task/health 검증 수행
 
 ## 20. References
 
@@ -526,3 +550,4 @@ Manager quorum 상실 시 기존 workload 실행 여부와 control-plane mutabil
 - https://docs.docker.com/engine/swarm/ingress/
 - https://docs.docker.com/engine/swarm/admin_guide/
 - https://docs.docker.com/engine/security/
+- https://docs.docker.com/engine/swarm/swarm-tutorial/
