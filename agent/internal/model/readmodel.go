@@ -12,6 +12,8 @@ type ManagerQuorum struct {
 
 type NodeSummary struct {
 	ID            string `json:"id"`
+	Version       uint64 `json:"version"`
+	SpecHash      string `json:"specHash"`
 	Hostname      string `json:"hostname"`
 	Address       string `json:"address"`
 	Role          string `json:"role"`
@@ -98,4 +100,33 @@ type ServiceMutationResponse struct {
 	TargetSpecHash    string   `json:"targetSpecHash"`
 	TargetForceUpdate uint64   `json:"targetForceUpdate"`
 	Warnings          []string `json:"warnings,omitempty"`
+}
+
+
+type NodeDetailResponse struct {
+	Node       NodeSummary   `json:"node"`
+	Tasks      []TaskSummary `json:"tasks"`
+	ServiceIDs []string      `json:"serviceIds"`
+}
+
+type NodeMutationRequest struct {
+	ExpectedVersion  uint64 `json:"expectedVersion"`
+	ExpectedSpecHash string `json:"expectedSpecHash"`
+	TargetSpecHash   string `json:"targetSpecHash"`
+}
+
+type NodeMutationPlan struct {
+	NodeID             string   `json:"nodeId"`
+	Version            uint64   `json:"version"`
+	BeforeSpecHash     string   `json:"beforeSpecHash"`
+	TargetSpecHash     string   `json:"targetSpecHash"`
+	TargetAvailability string   `json:"targetAvailability"`
+	AffectedServiceIDs []string `json:"affectedServiceIds"`
+}
+
+type NodeMutationResponse struct {
+	NodeID             string `json:"nodeId"`
+	Version            uint64 `json:"version"`
+	TargetSpecHash     string `json:"targetSpecHash"`
+	TargetAvailability string `json:"targetAvailability"`
 }
