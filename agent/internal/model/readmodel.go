@@ -72,3 +72,14 @@ type ServiceDetailResponse struct {
 	Service ServiceSummary `json:"service"`
 	Tasks   []TaskSummary  `json:"tasks"`
 }
+
+
+type ServiceMutationRequest struct {
+	ExpectedVersion uint64 `json:"expectedVersion"`
+	Replicas        *uint64 `json:"replicas,omitempty"`
+}
+
+type ServiceMutationResponse struct {
+	Service  ServiceSummary `json:"service"`
+	Warnings []string       `json:"warnings,omitempty"`
+}
