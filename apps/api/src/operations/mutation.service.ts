@@ -724,11 +724,7 @@ export class MutationService implements OnApplicationBootstrap {
 }
 
 function isTerminal(operation: OperationRecord): boolean {
-  return (
-    operation.status === 'SUCCESS' ||
-    operation.status === 'FAILED' ||
-    operation.status === 'NEEDS_ATTENTION'
-  );
+  return operation.status === 'SUCCESS' || operation.status === 'FAILED';
 }
 
 function isDeterministicAgentRejection(
