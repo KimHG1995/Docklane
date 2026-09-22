@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.1.0
-  description: Read-only foundation contract between the Docklane Control Plane and Go Agent.
+  version: 0.2.0
+  description: Stable read-model contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
 security:
@@ -23,23 +23,23 @@ paths:
       operationId: inspectCluster
       responses:
         '200':
-          description: Docker server, Swarm and node snapshot.
+          description: Normalized Swarm cluster and node read model.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DockerSnapshot'
-  /v1/services/{serviceId}:
+                $ref: '#/components/schemas/ClusterResponse'
+  /v1/services:\n    get:\n      operationId: listServices\n      responses:\n        '200':\n          description: Normalized Swarm services.\n          content:\n            application/json:\n              schema:\n                type: array\n                items:\n                  $ref: '#/components/schemas/ServiceSummary'\n  /v1/services/{serviceId}:
     get:
       operationId: inspectService
       parameters:
         - $ref: '#/components/parameters/ServiceId'
       responses:
         '200':
-          description: Raw Docker service projection for the read model.
+          description: Normalized service and its tasks.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DockerSnapshot'
+                $ref: '#/components/schemas/ServiceDetailResponse'
   /v1/services/{serviceId}/tasks:
     get:
       operationId: listServiceTasks
@@ -47,7 +47,7 @@ paths:
         - $ref: '#/components/parameters/ServiceId'
       responses:
         '200':
-          description: Tasks currently associated with the service.
+          description: Normalized tasks currently associated with the service.
           content:
             application/json:
               schema:

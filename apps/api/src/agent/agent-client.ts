@@ -1,10 +1,17 @@
-export type AgentJson = Record<string, unknown>;
+import type {
+  ClusterResponse,
+  HealthResponse,
+  ServiceDetailResponse,
+  ServiceSummary,
+  TaskSummary,
+} from './read-model.js';
 
 export interface AgentClient {
-  health(): Promise<AgentJson>;
-  inspectCluster(): Promise<AgentJson>;
-  inspectService(serviceId: string): Promise<AgentJson>;
-  listServiceTasks(serviceId: string): Promise<AgentJson>;
+  health(): Promise<HealthResponse>;
+  inspectCluster(): Promise<ClusterResponse>;
+  listServices(): Promise<ServiceSummary[]>;
+  inspectService(serviceId: string): Promise<ServiceDetailResponse>;
+  listServiceTasks(serviceId: string): Promise<TaskSummary[]>;
 }
 
 export const AGENT_CLIENT = Symbol('AGENT_CLIENT');

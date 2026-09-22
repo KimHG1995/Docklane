@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/KimHG1995/Docklane/agent/internal/config"
+	"github.com/KimHG1995/Docklane/agent/internal/model"
 )
 
 type DockerReader interface {
-	Cluster(context.Context) (any, error)
-	Service(context.Context, string) (any, error)
-	ServiceTasks(context.Context, string) (any, error)
+	Cluster(context.Context) (model.ClusterResponse, error)
+	Services(context.Context) ([]model.ServiceSummary, error)
+	Service(context.Context, string) (model.ServiceDetailResponse, error)
+	ServiceTasks(context.Context, string) ([]model.TaskSummary, error)
 }
 
 type Server struct {
@@ -31,6 +33,7 @@ func New(cfg config.Config, reader DockerReader) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", s.health)
 	mux.HandleFunc("GET /v1/cluster", s.cluster)
+	mux.HandleFunc("GET /v1/services", s.services)
 	mux.HandleFunc("GET /v1/services/{serviceId}", s.service)
 	mux.HandleFunc("GET /v1/services/{serviceId}/tasks", s.serviceTasks)
 
@@ -95,14 +98,23 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+func (s *Server) services(w http.ResponseWriter, r *http.Request) {
+	data, err := s.reader.Services(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
 func (s *Server) service(w http.ResponseWriter, r *http.Request) {
-	serviceID := r.PathValue("serviceId")
-	if serviceID == "" {
+	id := r.PathValue("serviceId")
+	if id == "" {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("serviceId is required"))
 		return
 	}
 
-	data, err := s.reader.Service(r.Context(), serviceID)
+	data, err := s.reader.Service(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -111,13 +123,13 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serviceTasks(w http.ResponseWriter, r *http.Request) {
-	serviceID := r.PathValue("serviceId")
-	if serviceID == "" {
+	id := r.PathValue("serviceId")
+	if id == "" {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("serviceId is required"))
 		return
 	}
 
-	data, err := s.reader.ServiceTasks(r.Context(), serviceID)
+	data, err := s.reader.ServiceTasks(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -139,13 +151,8 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		started := time.Now()
+		start := time.Now()
 		next.ServeHTTP(w, r)
-		slog.Info(
-			"request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"duration", time.Since(started),
-		)
+		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
 	})
 }
