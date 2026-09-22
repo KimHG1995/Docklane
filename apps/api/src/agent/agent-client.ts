@@ -25,3 +25,13 @@ export interface AgentClient {
 }
 
 export const AGENT_CLIENT = Symbol('AGENT_CLIENT');
+
+
+export class AgentRequestError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly responseBody: string,
+  ) {
+    super(`Agent request failed with ${statusCode}`);
+  }
+}
