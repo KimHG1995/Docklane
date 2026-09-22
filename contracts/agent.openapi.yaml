@@ -1,0 +1,83 @@
+openapi: 3.1.0
+info:
+  title: Docklane Swarm Agent API
+  version: 0.1.0
+  description: Read-only foundation contract between the Docklane Control Plane and Go Agent.
+servers:
+  - url: https://127.0.0.1:9443
+security:
+  - mutualTLS: []
+paths:
+  /v1/health:
+    get:
+      operationId: health
+      responses:
+        '200':
+          description: Agent is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /v1/cluster:
+    get:
+      operationId: inspectCluster
+      responses:
+        '200':
+          description: Docker server, Swarm and node snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerSnapshot'
+  /v1/services/{serviceId}:
+    get:
+      operationId: inspectService
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '200':
+          description: Raw Docker service projection for the read model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerSnapshot'
+  /v1/services/{serviceId}/tasks:
+    get:
+      operationId: listServiceTasks
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '200':
+          description: Tasks currently associated with the service.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+  parameters:
+    ServiceId:
+      name: serviceId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, component]
+      properties:
+        status:
+          type: string
+          const: ok
+        component:
+          type: string
+          const: docklane-agent
+    DockerSnapshot:
+      type: object
+      additionalProperties: true
