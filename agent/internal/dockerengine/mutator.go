@@ -131,7 +131,6 @@ func validateMutationPrecondition(
 	return nil
 }
 
-
 func mapServiceUpdateError(action, serviceID string, err error) error {
 	if cerrdefs.IsConflict(err) {
 		return &ConflictError{
