@@ -1,4 +1,8 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  type OnModuleInit,
+} from '@nestjs/common';
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
 import type {
@@ -16,6 +20,9 @@ interface OperationRow extends RowDataPacket {
   status: OperationStatus;
   actor_id: string;
   expected_version: number;
+  before_spec_hash: string;
+  target_spec_hash: string;
+  target_force_update: number;
   target_replicas: number | null;
   result_version: number | null;
   error_code: string | null;
@@ -24,9 +31,13 @@ interface OperationRow extends RowDataPacket {
   updated_at: Date;
 }
 
+interface CountRow extends RowDataPacket {
+  count: number;
+}
+
 @Injectable()
 export class OperationRepository implements OnModuleInit {
-  constructor(private readonly db: Database) {}
+  constructor(@Inject(Database) private readonly db: Database) {}
 
   async onModuleInit(): Promise<void> {
     await this.initialize();
@@ -42,6 +53,9 @@ export class OperationRepository implements OnModuleInit {
         status VARCHAR(32) NOT NULL,
         actor_id VARCHAR(128) NOT NULL,
         expected_version BIGINT UNSIGNED NOT NULL,
+        before_spec_hash VARCHAR(64) NOT NULL DEFAULT '',
+        target_spec_hash VARCHAR(64) NOT NULL DEFAULT '',
+        target_force_update BIGINT UNSIGNED NOT NULL DEFAULT 0,
         target_replicas INT NULL,
         result_version BIGINT UNSIGNED NULL,
         error_code VARCHAR(64) NULL,
@@ -53,6 +67,19 @@ export class OperationRepository implements OnModuleInit {
         INDEX idx_operations_status (status, updated_at)
       ) ENGINE=InnoDB
     `);
+
+    await this.ensureColumn(
+      'before_spec_hash',
+      "VARCHAR(64) NOT NULL DEFAULT ''",
+    );
+    await this.ensureColumn(
+      'target_spec_hash',
+      "VARCHAR(64) NOT NULL DEFAULT ''",
+    );
+    await this.ensureColumn(
+      'target_force_update',
+      'BIGINT UNSIGNED NOT NULL DEFAULT 0',
+    );
 
     await this.db.pool.query(`
       CREATE TABLE IF NOT EXISTS audit_events (
@@ -79,6 +106,26 @@ export class OperationRepository implements OnModuleInit {
     return rows[0] ? mapOperation(rows[0]) : null;
   }
 
+  async findWithConnection(
+    connection: PoolConnection,
+    id: string,
+  ): Promise<OperationRecord | null> {
+    const [rows] = await connection.query<OperationRow[]>(
+      'SELECT * FROM operations WHERE id = ? LIMIT 1',
+      [id],
+    );
+    return rows[0] ? mapOperation(rows[0]) : null;
+  }
+
+  async listNonTerminal(): Promise<OperationRecord[]> {
+    const [rows] = await this.db.pool.query<OperationRow[]>(
+      `SELECT * FROM operations
+       WHERE status IN ('PENDING', 'RUNNING', 'VERIFYING')
+       ORDER BY created_at ASC`,
+    );
+    return rows.map(mapOperation);
+  }
+
   async create(
     connection: PoolConnection,
     input: {
@@ -88,13 +135,20 @@ export class OperationRepository implements OnModuleInit {
       type: OperationType;
       actorId: string;
       expectedVersion: number;
+      beforeSpecHash: string;
+      targetSpecHash: string;
+      targetForceUpdate: number;
       targetReplicas?: number;
     },
   ): Promise<void> {
     await connection.execute(
       `INSERT INTO operations
-       (id, cluster_id, service_id, type, status, actor_id, expected_version, target_replicas)
-       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?)`,
+       (
+         id, cluster_id, service_id, type, status, actor_id,
+         expected_version, before_spec_hash, target_spec_hash,
+         target_force_update, target_replicas
+       )
+       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)`,
       [
         input.id,
         input.clusterId,
@@ -102,6 +156,9 @@ export class OperationRepository implements OnModuleInit {
         input.type,
         input.actorId,
         input.expectedVersion,
+        input.beforeSpecHash,
+        input.targetSpecHash,
+        input.targetForceUpdate,
         input.targetReplicas ?? null,
       ],
     );
@@ -120,7 +177,10 @@ export class OperationRepository implements OnModuleInit {
     resultVersion: number,
   ): Promise<void> {
     await connection.execute(
-      "UPDATE operations SET status = 'VERIFYING', result_version = ? WHERE id = ?",
+      `UPDATE operations
+       SET status = 'VERIFYING', result_version = ?,
+           error_code = NULL, error_message = NULL
+       WHERE id = ?`,
       [resultVersion, id],
     );
   }
@@ -132,7 +192,8 @@ export class OperationRepository implements OnModuleInit {
   ): Promise<void> {
     await connection.execute(
       `UPDATE operations
-       SET status = 'SUCCESS', result_version = ?, error_code = NULL, error_message = NULL
+       SET status = 'SUCCESS', result_version = ?,
+           error_code = NULL, error_message = NULL
        WHERE id = ?`,
       [resultVersion, id],
     );
@@ -185,6 +246,30 @@ export class OperationRepository implements OnModuleInit {
       ],
     );
   }
+
+  private async ensureColumn(
+    columnName: string,
+    definition: string,
+  ): Promise<void> {
+    const [rows] = await this.db.pool.query<CountRow[]>(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE()
+         AND table_name = 'operations'
+         AND column_name = ?`,
+      [columnName],
+    );
+    if ((rows[0]?.count ?? 0) > 0) {
+      return;
+    }
+
+    if (!/^[a-z_]+$/.test(columnName)) {
+      throw new Error('Unsafe operation column name');
+    }
+    await this.db.pool.query(
+      `ALTER TABLE operations ADD COLUMN ${columnName} ${definition}`,
+    );
+  }
 }
 
 function mapOperation(row: OperationRow): OperationRecord {
@@ -196,6 +281,9 @@ function mapOperation(row: OperationRow): OperationRecord {
     status: row.status,
     actorId: row.actor_id,
     expectedVersion: Number(row.expected_version),
+    beforeSpecHash: row.before_spec_hash,
+    targetSpecHash: row.target_spec_hash,
+    targetForceUpdate: Number(row.target_force_update),
     targetReplicas: row.target_replicas,
     resultVersion: row.result_version === null ? null : Number(row.result_version),
     errorCode: row.error_code,
