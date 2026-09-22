@@ -424,6 +424,18 @@ export class MutationService implements OnApplicationBootstrap {
           };
         }
 
+        if (
+          operation.resultVersion !== null &&
+          current.service.version !== operation.resultVersion
+        ) {
+          return {
+            status: 'EXTERNAL_CONFLICT',
+            current,
+            message:
+              `Service version changed after Docklane mutation: expected ${operation.resultVersion}, got ${current.service.version}`,
+          };
+        }
+
         const state = current.service.updateState;
         if (
           state === 'paused' ||
