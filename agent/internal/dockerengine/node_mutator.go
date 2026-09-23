@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	cerrdefs "github.com/containerd/errdefs"
 	"github.com/KimHG1995/Docklane/agent/internal/model"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 )
@@ -201,7 +201,6 @@ func (r *Reader) updateNodeAvailability(
 		TargetAvailability: string(targetAvailability),
 	}, nil
 }
-
 
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
