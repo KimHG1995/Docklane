@@ -34,7 +34,6 @@ func TestMapServiceUpdateErrorKeepsUnexpectedError(t *testing.T) {
 	}
 }
 
-
 func TestNodeMutationPlanSerializesEmptyAffectedServicesAsArray(t *testing.T) {
 	payload, err := json.Marshal(model.NodeMutationPlan{
 		NodeID:             "node-1",
