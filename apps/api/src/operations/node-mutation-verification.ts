@@ -28,6 +28,21 @@ export function classifyNodeMutation(
     return { status: 'PENDING' };
   }
 
+  if (operation.type === 'LABELS') {
+    if (!operation.targetLabels) {
+      return {
+        status: 'EXTERNAL_CONFLICT',
+        message: 'Recorded label mutation target is missing',
+      };
+    }
+    return sameLabels(current.node.labels, operation.targetLabels)
+      ? { status: 'SUCCESS' }
+      : {
+          status: 'EXTERNAL_CONFLICT',
+          message: 'Current node labels do not match the recorded target',
+        };
+  }
+
   if (operation.type === 'ACTIVATE') {
     return { status: 'SUCCESS' };
   }
@@ -38,4 +53,20 @@ export function classifyNodeMutation(
   return remainingServiceTasks.length === 0
     ? { status: 'SUCCESS' }
     : { status: 'PENDING' };
+}
+
+
+function sameLabels(
+  left: Record<string, string>,
+  right: Record<string, string>,
+): boolean {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] && left[key] === right[key],
+    )
+  );
 }
