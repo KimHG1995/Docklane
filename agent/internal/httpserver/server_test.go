@@ -109,6 +109,35 @@ func (fakeReader) ActivateNode(
 	}, nil
 }
 
+func (fakeReader) PlanNodeLabels(
+	context.Context,
+	string,
+	model.NodeLabelPatchRequest,
+) (model.NodeMutationPlan, error) {
+	return model.NodeMutationPlan{
+		NodeID:             "node-1",
+		Version:            1,
+		BeforeSpecHash:     "node-before",
+		TargetSpecHash:     "node-labels",
+		TargetAvailability: "active",
+		AffectedServiceIDs: []string{},
+		TargetLabels:       map[string]string{"zone": "a"},
+	}, nil
+}
+
+func (fakeReader) UpdateNodeLabels(
+	context.Context,
+	string,
+	model.NodeMutationRequest,
+) (model.NodeMutationResponse, error) {
+	return model.NodeMutationResponse{
+		NodeID:             "node-1",
+		Version:            2,
+		TargetSpecHash:     "node-labels",
+		TargetAvailability: "active",
+	}, nil
+}
+
 func (fakeReader) PlanScaleService(
 	context.Context,
 	string,
@@ -236,6 +265,22 @@ func TestPlanDrainNode(t *testing.T) {
 		http.MethodPost,
 		"/v1/nodes/node-1/plan-drain",
 		strings.NewReader(`{"expectedVersion":1}`),
+	)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}
+
+func TestPlanNodeLabels(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/nodes/node-1/plan-labels",
+		strings.NewReader(`{"expectedVersion":1,"set":{"zone":"a"},"remove":[]}`),
 	)
 	res := httptest.NewRecorder()
 

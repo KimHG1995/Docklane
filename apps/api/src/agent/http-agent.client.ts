@@ -129,6 +129,40 @@ export class HttpAgentClient implements AgentClient {
     );
   }
 
+  planNodeLabels(
+    nodeId: string,
+    input: {
+      expectedVersion: number;
+      set: Record<string, string>;
+      remove: string[];
+    },
+  ): Promise<NodeMutationPlan> {
+    return this.request(
+      'POST',
+      `/v1/nodes/${encodeURIComponent(nodeId)}/plan-labels`,
+      NodeMutationPlanSchema,
+      input,
+    );
+  }
+
+  updateNodeLabels(
+    nodeId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+      expectedServiceIds: string[];
+      targetLabels: Record<string, string>;
+    },
+  ): Promise<NodeMutationResponse> {
+    return this.request(
+      'POST',
+      `/v1/nodes/${encodeURIComponent(nodeId)}/labels`,
+      NodeMutationResponseSchema,
+      input,
+    );
+  }
+
   planScaleService(
     serviceId: string,
     expectedVersion: number,

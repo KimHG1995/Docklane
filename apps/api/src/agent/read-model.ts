@@ -29,6 +29,7 @@ export const NodeSummarySchema = z.object({
   engineVersion: z.string().optional(),
   nanoCpus: z.number().int(),
   memoryBytes: z.number().int(),
+  labels: z.record(z.string(), z.string()),
 });
 
 export const ClusterResponseSchema = z.object({
@@ -116,8 +117,9 @@ export const NodeMutationPlanSchema = z.object({
   version: z.number().int().nonnegative(),
   beforeSpecHash: z.string().min(1),
   targetSpecHash: z.string().min(1),
-  targetAvailability: z.enum(['drain', 'active']),
+  targetAvailability: z.enum(['drain', 'active', 'pause']),
   affectedServiceIds: z.array(z.string()),
+  targetLabels: z.record(z.string(), z.string()).optional(),
 });
 
 export const NodeMutationResponseSchema = z.object({

@@ -22,7 +22,10 @@ import type { Principal } from '../auth/auth.types.js';
 import { OperationLock } from './operation-lock.js';
 import { OperationRepository } from './operation.repository.js';
 import { NodeOperationRepository } from './node-operation.repository.js';
-import type { NodeMutationRequest } from './node-mutation.dto.js';
+import type {
+  NodeLabelsRequest,
+  NodeMutationRequest,
+} from './node-mutation.dto.js';
 import { classifyNodeMutation } from './node-mutation-verification.js';
 import type {
   NodeOperationRecord,
@@ -107,19 +110,22 @@ export class NodeMutationService implements OnApplicationBootstrap {
     input: NodeMutationRequest,
     principal: Principal,
   ): Promise<NodeOperationRecord> {
-    return this.mutate(
-      clusterId,
-      nodeRef,
-      input,
-      principal,
-      'ACTIVATE',
-    );
+    return this.mutate(clusterId, nodeRef, input, principal, 'ACTIVATE');
+  }
+
+  labels(
+    clusterId: string,
+    nodeRef: string,
+    input: NodeLabelsRequest,
+    principal: Principal,
+  ): Promise<NodeOperationRecord> {
+    return this.mutate(clusterId, nodeRef, input, principal, 'LABELS');
   }
 
   private async mutate(
     clusterId: string,
     nodeRef: string,
-    input: NodeMutationRequest,
+    input: NodeMutationRequest | NodeLabelsRequest,
     principal: Principal,
     type: NodeOperationType,
   ): Promise<NodeOperationRecord> {
@@ -127,7 +133,12 @@ export class NodeMutationService implements OnApplicationBootstrap {
 
     const initial = await this.agentClient.inspectNode(nodeRef);
     const canonicalNodeId = initial.node.id;
-    const initiallyAffected = sortedUnique(initial.serviceIds);
+    const initiallyAffected =
+      type === 'LABELS'
+        ? sortedUnique(
+            (await this.agentClient.listServices()).map((service) => service.id),
+          )
+        : sortedUnique(initial.serviceIds);
 
     const existingBeforeLock = await this.nodeOperations.find(input.operationId);
     const priorBeforeLock =
@@ -159,6 +170,13 @@ export class NodeMutationService implements OnApplicationBootstrap {
             type,
             actorId: principal.actorId,
             expectedVersion: input.expectedVersion,
+            labelPatch:
+              type === 'LABELS'
+                ? {
+                    set: { ...(input as NodeLabelsRequest).set },
+                    remove: [...(input as NodeLabelsRequest).remove].sort(),
+                  }
+                : null,
           });
           return isTerminal(existing)
             ? existing
@@ -180,7 +198,14 @@ export class NodeMutationService implements OnApplicationBootstrap {
         }
 
         const lockedNode = await this.agentClient.inspectNode(canonicalNodeId);
-        const lockedServices = sortedUnique(lockedNode.serviceIds);
+        const lockedServices =
+          type === 'LABELS'
+            ? sortedUnique(
+                (await this.agentClient.listServices()).map(
+                  (service) => service.id,
+                ),
+              )
+            : sortedUnique(lockedNode.serviceIds);
         if (!sameStrings(initiallyAffected, lockedServices)) {
           throw new ConflictException(
             'Node task set changed while acquiring mutation locks; retry the operation',
@@ -207,6 +232,7 @@ export class NodeMutationService implements OnApplicationBootstrap {
             type,
             canonicalNodeId,
             input.expectedVersion,
+            type === 'LABELS' ? (input as NodeLabelsRequest) : undefined,
           );
         } catch (error) {
           throw mapPlanningError(error);
@@ -221,6 +247,12 @@ export class NodeMutationService implements OnApplicationBootstrap {
           principal.actorId,
           plan,
           lockedNode,
+          type === 'LABELS'
+            ? {
+                set: { ...(input as NodeLabelsRequest).set },
+                remove: [...(input as NodeLabelsRequest).remove].sort(),
+              }
+            : null,
         );
 
         if (plan.beforeSpecHash === plan.targetSpecHash) {
@@ -272,10 +304,22 @@ export class NodeMutationService implements OnApplicationBootstrap {
     type: NodeOperationType,
     nodeId: string,
     expectedVersion: number,
+    labels?: NodeLabelsRequest,
   ): Promise<NodeMutationPlan> {
-    return type === 'DRAIN'
-      ? this.agentClient.planDrainNode(nodeId, expectedVersion)
-      : this.agentClient.planActivateNode(nodeId, expectedVersion);
+    if (type === 'DRAIN') {
+      return this.agentClient.planDrainNode(nodeId, expectedVersion);
+    }
+    if (type === 'ACTIVATE') {
+      return this.agentClient.planActivateNode(nodeId, expectedVersion);
+    }
+    if (!labels) {
+      throw new Error('Node label patch is required');
+    }
+    return this.agentClient.planNodeLabels(nodeId, {
+      expectedVersion,
+      set: labels.set,
+      remove: labels.remove,
+    });
   }
 
   private execute(
@@ -288,11 +332,27 @@ export class NodeMutationService implements OnApplicationBootstrap {
       expectedSpecHash: plan.beforeSpecHash,
       targetSpecHash: plan.targetSpecHash,
       expectedServiceIds:
-        type === 'DRAIN' ? plan.affectedServiceIds : undefined,
+        type === 'DRAIN' || type === 'LABELS'
+          ? plan.affectedServiceIds
+          : undefined,
+      targetLabels: plan.targetLabels,
     };
-    return type === 'DRAIN'
-      ? this.agentClient.drainNode(nodeId, input)
-      : this.agentClient.activateNode(nodeId, input);
+    if (type === 'DRAIN') {
+      return this.agentClient.drainNode(nodeId, input);
+    }
+    if (type === 'ACTIVATE') {
+      return this.agentClient.activateNode(nodeId, input);
+    }
+    if (!plan.targetLabels) {
+      throw new Error('Planned target labels are missing');
+    }
+    return this.agentClient.updateNodeLabels(nodeId, {
+      expectedVersion: input.expectedVersion,
+      expectedSpecHash: input.expectedSpecHash,
+      targetSpecHash: input.targetSpecHash,
+      expectedServiceIds: plan.affectedServiceIds,
+      targetLabels: plan.targetLabels,
+    });
   }
 
   private async persistIntent(
@@ -303,6 +363,7 @@ export class NodeMutationService implements OnApplicationBootstrap {
     actorId: string,
     plan: NodeMutationPlan,
     before: NodeDetailResponse,
+    labelPatch: { set: Record<string, string>; remove: string[] } | null,
   ): Promise<void> {
     await connection.beginTransaction();
     try {
@@ -317,6 +378,8 @@ export class NodeMutationService implements OnApplicationBootstrap {
         targetSpecHash: plan.targetSpecHash,
         targetAvailability: plan.targetAvailability,
         affectedServiceIds: plan.affectedServiceIds,
+        targetLabels: plan.targetLabels ?? null,
+        labelPatch,
       });
       await this.nodeOperations.markRunning(connection, operationId);
       await this.serviceOperations.audit(connection, {
@@ -332,6 +395,8 @@ export class NodeMutationService implements OnApplicationBootstrap {
           targetSpecHash: plan.targetSpecHash,
           targetAvailability: plan.targetAvailability,
           affectedServiceIds: plan.affectedServiceIds,
+          targetLabels: plan.targetLabels,
+          labelPatch,
         },
       });
       await connection.commit();
@@ -408,6 +473,15 @@ export class NodeMutationService implements OnApplicationBootstrap {
         lastError = null;
         const decision = classifyNodeMutation(operation, current);
 
+        if (
+          decision.status === 'SUCCESS' &&
+          operation.type === 'LABELS' &&
+          !(await this.affectedServicesConverged(operation.affectedServiceIds))
+        ) {
+          await sleep(VERIFY_INTERVAL_MS);
+          continue;
+        }
+
         if (decision.status === 'SUCCESS') {
           await connection.beginTransaction();
           try {
@@ -464,6 +538,20 @@ export class NodeMutationService implements OnApplicationBootstrap {
       last?.node,
     );
     return this.requireOperation(connection, operation.id);
+  }
+
+  private async affectedServicesConverged(
+    serviceIds: string[],
+  ): Promise<boolean> {
+    for (const serviceId of serviceIds) {
+      const current = await this.agentClient.inspectService(serviceId);
+      if (
+        current.service.desiredReplicas !== current.service.runningReplicas
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private async markRejected(
@@ -590,6 +678,7 @@ export class NodeMutationService implements OnApplicationBootstrap {
       type: NodeOperationType;
       actorId: string;
       expectedVersion: number;
+      labelPatch: { set: Record<string, string>; remove: string[] } | null;
     },
   ): void {
     if (
@@ -597,7 +686,8 @@ export class NodeMutationService implements OnApplicationBootstrap {
       existing.nodeId !== expected.nodeId ||
       existing.type !== expected.type ||
       existing.actorId !== expected.actorId ||
-      existing.expectedVersion !== expected.expectedVersion
+      existing.expectedVersion !== expected.expectedVersion ||
+      !sameLabelPatch(existing.labelPatch, expected.labelPatch)
     ) {
       throw new ConflictException(
         'operationId was already used for a different node mutation',
@@ -659,4 +749,19 @@ function errorMessage(error: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+
+function sameLabelPatch(
+  left: { set: Record<string, string>; remove: string[] } | null,
+  right: { set: Record<string, string>; remove: string[] } | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  const leftKeys = Object.keys(left.set).sort();
+  const rightKeys = Object.keys(right.set).sort();
+  return (
+    sameStrings(leftKeys, rightKeys) &&
+    leftKeys.every((key) => left.set[key] === right.set[key]) &&
+    sameStrings([...left.remove].sort(), [...right.remove].sort())
+  );
 }

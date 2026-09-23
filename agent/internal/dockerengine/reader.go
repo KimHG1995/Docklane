@@ -213,6 +213,10 @@ func (r *Reader) ServiceTasks(ctx context.Context, serviceID string) ([]model.Ta
 
 func toNodeSummary(node swarm.Node) model.NodeSummary {
 	specHash, _ := nodeSpecHash(node.Spec)
+	labels := make(map[string]string, len(node.Spec.Annotations.Labels))
+	for key, value := range node.Spec.Annotations.Labels {
+		labels[key] = value
+	}
 	leader := false
 	reachability := ""
 
@@ -237,6 +241,7 @@ func toNodeSummary(node swarm.Node) model.NodeSummary {
 		EngineVersion: node.Description.Engine.EngineVersion,
 		NanoCPUs:      node.Description.Resources.NanoCPUs,
 		MemoryBytes:   node.Description.Resources.MemoryBytes,
+		Labels:        labels,
 	}
 }
 

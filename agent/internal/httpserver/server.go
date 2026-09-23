@@ -28,6 +28,8 @@ type DockerReader interface {
 	PlanActivateNode(context.Context, string, uint64) (model.NodeMutationPlan, error)
 	DrainNode(context.Context, string, model.NodeMutationRequest) (model.NodeMutationResponse, error)
 	ActivateNode(context.Context, string, model.NodeMutationRequest) (model.NodeMutationResponse, error)
+	PlanNodeLabels(context.Context, string, model.NodeLabelPatchRequest) (model.NodeMutationPlan, error)
+	UpdateNodeLabels(context.Context, string, model.NodeMutationRequest) (model.NodeMutationResponse, error)
 	PlanScaleService(context.Context, string, uint64, uint64) (model.ServiceMutationPlan, error)
 	PlanRestartService(context.Context, string, uint64) (model.ServiceMutationPlan, error)
 	ScaleService(context.Context, string, model.ServiceMutationRequest) (model.ServiceMutationResponse, error)
@@ -53,6 +55,8 @@ func New(cfg config.Config, reader DockerReader) *Server {
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/drain", s.drainNode)
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/plan-activate", s.planActivateNode)
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/activate", s.activateNode)
+	mux.HandleFunc("POST /v1/nodes/{nodeId}/plan-labels", s.planNodeLabels)
+	mux.HandleFunc("POST /v1/nodes/{nodeId}/labels", s.updateNodeLabels)
 	mux.HandleFunc("POST /v1/services/{serviceId}/plan-scale", s.planScaleService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/plan-restart", s.planRestartService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/scale", s.scaleService)
@@ -250,6 +254,52 @@ func (s *Server) activateNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.reader.ActivateNode(r.Context(), id, input)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) planNodeLabels(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("nodeId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("nodeId is required"))
+		return
+	}
+
+	var input model.NodeLabelPatchRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	result, err := s.reader.PlanNodeLabels(r.Context(), id, input)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) updateNodeLabels(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("nodeId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("nodeId is required"))
+		return
+	}
+
+	var input model.NodeMutationRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if input.TargetLabels == nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("targetLabels is required"))
+		return
+	}
+
+	result, err := s.reader.UpdateNodeLabels(r.Context(), id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
