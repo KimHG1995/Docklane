@@ -11,22 +11,22 @@ export function classifyMutationSnapshot(
   operation: OperationRecord,
   current: ServiceDetailResponse,
 ): MutationSnapshotDecision {
+  // Docker/Swarm metadata versions may advance after ServiceUpdate is
+  // accepted. A snapshot older than the accepted version can still expose the
+  // previous spec, so treat it as stale before evaluating target identity.
+  if (
+    operation.resultVersion !== null &&
+    current.service.version < operation.resultVersion
+  ) {
+    return { status: 'PENDING' };
+  }
+
   if (current.service.specHash !== operation.targetSpecHash) {
     return {
       status: 'EXTERNAL_CONFLICT',
       message:
         'Current service spec no longer matches the recorded mutation target',
     };
-  }
-
-  // Docker/Swarm metadata versions may advance after ServiceUpdate is
-  // accepted (for example while UpdateStatus is written). Treat the accepted
-  // version as a lower bound only, not as the identity of the final state.
-  if (
-    operation.resultVersion !== null &&
-    current.service.version < operation.resultVersion
-  ) {
-    return { status: 'PENDING' };
   }
 
   const state = current.service.updateState;
