@@ -15,6 +15,8 @@ export const ManagerQuorumSchema = z.object({
 
 export const NodeSummarySchema = z.object({
   id: z.string(),
+  version: z.number().int().nonnegative(),
+  specHash: z.string().min(1),
   hostname: z.string(),
   address: z.string(),
   role: z.string(),
@@ -101,3 +103,31 @@ export type TaskSummary = z.infer<typeof TaskSummarySchema>;
 export type ServiceDetailResponse = z.infer<typeof ServiceDetailResponseSchema>;
 export type ServiceMutationPlan = z.infer<typeof ServiceMutationPlanSchema>;
 export type ServiceMutationResponse = z.infer<typeof ServiceMutationResponseSchema>;
+
+
+export const NodeDetailResponseSchema = z.object({
+  node: NodeSummarySchema,
+  tasks: z.array(TaskSummarySchema),
+  serviceIds: z.array(z.string()),
+});
+
+export const NodeMutationPlanSchema = z.object({
+  nodeId: z.string(),
+  version: z.number().int().nonnegative(),
+  beforeSpecHash: z.string().min(1),
+  targetSpecHash: z.string().min(1),
+  targetAvailability: z.enum(['drain', 'active']),
+  affectedServiceIds: z.array(z.string()),
+});
+
+export const NodeMutationResponseSchema = z.object({
+  nodeId: z.string(),
+  version: z.number().int().nonnegative(),
+  targetSpecHash: z.string().min(1),
+  targetAvailability: z.enum(['drain', 'active']),
+});
+
+export type NodeSummary = z.infer<typeof NodeSummarySchema>;
+export type NodeDetailResponse = z.infer<typeof NodeDetailResponseSchema>;
+export type NodeMutationPlan = z.infer<typeof NodeMutationPlanSchema>;
+export type NodeMutationResponse = z.infer<typeof NodeMutationResponseSchema>;

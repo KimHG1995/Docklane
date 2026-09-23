@@ -40,6 +40,75 @@ func (fakeReader) ServiceTasks(context.Context, string) ([]model.TaskSummary, er
 	return []model.TaskSummary{}, nil
 }
 
+func (fakeReader) Node(context.Context, string) (model.NodeDetailResponse, error) {
+	return model.NodeDetailResponse{
+		Node: model.NodeSummary{
+			ID:           "node-1",
+			Version:      1,
+			SpecHash:     "node-before",
+			Availability: "active",
+		},
+		Tasks:      []model.TaskSummary{},
+		ServiceIDs: []string{},
+	}, nil
+}
+
+func (fakeReader) PlanDrainNode(
+	context.Context,
+	string,
+	uint64,
+) (model.NodeMutationPlan, error) {
+	return model.NodeMutationPlan{
+		NodeID:             "node-1",
+		Version:            1,
+		BeforeSpecHash:     "node-before",
+		TargetSpecHash:     "node-drain",
+		TargetAvailability: "drain",
+		AffectedServiceIDs: []string{},
+	}, nil
+}
+
+func (fakeReader) PlanActivateNode(
+	context.Context,
+	string,
+	uint64,
+) (model.NodeMutationPlan, error) {
+	return model.NodeMutationPlan{
+		NodeID:             "node-1",
+		Version:            1,
+		BeforeSpecHash:     "node-before",
+		TargetSpecHash:     "node-active",
+		TargetAvailability: "active",
+		AffectedServiceIDs: []string{},
+	}, nil
+}
+
+func (fakeReader) DrainNode(
+	context.Context,
+	string,
+	model.NodeMutationRequest,
+) (model.NodeMutationResponse, error) {
+	return model.NodeMutationResponse{
+		NodeID:             "node-1",
+		Version:            2,
+		TargetSpecHash:     "node-drain",
+		TargetAvailability: "drain",
+	}, nil
+}
+
+func (fakeReader) ActivateNode(
+	context.Context,
+	string,
+	model.NodeMutationRequest,
+) (model.NodeMutationResponse, error) {
+	return model.NodeMutationResponse{
+		NodeID:             "node-1",
+		Version:            2,
+		TargetSpecHash:     "node-active",
+		TargetAvailability: "active",
+	}, nil
+}
+
 func (fakeReader) PlanScaleService(
 	context.Context,
 	string,
@@ -138,6 +207,34 @@ func TestPlanRestart(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/services/service-1/plan-restart",
+		strings.NewReader(`{"expectedVersion":1}`),
+	)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}
+
+func TestNodeDetail(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(http.MethodGet, "/v1/nodes/node-1", nil)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}
+
+func TestPlanDrainNode(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/nodes/node-1/plan-drain",
 		strings.NewReader(`{"expectedVersion":1}`),
 	)
 	res := httptest.NewRecorder()

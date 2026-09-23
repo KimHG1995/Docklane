@@ -76,10 +76,15 @@ test('detects external service spec changes regardless of metadata version', () 
   assert.equal(decision.status, 'EXTERNAL_CONFLICT');
 });
 
-test('treats a snapshot older than the accepted version as pending', () => {
+test('treats an older pre-target snapshot as pending', () => {
   const decision = classifyMutationSnapshot(
     baseOperation,
-    snapshot({ version: 10 }),
+    snapshot({
+      version: 10,
+      specHash: 'before',
+      forceUpdate: 2,
+      updateState: 'updating',
+    }),
   );
   assert.deepEqual(decision, { status: 'PENDING' });
 });

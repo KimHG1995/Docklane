@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.4.0
+  version: 0.5.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -30,6 +30,103 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ClusterResponse'
+
+  /v1/nodes/{nodeId}:
+    get:
+      operationId: inspectNode
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      responses:
+        '200':
+          description: Canonical node detail, non-terminal tasks, and affected services.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeDetailResponse'
+
+  /v1/nodes/{nodeId}/plan-drain:
+    post:
+      operationId: planDrainNode
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodePlanRequest'
+      responses:
+        '200':
+          description: Deterministic drain target and affected service IDs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationPlan'
+        '409':
+          description: Expected node version is stale.
+
+  /v1/nodes/{nodeId}/drain:
+    post:
+      operationId: drainNode
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned node drain.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationResponse'
+        '409':
+          description: Node version, spec, or affected task-set precondition failed.
+
+  /v1/nodes/{nodeId}/plan-activate:
+    post:
+      operationId: planActivateNode
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodePlanRequest'
+      responses:
+        '200':
+          description: Deterministic activate target.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationPlan'
+        '409':
+          description: Expected node version is stale.
+
+  /v1/nodes/{nodeId}/activate:
+    post:
+      operationId: activateNode
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned node activation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationResponse'
+        '409':
+          description: Node version or spec precondition failed.
 
   /v1/services:
     get:
@@ -164,6 +261,14 @@ components:
       type: mutualTLS
 
   parameters:
+    NodeId:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+
     ServiceId:
       name: serviceId
       in: path
@@ -200,9 +305,11 @@ components:
       type: object
       additionalProperties: false
       required:
-        [id, hostname, address, role, availability, state, manager, leader, nanoCpus, memoryBytes]
+        [id, version, specHash, hostname, address, role, availability, state, manager, leader, nanoCpus, memoryBytes]
       properties:
         id: { type: string }
+        version: { type: integer, minimum: 0 }
+        specHash: { type: string, minLength: 1 }
         hostname: { type: string }
         address: { type: string }
         role: { type: string }
@@ -240,6 +347,69 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NodeSummary'
+
+    NodeDetailResponse:
+      type: object
+      additionalProperties: false
+      required: [node, tasks, serviceIds]
+      properties:
+        node:
+          $ref: '#/components/schemas/NodeSummary'
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskSummary'
+        serviceIds:
+          type: array
+          items: { type: string }
+
+    NodePlanRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+
+    NodeMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedSpecHash, targetSpecHash]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        expectedServiceIds:
+          type: array
+          items: { type: string }
+
+    NodeMutationPlan:
+      type: object
+      additionalProperties: false
+      required:
+        [nodeId, version, beforeSpecHash, targetSpecHash, targetAvailability, affectedServiceIds]
+      properties:
+        nodeId: { type: string }
+        version: { type: integer, minimum: 0 }
+        beforeSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        targetAvailability:
+          type: string
+          enum: [drain, active]
+        affectedServiceIds:
+          type: array
+          items: { type: string }
+
+    NodeMutationResponse:
+      type: object
+      additionalProperties: false
+      required: [nodeId, version, targetSpecHash, targetAvailability]
+      properties:
+        nodeId: { type: string }
+        version: { type: integer, minimum: 0 }
+        targetSpecHash: { type: string, minLength: 1 }
+        targetAvailability:
+          type: string
+          enum: [drain, active]
 
     ServiceSummary:
       type: object

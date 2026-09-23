@@ -7,6 +7,9 @@ import { loadAgentConfig, type AgentConfig } from './agent-config.js';
 import {
   ClusterResponseSchema,
   HealthResponseSchema,
+  NodeDetailResponseSchema,
+  NodeMutationPlanSchema,
+  NodeMutationResponseSchema,
   ServiceDetailResponseSchema,
   ServiceMutationPlanSchema,
   ServiceMutationResponseSchema,
@@ -14,6 +17,9 @@ import {
   TaskSummarySchema,
   type ClusterResponse,
   type HealthResponse,
+  type NodeDetailResponse,
+  type NodeMutationPlan,
+  type NodeMutationResponse,
   type ServiceDetailResponse,
   type ServiceMutationPlan,
   type ServiceMutationResponse,
@@ -53,6 +59,73 @@ export class HttpAgentClient implements AgentClient {
       'GET',
       `/v1/services/${encodeURIComponent(serviceId)}/tasks`,
       z.array(TaskSummarySchema),
+    );
+  }
+
+
+  inspectNode(nodeId: string): Promise<NodeDetailResponse> {
+    return this.request(
+      'GET',
+      `/v1/nodes/${encodeURIComponent(nodeId)}`,
+      NodeDetailResponseSchema,
+    );
+  }
+
+  planDrainNode(
+    nodeId: string,
+    expectedVersion: number,
+  ): Promise<NodeMutationPlan> {
+    return this.request(
+      'POST',
+      `/v1/nodes/${encodeURIComponent(nodeId)}/plan-drain`,
+      NodeMutationPlanSchema,
+      { expectedVersion },
+    );
+  }
+
+  drainNode(
+    nodeId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+      expectedServiceIds?: string[];
+    },
+  ): Promise<NodeMutationResponse> {
+    return this.request(
+      'POST',
+      `/v1/nodes/${encodeURIComponent(nodeId)}/drain`,
+      NodeMutationResponseSchema,
+      input,
+    );
+  }
+
+  planActivateNode(
+    nodeId: string,
+    expectedVersion: number,
+  ): Promise<NodeMutationPlan> {
+    return this.request(
+      'POST',
+      `/v1/nodes/${encodeURIComponent(nodeId)}/plan-activate`,
+      NodeMutationPlanSchema,
+      { expectedVersion },
+    );
+  }
+
+  activateNode(
+    nodeId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+      expectedServiceIds?: string[];
+    },
+  ): Promise<NodeMutationResponse> {
+    return this.request(
+      'POST',
+      `/v1/nodes/${encodeURIComponent(nodeId)}/activate`,
+      NodeMutationResponseSchema,
+      input,
     );
   }
 
