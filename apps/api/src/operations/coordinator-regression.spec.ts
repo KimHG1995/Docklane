@@ -177,3 +177,133 @@ test('node retry locks stored affected services after tasks have moved away', as
 
   assert.deepEqual(capturedServiceIds, ['service-1']);
 });
+
+
+test('node label mutation is blocked by another unresolved node operation affecting the same service', async () => {
+  let planned = false;
+
+  const crossNodeOperation: NodeOperationRecord = {
+    ...unresolvedNodeOperation,
+    id: '00000000-0000-4000-8000-000000000020',
+    nodeId: 'node-a',
+  };
+
+  const agent = {
+    inspectNode: async () => ({
+      node: {
+        id: 'node-b',
+        version: 5,
+        specHash: 'node-before',
+        hostname: 'worker-b',
+        address: '10.0.0.2',
+        role: 'worker',
+        availability: 'active',
+        state: 'ready',
+        manager: false,
+        leader: false,
+        nanoCpus: 1,
+        memoryBytes: 1,
+        labels: {},
+      },
+      tasks: [],
+      serviceIds: [],
+    }),
+    listServices: async () => [{ id: 'service-1' }],
+    planNodeLabels: async () => {
+      planned = true;
+      throw new Error('must not plan');
+    },
+  };
+
+  const connection = {};
+  const nodeOperations = {
+    listNonTerminal: async () => [],
+    find: async () => null,
+    findNonTerminalForNode: async () => null,
+    findWithConnection: async () => null,
+    findNonTerminalForNodeWithConnection: async () => null,
+    findNonTerminalAffectingServiceWithConnection: async () =>
+      crossNodeOperation,
+  };
+  const serviceOperations = {
+    findNonTerminalForServiceWithConnection: async () => null,
+  };
+  const lock = {
+    withNodeAndServiceLocks: async (
+      _clusterId: string,
+      _nodeId: string,
+      _serviceIds: string[],
+      fn: (connection: unknown) => Promise<unknown>,
+    ) => fn(connection),
+  };
+
+  const service = new NodeMutationService(
+    agent as never,
+    nodeOperations as never,
+    serviceOperations as never,
+    lock as never,
+  );
+
+  await assert.rejects(
+    service.labels(
+      'default',
+      'node-b',
+      {
+        operationId: '00000000-0000-4000-8000-000000000021',
+        expectedVersion: 5,
+        set: { zone: 'b' },
+        remove: [],
+      },
+      principal,
+    ),
+    /unresolved node operation/,
+  );
+
+  assert.equal(planned, false);
+});
+
+test('node label convergence waits for placement convergence', async () => {
+  let status: 'PENDING' | 'CONVERGED' = 'PENDING';
+  const agent = {
+    checkServicePlacement: async () => ({
+      serviceId: 'service-1',
+      status,
+      desiredReplicas: 1,
+      runningReplicas: 1,
+      reasons: status === 'PENDING' ? ['PLACEMENT_CONVERGENCE_PENDING'] : [],
+      unsupportedConstraints: [],
+      violations:
+        status === 'PENDING'
+          ? [
+              {
+                taskId: 'task-old',
+                nodeId: 'node-b',
+                reason: 'PLACEMENT_CONSTRAINT_MISMATCH',
+              },
+            ]
+          : [],
+    }),
+  };
+
+  const service = new NodeMutationService(
+    agent as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+
+  const verifier = service as unknown as {
+    affectedServicesConverged(serviceIds: string[]): Promise<boolean>;
+  };
+
+  assert.equal(
+    await verifier.affectedServicesConverged(['service-1']),
+    false,
+  );
+
+  status = 'CONVERGED';
+  assert.equal(
+    await verifier.affectedServicesConverged(['service-1']),
+    true,
+  );
+});

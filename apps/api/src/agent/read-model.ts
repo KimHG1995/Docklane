@@ -122,6 +122,10 @@ export const NodeMutationPlanSchema = z.object({
   targetLabels: z.record(z.string(), z.string()).optional(),
 });
 
+export const NodeLabelMutationPlanSchema = NodeMutationPlanSchema.extend({
+  targetLabels: z.record(z.string(), z.string()),
+});
+
 export const NodeMutationResponseSchema = z.object({
   nodeId: z.string(),
   version: z.number().int().nonnegative(),
@@ -132,4 +136,5 @@ export const NodeMutationResponseSchema = z.object({
 export type NodeSummary = z.infer<typeof NodeSummarySchema>;
 export type NodeDetailResponse = z.infer<typeof NodeDetailResponseSchema>;
 export type NodeMutationPlan = z.infer<typeof NodeMutationPlanSchema>;
+export type NodeLabelMutationPlan = z.infer<typeof NodeLabelMutationPlanSchema>;
 export type NodeMutationResponse = z.infer<typeof NodeMutationResponseSchema>;

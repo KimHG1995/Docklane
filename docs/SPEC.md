@@ -186,7 +186,7 @@ Logical lock:
 mutation:{clusterId}:{dockerServiceId}
 ```
 
-Node drain은 여러 service에 영향을 줄 수 있으므로 대상 node의 running task를 기준으로 관련 service lock을 확보하거나 명시적으로 충돌 검사를 수행한다.
+Node drain/label mutation은 여러 service에 영향을 줄 수 있으므로 대상 service lock을 함께 확보한다. 또한 다른 node의 non-terminal operation이 동일 service를 영향 대상으로 보유하고 있으면 새 node mutation을 시작하지 않는다.
 
 DB lock만으로 외부 CLI 변경을 막을 수 있다고 가정하지 않는다.
 
@@ -353,7 +353,7 @@ Scale과 restart도 deployment와 동일한 mutation coordinator를 사용한다
 
 Drain은 Swarm service task에 대해서만 relocation을 기대한다.
 
-Standalone `docker run` 또는 일반 `docker compose` workload를 자동 이전하는 기능으로 표현하지 않는다.
+Standalone `docker run` 또는 일반 `docker compose` workload를 자동 이전하는 기능으로 표현하지 않는다. Node label 변경 완료는 NodeSpec 반영만으로 판단하지 않고 영향 service의 running task가 현재 placement/platform 조건으로 수렴했는지 검증한다.
 
 로컬 volume/state에 의존하는 workload는 MVP 지원 대상에서 제외한다.
 

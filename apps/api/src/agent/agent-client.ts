@@ -6,6 +6,7 @@ import type {
   ClusterResponse,
   HealthResponse,
   NodeDetailResponse,
+  NodeLabelMutationPlan,
   NodeMutationPlan,
   NodeMutationResponse,
   ServiceDetailResponse,
@@ -21,6 +22,7 @@ export interface AgentClient {
   listServices(): Promise<ServiceSummary[]>;
   inspectService(serviceId: string): Promise<ServiceDetailResponse>;
   listServiceTasks(serviceId: string): Promise<TaskSummary[]>;
+  checkServicePlacement(serviceId: string): Promise<import('./placement-model.js').ServicePlacementResponse>;
   checkServiceCapacity(
     serviceId: string,
     input: CapacityCheckRequest,
@@ -53,7 +55,7 @@ export interface AgentClient {
       set: Record<string, string>;
       remove: string[];
     },
-  ): Promise<NodeMutationPlan>;
+  ): Promise<NodeLabelMutationPlan>;
 
   updateNodeLabels(
     nodeId: string,

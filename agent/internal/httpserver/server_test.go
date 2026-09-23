@@ -40,6 +40,21 @@ func (fakeReader) ServiceTasks(context.Context, string) ([]model.TaskSummary, er
 	return []model.TaskSummary{}, nil
 }
 
+func (fakeReader) CheckServicePlacement(
+	context.Context,
+	string,
+) (model.ServicePlacementResponse, error) {
+	return model.ServicePlacementResponse{
+		ServiceID:              "service-1",
+		Status:                 model.PlacementStatusConverged,
+		DesiredReplicas:        1,
+		RunningReplicas:        1,
+		Reasons:                []string{},
+		UnsupportedConstraints: []string{},
+		Violations:             []model.PlacementViolation{},
+	}, nil
+}
+
 func (fakeReader) CheckServiceCapacity(
 	context.Context,
 	string,
@@ -140,7 +155,10 @@ func (fakeReader) PlanNodeLabels(
 		TargetSpecHash:     "node-labels",
 		TargetAvailability: "active",
 		AffectedServiceIDs: []string{},
-		TargetLabels:       map[string]string{"zone": "a"},
+		TargetLabels:       func() *map[string]string {
+			labels := map[string]string{"zone": "a"}
+			return &labels
+		}(),
 	}, nil
 }
 
@@ -316,6 +334,22 @@ func TestServiceCapacityCheck(t *testing.T) {
 		http.MethodPost,
 		"/v1/services/service-1/capacity-check",
 		strings.NewReader(`{"expectedVersion":1,"targetReplicas":2,"includeUpdateOverlap":false}`),
+	)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}
+
+func TestServicePlacementCheck(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/services/service-1/placement-check",
+		nil,
 	)
 	res := httptest.NewRecorder()
 

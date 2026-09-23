@@ -260,7 +260,7 @@ func capacityUsage(tasks []swarm.Task, serviceID string) map[string]nodeUsage {
 				task.Spec.Resources.Reservations.MemoryBytes,
 			)
 		}
-		if task.ServiceID == serviceID {
+		if task.ServiceID == serviceID && countsTowardReplicaLimit(task.DesiredState) {
 			current.serviceTasks++
 		}
 		usage[task.NodeID] = current
@@ -270,7 +270,7 @@ func capacityUsage(tasks []swarm.Task, serviceID string) map[string]nodeUsage {
 
 func parseCapacityConstraints(placement *swarm.Placement) ([]parsedConstraint, []string) {
 	if placement == nil {
-		return nil, nil
+		return make([]parsedConstraint, 0), make([]string, 0)
 	}
 	parsed := make([]parsedConstraint, 0, len(placement.Constraints))
 	unsupported := make([]string, 0)
@@ -380,13 +380,50 @@ func matchesPlatforms(node swarm.Node, platforms []swarm.Platform) bool {
 	if len(platforms) == 0 {
 		return true
 	}
+
+	nodeOS := strings.ToLower(node.Description.Platform.OS)
+	nodeArch := normalizeArchitecture(node.Description.Platform.Architecture)
+
 	for _, platform := range platforms {
-		if strings.EqualFold(platform.OS, node.Description.Platform.OS) &&
-			strings.EqualFold(platform.Architecture, node.Description.Platform.Architecture) {
+		platformOS := strings.ToLower(platform.OS)
+		platformArch := normalizeArchitecture(platform.Architecture)
+
+		osMatches := platformOS == "" || platformOS == nodeOS
+		archMatches := platformArch == "" || platformArch == nodeArch
+		if osMatches && archMatches {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeArchitecture(value string) string {
+	switch strings.ToLower(value) {
+	case "x86_64":
+		return "amd64"
+	case "aarch64":
+		return "arm64"
+	default:
+		return strings.ToLower(value)
+	}
+}
+
+func countsTowardReplicaLimit(state swarm.TaskState) bool {
+	switch state {
+	case swarm.TaskStateNew,
+		swarm.TaskStateAllocated,
+		swarm.TaskStatePending,
+		swarm.TaskStateAssigned,
+		swarm.TaskStateAccepted,
+		swarm.TaskStatePreparing,
+		swarm.TaskStateReady,
+		swarm.TaskStateStarting,
+		swarm.TaskStateRunning,
+		swarm.TaskStateComplete:
+		return true
+	default:
+		return false
+	}
 }
 
 func slotsForResource(available, reservation int64, cap uint64) uint64 {

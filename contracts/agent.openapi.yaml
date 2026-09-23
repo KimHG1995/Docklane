@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.7.0
+  version: 0.8.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -61,7 +61,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NodeMutationPlan'
+                $ref: '#/components/schemas/NodeLabelMutationPlan'
         '409':
           description: Expected node version is stale.
 
@@ -210,6 +210,19 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/TaskSummary'
+
+  /v1/services/{serviceId}/placement-check:
+    get:
+      operationId: checkServicePlacement
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '200':
+          description: Reports whether current running tasks satisfy the service placement contract.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServicePlacementResponse'
 
   /v1/services/{serviceId}/capacity-check:
     post:
@@ -501,6 +514,17 @@ components:
           additionalProperties:
             type: string
 
+    NodeLabelMutationPlan:
+      allOf:
+        - $ref: '#/components/schemas/NodeMutationPlan'
+        - type: object
+          required: [targetLabels]
+          properties:
+            targetLabels:
+              type: object
+              additionalProperties:
+                type: string
+
     NodeMutationResponse:
       type: object
       additionalProperties: false
@@ -563,6 +587,38 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TaskSummary'
+
+    PlacementViolation:
+      type: object
+      additionalProperties: false
+      required: [taskId, nodeId, reason]
+      properties:
+        taskId: { type: string }
+        nodeId: { type: string }
+        reason: { type: string }
+
+    ServicePlacementResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [serviceId, status, desiredReplicas, runningReplicas, reasons, unsupportedConstraints, violations]
+      properties:
+        serviceId: { type: string }
+        status:
+          type: string
+          enum: [CONVERGED, PENDING, UNKNOWN]
+        desiredReplicas: { type: integer, minimum: 0 }
+        runningReplicas: { type: integer, minimum: 0 }
+        reasons:
+          type: array
+          items: { type: string }
+        unsupportedConstraints:
+          type: array
+          items: { type: string }
+        violations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlacementViolation'
 
     CapacityCheckRequest:
       type: object

@@ -114,7 +114,7 @@ type NodeMutationRequest struct {
 	ExpectedSpecHash   string            `json:"expectedSpecHash"`
 	TargetSpecHash     string            `json:"targetSpecHash"`
 	ExpectedServiceIDs []string          `json:"expectedServiceIds,omitempty"`
-	TargetLabels       map[string]string `json:"targetLabels,omitempty"`
+	TargetLabels       *map[string]string `json:"targetLabels,omitempty"`
 }
 
 type NodeMutationPlan struct {
@@ -124,7 +124,7 @@ type NodeMutationPlan struct {
 	TargetSpecHash     string            `json:"targetSpecHash"`
 	TargetAvailability string            `json:"targetAvailability"`
 	AffectedServiceIDs []string          `json:"affectedServiceIds"`
-	TargetLabels       map[string]string `json:"targetLabels,omitempty"`
+	TargetLabels       *map[string]string `json:"targetLabels,omitempty"`
 }
 
 type NodeMutationResponse struct {

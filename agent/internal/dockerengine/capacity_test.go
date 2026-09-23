@@ -1,6 +1,8 @@
 package dockerengine
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/KimHG1995/Docklane/agent/internal/model"
@@ -179,9 +181,10 @@ func capacityTestTask(
 	nanoCPUs, memoryBytes int64,
 ) swarm.Task {
 	return swarm.Task{
-		ServiceID: serviceID,
-		NodeID:    nodeID,
-		Status:    swarm.TaskStatus{State: swarm.TaskStateRunning},
+		ServiceID:    serviceID,
+		NodeID:       nodeID,
+		DesiredState: swarm.TaskStateRunning,
+		Status:       swarm.TaskStatus{State: swarm.TaskStateRunning},
 		Spec: swarm.TaskSpec{
 			Resources: &swarm.ResourceRequirements{
 				Reservations: &swarm.Resources{
@@ -190,5 +193,113 @@ func capacityTestTask(
 				},
 			},
 		},
+	}
+}
+
+func TestCapacityResponseKeepsEmptyConstraintArrays(t *testing.T) {
+	service := capacityTestService(1, 1, 1)
+	nodes := []swarm.Node{
+		capacityTestNode("node-1", "worker-1", "a", 2, 2),
+	}
+	tasks := []swarm.Task{
+		capacityTestTask("service-1", "node-1", 1, 1),
+	}
+
+	result := evaluateServiceCapacity(service, nodes, tasks, model.CapacityCheckRequest{
+		ExpectedVersion: 1,
+		TargetReplicas:  2,
+	})
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(payload), `"unsupportedConstraints":[]`) {
+		t.Fatalf("expected explicit empty unsupportedConstraints array, got %s", payload)
+	}
+}
+
+func TestParseCapacityConstraintsReturnsEmptySlicesWithoutPlacement(t *testing.T) {
+	parsed, unsupported := parseCapacityConstraints(nil)
+	if parsed == nil || unsupported == nil {
+		t.Fatalf("expected explicit empty slices, got parsed=%v unsupported=%v", parsed, unsupported)
+	}
+	if len(parsed) != 0 || len(unsupported) != 0 {
+		t.Fatalf("expected empty slices, got parsed=%v unsupported=%v", parsed, unsupported)
+	}
+}
+
+func TestMatchesPlatformsNormalizesArchitectureAliases(t *testing.T) {
+	node := capacityTestNode("node-1", "worker-1", "a", 1, 1)
+	node.Description.Platform.Architecture = "x86_64"
+
+	if !matchesPlatforms(node, []swarm.Platform{{OS: "linux", Architecture: "amd64"}}) {
+		t.Fatal("expected amd64 image to match x86_64 node")
+	}
+
+	node.Description.Platform.Architecture = "aarch64"
+	if !matchesPlatforms(node, []swarm.Platform{{Architecture: "arm64"}}) {
+		t.Fatal("expected arm64 image to match aarch64 node")
+	}
+
+	if !matchesPlatforms(node, []swarm.Platform{{OS: "", Architecture: ""}}) {
+		t.Fatal("expected empty platform fields to act as wildcards")
+	}
+}
+
+func TestCapacityUsageSeparatesReservationsFromActiveReplicaSlots(t *testing.T) {
+	task := capacityTestTask("service-1", "node-1", 1_000_000_000, 256*1024*1024)
+	task.DesiredState = swarm.TaskStateShutdown
+
+	usage := capacityUsage([]swarm.Task{task}, "service-1")["node-1"]
+	if usage.serviceTasks != 0 {
+		t.Fatalf(
+			"expected desired-shutdown task not to count toward max replicas, got %d",
+			usage.serviceTasks,
+		)
+	}
+	if usage.nanoCPUs == 0 || usage.memoryBytes == 0 {
+		t.Fatalf(
+			"expected still-running task reservation to remain accounted for: %+v",
+			usage,
+		)
+	}
+}
+
+func TestDesiredShutdownTaskDoesNotCauseFalseMaxReplicaShortage(t *testing.T) {
+	service := capacityTestService(1, 1_000_000_000, 256*1024*1024)
+	service.Spec.TaskTemplate.Placement = &swarm.Placement{MaxReplicas: 1}
+
+	node := capacityTestNode(
+		"node-1",
+		"worker-1",
+		"a",
+		2_000_000_000,
+		512*1024*1024,
+	)
+	task := capacityTestTask(
+		"service-1",
+		"node-1",
+		1_000_000_000,
+		256*1024*1024,
+	)
+	task.DesiredState = swarm.TaskStateShutdown
+
+	result := evaluateServiceCapacity(
+		service,
+		[]swarm.Node{node},
+		[]swarm.Task{task},
+		model.CapacityCheckRequest{
+			ExpectedVersion: 1,
+			TargetReplicas:  2,
+		},
+	)
+
+	if result.Status != model.CapacityStatusSufficient {
+		t.Fatalf(
+			"expected shutdown task not to consume max-replica slot, got %s (%v)",
+			result.Status,
+			result.Reasons,
+		)
 	}
 }
