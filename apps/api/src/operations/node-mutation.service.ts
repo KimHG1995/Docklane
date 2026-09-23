@@ -129,10 +129,24 @@ export class NodeMutationService implements OnApplicationBootstrap {
     const canonicalNodeId = initial.node.id;
     const initiallyAffected = sortedUnique(initial.serviceIds);
 
+    const existingBeforeLock = await this.nodeOperations.find(input.operationId);
+    const priorBeforeLock =
+      await this.nodeOperations.findNonTerminalForNode(
+        clusterId,
+        canonicalNodeId,
+      );
+    const lockServiceIds = sortedUnique([
+      ...initiallyAffected,
+      ...(existingBeforeLock?.nodeId === canonicalNodeId
+        ? existingBeforeLock.affectedServiceIds
+        : []),
+      ...(priorBeforeLock?.affectedServiceIds ?? []),
+    ]);
+
     return this.lock.withNodeAndServiceLocks(
       clusterId,
       canonicalNodeId,
-      initiallyAffected,
+      lockServiceIds,
       async (connection) => {
         const existing = await this.nodeOperations.findWithConnection(
           connection,
