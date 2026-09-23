@@ -21,6 +21,7 @@ import type {
 import type { Principal } from '../auth/auth.types.js';
 import { OperationLock } from './operation-lock.js';
 import { OperationRepository } from './operation.repository.js';
+import { NodeOperationRepository } from './node-operation.repository.js';
 import type { OperationRecord, OperationType } from './operation.types.js';
 import type {
   RestartServiceRequest,
@@ -54,6 +55,8 @@ export class MutationService implements OnApplicationBootstrap {
     @Inject(AGENT_CLIENT) private readonly agentClient: AgentClient,
     @Inject(OperationRepository)
     private readonly operations: OperationRepository,
+    @Inject(NodeOperationRepository)
+    private readonly nodeOperations: NodeOperationRepository,
     @Inject(OperationLock) private readonly lock: OperationLock,
   ) {}
 
@@ -131,6 +134,12 @@ export class MutationService implements OnApplicationBootstrap {
         }
 
         await this.resolvePriorServiceOperation(
+          connection,
+          clusterId,
+          canonicalServiceId,
+        );
+
+        await this.assertNoNodeOperationConflict(
           connection,
           clusterId,
           canonicalServiceId,
@@ -239,6 +248,12 @@ export class MutationService implements OnApplicationBootstrap {
           canonicalServiceId,
         );
 
+        await this.assertNoNodeOperationConflict(
+          connection,
+          clusterId,
+          canonicalServiceId,
+        );
+
         let plan: ServiceMutationPlan;
         try {
           plan = await this.agentClient.planRestartService(
@@ -298,6 +313,25 @@ export class MutationService implements OnApplicationBootstrap {
         return this.verifyAndCompleteLocked(connection, operation);
       },
     );
+  }
+
+  private async assertNoNodeOperationConflict(
+    connection: PoolConnection,
+    clusterId: string,
+    serviceId: string,
+  ): Promise<void> {
+    const nodeOperation =
+      await this.nodeOperations.findNonTerminalAffectingServiceWithConnection(
+        connection,
+        clusterId,
+        serviceId,
+      );
+
+    if (nodeOperation) {
+      throw new ConflictException(
+        `Service is affected by unresolved node operation ${nodeOperation.id} (${nodeOperation.status})`,
+      );
+    }
   }
 
   private async resolvePriorServiceOperation(
