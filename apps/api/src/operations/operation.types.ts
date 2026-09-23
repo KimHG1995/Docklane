@@ -39,7 +39,7 @@ export interface AuditEventInput {
 }
 
 
-export type NodeOperationType = 'DRAIN' | 'ACTIVATE';
+export type NodeOperationType = 'DRAIN' | 'ACTIVATE' | 'LABELS';
 
 export interface NodeOperationRecord {
   id: string;
@@ -52,6 +52,7 @@ export interface NodeOperationRecord {
   beforeSpecHash: string;
   targetSpecHash: string;
   targetAvailability: 'drain' | 'active';
+  targetLabels: Record<string, string> | null;
   affectedServiceIds: string[];
   resultVersion: number | null;
   errorCode: string | null;
