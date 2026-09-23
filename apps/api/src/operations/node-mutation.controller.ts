@@ -11,7 +11,10 @@ import {
 } from '@nestjs/common';
 import { RequireRole } from '../auth/auth.decorators.js';
 import type { AuthenticatedRequest, Principal } from '../auth/auth.types.js';
-import { NodeMutationRequestSchema } from './node-mutation.dto.js';
+import {
+  NodeLabelsRequestSchema,
+  NodeMutationRequestSchema,
+} from './node-mutation.dto.js';
 import { NodeMutationService } from './node-mutation.service.js';
 import type { NodeOperationRecord } from './operation.types.js';
 
@@ -44,6 +47,29 @@ export class NodeMutationController {
       clusterId,
       nodeId,
       parseBody(body),
+      principal(request),
+    );
+  }
+
+  @Post('nodes/:nodeId/labels')
+  @HttpCode(200)
+  @RequireRole('OPERATOR')
+  labels(
+    @Param('clusterId') clusterId: string,
+    @Param('nodeId') nodeId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<NodeOperationRecord> {
+    let input;
+    try {
+      input = NodeLabelsRequestSchema.parse(body);
+    } catch {
+      throw new BadRequestException('Invalid node label mutation request');
+    }
+    return this.mutations.labels(
+      clusterId,
+      nodeId,
+      input,
       principal(request),
     );
   }
