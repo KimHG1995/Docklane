@@ -51,8 +51,9 @@ export interface NodeOperationRecord {
   expectedVersion: number;
   beforeSpecHash: string;
   targetSpecHash: string;
-  targetAvailability: 'drain' | 'active';
+  targetAvailability: 'drain' | 'active' | 'pause';
   targetLabels: Record<string, string> | null;
+  labelPatch: { set: Record<string, string>; remove: string[] } | null;
   affectedServiceIds: string[];
   resultVersion: number | null;
   errorCode: string | null;
