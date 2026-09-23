@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.5.0
+  version: 0.6.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -43,6 +43,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NodeDetailResponse'
+
+  /v1/nodes/{nodeId}/plan-labels:
+    post:
+      operationId: planNodeLabels
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeLabelPatchRequest'
+      responses:
+        '200':
+          description: Deterministic full target label map and affected cluster services.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationPlan'
+        '409':
+          description: Expected node version is stale.
+
+  /v1/nodes/{nodeId}/labels:
+    post:
+      operationId: updateNodeLabels
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeLabelsMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned node label update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationResponse'
+        '409':
+          description: Node version, spec, or cluster service-set precondition failed.
 
   /v1/nodes/{nodeId}/plan-drain:
     post:
@@ -322,6 +364,10 @@ components:
         engineVersion: { type: string }
         nanoCpus: { type: integer }
         memoryBytes: { type: integer }
+        labels:
+          type: object
+          additionalProperties:
+            type: string
 
     ClusterSummary:
       type: object
@@ -363,6 +409,37 @@ components:
           type: array
           items: { type: string }
 
+    NodeLabelPatchRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, set, remove]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        set:
+          type: object
+          additionalProperties:
+            type: string
+        remove:
+          type: array
+          items: { type: string }
+
+    NodeLabelsMutationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [expectedVersion, expectedSpecHash, targetSpecHash, expectedServiceIds, targetLabels]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        expectedServiceIds:
+          type: array
+          items: { type: string }
+        targetLabels:
+          type: object
+          additionalProperties:
+            type: string
+
     NodePlanRequest:
       type: object
       additionalProperties: false
@@ -394,10 +471,14 @@ components:
         targetSpecHash: { type: string, minLength: 1 }
         targetAvailability:
           type: string
-          enum: [drain, active]
+          enum: [drain, active, pause]
         affectedServiceIds:
           type: array
           items: { type: string }
+        targetLabels:
+          type: object
+          additionalProperties:
+            type: string
 
     NodeMutationResponse:
       type: object
