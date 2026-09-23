@@ -102,7 +102,6 @@ type ServiceMutationResponse struct {
 	Warnings          []string `json:"warnings,omitempty"`
 }
 
-
 type NodeDetailResponse struct {
 	Node       NodeSummary   `json:"node"`
 	Tasks      []TaskSummary `json:"tasks"`
