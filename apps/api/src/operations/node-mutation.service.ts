@@ -187,11 +187,16 @@ export class NodeMutationService implements OnApplicationBootstrap {
           }
         }
 
-        const plan = await this.plan(
-          type,
-          canonicalNodeId,
-          input.expectedVersion,
-        );
+        let plan: NodeMutationPlan;
+        try {
+          plan = await this.plan(
+            type,
+            canonicalNodeId,
+            input.expectedVersion,
+          );
+        } catch (error) {
+          throw mapPlanningError(error);
+        }
         this.assertPlanMatchesLockedNode(plan, lockedNode, lockedServices);
 
         await this.persistIntent(
@@ -268,6 +273,8 @@ export class NodeMutationService implements OnApplicationBootstrap {
       expectedVersion: plan.version,
       expectedSpecHash: plan.beforeSpecHash,
       targetSpecHash: plan.targetSpecHash,
+      expectedServiceIds:
+        type === 'DRAIN' ? plan.affectedServiceIds : undefined,
     };
     return type === 'DRAIN'
       ? this.agentClient.drainNode(nodeId, input)
@@ -618,6 +625,18 @@ function mapAgentError(error: AgentRequestError): Error {
     return new ConflictException('Agent rejected stale node state');
   }
   return new BadGatewayException('Agent rejected node mutation request');
+}
+
+function mapPlanningError(error: unknown): Error {
+  if (error instanceof AgentRequestError) {
+    if (error.statusCode === 409) {
+      return new ConflictException('Node changed before mutation planning');
+    }
+    return new BadGatewayException('Agent node mutation planning failed');
+  }
+  return error instanceof Error
+    ? error
+    : new BadGatewayException('Agent node mutation planning failed');
 }
 
 function errorMessage(error: unknown): string {
