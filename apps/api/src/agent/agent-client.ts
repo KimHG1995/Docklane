@@ -25,6 +25,7 @@ export interface AgentClient {
       expectedVersion: number;
       expectedSpecHash: string;
       targetSpecHash: string;
+      expectedServiceIds?: string[];
     },
   ): Promise<NodeMutationResponse>;
   planActivateNode(nodeId: string, expectedVersion: number): Promise<NodeMutationPlan>;
