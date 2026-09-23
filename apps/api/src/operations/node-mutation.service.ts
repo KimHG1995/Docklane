@@ -224,6 +224,18 @@ export class NodeMutationService implements OnApplicationBootstrap {
               `Service ${serviceId} has unresolved operation ${serviceOperation.id}`,
             );
           }
+
+          const nodeOperation =
+            await this.nodeOperations.findNonTerminalAffectingServiceWithConnection(
+              connection,
+              clusterId,
+              serviceId,
+            );
+          if (nodeOperation) {
+            throw new ConflictException(
+              `Service ${serviceId} is affected by unresolved node operation ${nodeOperation.id} on node ${nodeOperation.nodeId}`,
+            );
+          }
         }
 
         let plan: NodeMutationPlan;
@@ -544,10 +556,8 @@ export class NodeMutationService implements OnApplicationBootstrap {
     serviceIds: string[],
   ): Promise<boolean> {
     for (const serviceId of serviceIds) {
-      const current = await this.agentClient.inspectService(serviceId);
-      if (
-        current.service.desiredReplicas !== current.service.runningReplicas
-      ) {
+      const placement = await this.agentClient.checkServicePlacement(serviceId);
+      if (placement.status !== 'CONVERGED') {
         return false;
       }
     }

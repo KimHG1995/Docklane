@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { NodeMutationPlanSchema } from './read-model.js';
+import {
+  NodeLabelMutationPlanSchema,
+  NodeMutationPlanSchema,
+} from './read-model.js';
 
 const base = {
   nodeId: 'node-1',
@@ -23,6 +26,25 @@ test('Agent node plans reject null affected-service lists', () => {
     NodeMutationPlanSchema.parse({
       ...base,
       affectedServiceIds: null,
+    }),
+  );
+});
+
+
+test('Agent label plans preserve an explicit empty target label map', () => {
+  const parsed = NodeLabelMutationPlanSchema.parse({
+    ...base,
+    affectedServiceIds: [],
+    targetLabels: {},
+  });
+  assert.deepEqual(parsed.targetLabels, {});
+});
+
+test('Agent label plans reject a missing target label field', () => {
+  assert.throws(() =>
+    NodeLabelMutationPlanSchema.parse({
+      ...base,
+      affectedServiceIds: [],
     }),
   );
 });

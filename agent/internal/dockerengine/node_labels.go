@@ -59,7 +59,7 @@ func (r *Reader) PlanNodeLabels(
 		TargetSpecHash:     targetHash,
 		TargetAvailability: string(node.Spec.Availability),
 		AffectedServiceIDs: serviceIDs,
-		TargetLabels:       labels,
+		TargetLabels:       &labels,
 	}, nil
 }
 
@@ -92,6 +92,12 @@ func (r *Reader) UpdateNodeLabels(
 		}
 	}
 
+	if input.TargetLabels == nil {
+		return model.NodeMutationResponse{}, &ValidationError{
+			Message: "targetLabels is required for node label mutation",
+		}
+	}
+
 	currentHash, err := nodeSpecHash(node.Spec)
 	if err != nil {
 		return model.NodeMutationResponse{}, err
@@ -102,7 +108,7 @@ func (r *Reader) UpdateNodeLabels(
 		}
 	}
 
-	node.Spec.Annotations.Labels = cloneLabels(input.TargetLabels)
+	node.Spec.Annotations.Labels = cloneLabels(*input.TargetLabels)
 	targetHash, err := nodeSpecHash(node.Spec)
 	if err != nil {
 		return model.NodeMutationResponse{}, err

@@ -281,6 +281,8 @@ mutation:{clusterId}:{dockerServiceId}
 
 호출 직전/완료 전 service version/spec이 기대와 다르면 외부 변경 충돌로 처리하고 자동 덮어쓰지 않는다.
 
+Node mutation은 node 자체 lock뿐 아니라 영향 service lock을 함께 사용한다. 저장된 non-terminal node operation이 다른 node에 있더라도 동일 service를 영향 대상으로 포함하면 새 node mutation을 차단한다.
+
 ## Durable Execution
 
 Docker update 요청 직후 API가 종료될 수 있으므로 operation intent를 mutation 전 저장한다.
@@ -351,7 +353,7 @@ Service target
 
 확실하게 부족한 경우만 `INSUFFICIENT`로 차단한다. Reservation 또는 placement 의미를 충분히 해석할 수 없으면 `UNKNOWN`으로 반환하고 Docker Swarm이 최종 scheduling을 수행한다.
 
-현재 evaluator는 CPU/Memory reservation, node/engine label constraint, node id/hostname/ip/role/platform, placement platform, max replicas per node를 고려한다. Generic resource reservation 또는 지원하지 않는 constraint는 `UNKNOWN`이다.
+현재 evaluator는 CPU/Memory reservation, node/engine label constraint, node id/hostname/ip/role/platform, placement platform, max replicas per node를 고려한다. 플랫폼은 SwarmKit과 동일하게 x86_64/amd64, aarch64/arm64 alias를 정규화하고 빈 image platform 필드는 wildcard로 처리한다. max-replicas 계산은 resource reservation 점유와 active replica slot 집계를 분리한다. Generic resource reservation 또는 지원하지 않는 constraint는 `UNKNOWN`이다.
 
 Scale-up은 필요한 추가 replica를 검사하고, restart는 `start-first` update parallelism만큼의 temporary overlap을 추가로 계산한다.
 

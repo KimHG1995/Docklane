@@ -7,6 +7,10 @@ import { loadAgentConfig, type AgentConfig } from './agent-config.js';
 import {
   CapacityCheckResponseSchema,
 } from './capacity-model.js';
+import {
+  ServicePlacementResponseSchema,
+  type ServicePlacementResponse,
+} from './placement-model.js';
 import type {
   CapacityCheckRequest,
   CapacityCheckResponse,
@@ -15,6 +19,7 @@ import {
   ClusterResponseSchema,
   HealthResponseSchema,
   NodeDetailResponseSchema,
+  NodeLabelMutationPlanSchema,
   NodeMutationPlanSchema,
   NodeMutationResponseSchema,
   ServiceDetailResponseSchema,
@@ -25,6 +30,7 @@ import {
   type ClusterResponse,
   type HealthResponse,
   type NodeDetailResponse,
+  type NodeLabelMutationPlan,
   type NodeMutationPlan,
   type NodeMutationResponse,
   type ServiceDetailResponse,
@@ -66,6 +72,14 @@ export class HttpAgentClient implements AgentClient {
       'GET',
       `/v1/services/${encodeURIComponent(serviceId)}/tasks`,
       z.array(TaskSummarySchema),
+    );
+  }
+
+  checkServicePlacement(serviceId: string): Promise<ServicePlacementResponse> {
+    return this.request(
+      'GET',
+      `/v1/services/${encodeURIComponent(serviceId)}/placement-check`,
+      ServicePlacementResponseSchema,
     );
   }
 
@@ -155,11 +169,11 @@ export class HttpAgentClient implements AgentClient {
       set: Record<string, string>;
       remove: string[];
     },
-  ): Promise<NodeMutationPlan> {
+  ): Promise<NodeLabelMutationPlan> {
     return this.request(
       'POST',
       `/v1/nodes/${encodeURIComponent(nodeId)}/plan-labels`,
-      NodeMutationPlanSchema,
+      NodeLabelMutationPlanSchema,
       input,
     );
   }
