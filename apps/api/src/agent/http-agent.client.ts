@@ -89,6 +89,7 @@ export class HttpAgentClient implements AgentClient {
       expectedVersion: number;
       expectedSpecHash: string;
       targetSpecHash: string;
+      expectedServiceIds?: string[];
     },
   ): Promise<NodeMutationResponse> {
     return this.request(
@@ -117,6 +118,7 @@ export class HttpAgentClient implements AgentClient {
       expectedVersion: number;
       expectedSpecHash: string;
       targetSpecHash: string;
+      expectedServiceIds?: string[];
     },
   ): Promise<NodeMutationResponse> {
     return this.request(
