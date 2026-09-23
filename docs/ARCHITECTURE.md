@@ -338,11 +338,24 @@ host publishing mode는 후속 지원한다.
 
 `start-first`는 old/new task가 동시에 존재할 capacity가 필요하다.
 
-배포 전 resource reservation, placement constraint, replica 수를 이용해 가능한 범위에서 사전 검증한다.
+Capacity pre-check는 scheduler replacement가 아니라 conservative guard다.
 
-capacity가 부족하면 정책을 자동으로 `stop-first`로 바꾸지 않는다.
+```text
+Service target
+  -> current non-terminal task reservations
+  -> ready/active nodes
+  -> placement/platform filter
+  -> per-node free reservation capacity
+  -> SUFFICIENT / INSUFFICIENT / UNKNOWN
+```
 
-phase timeout과 명확한 capacity error를 반환한다.
+확실하게 부족한 경우만 `INSUFFICIENT`로 차단한다. Reservation 또는 placement 의미를 충분히 해석할 수 없으면 `UNKNOWN`으로 반환하고 Docker Swarm이 최종 scheduling을 수행한다.
+
+현재 evaluator는 CPU/Memory reservation, node/engine label constraint, node id/hostname/ip/role/platform, placement platform, max replicas per node를 고려한다. Generic resource reservation 또는 지원하지 않는 constraint는 `UNKNOWN`이다.
+
+Scale-up은 필요한 추가 replica를 검사하고, restart는 `start-first` update parallelism만큼의 temporary overlap을 추가로 계산한다.
+
+capacity가 부족하다고 정책을 자동으로 `stop-first`로 바꾸지 않는다.
 
 ## Manager Quorum
 

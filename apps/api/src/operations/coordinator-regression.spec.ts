@@ -83,11 +83,16 @@ test('scale is blocked by an unresolved node operation affecting the service', a
     ) => fn(connection),
   };
 
+  const capacity = {
+    assertAvailable: async () => ({ status: 'SUFFICIENT' }),
+  };
+
   const service = new MutationService(
     agent as never,
     operations as never,
     nodeOperations as never,
     lock as never,
+    capacity as never,
   );
 
   await assert.rejects(

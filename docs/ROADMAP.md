@@ -122,12 +122,12 @@ Exit criteria:
 
 Deployment와 같은 mutation coordinator에 운영 작업을 연결한다.
 
-- [ ] replica scale
-- [ ] service restart
-- [ ] node labels
-- [ ] node drain/activate
+- [x] replica scale
+- [x] service restart
+- [x] node labels
+- [x] node drain/activate
 - [ ] mutation conflict UX
-- [ ] capacity pre-check
+- [x] capacity pre-check
 - [ ] ingress routing mesh validation
 
 Exit criteria:
