@@ -11,21 +11,21 @@ type ManagerQuorum struct {
 }
 
 type NodeSummary struct {
-	ID            string `json:"id"`
-	Version       uint64 `json:"version"`
-	SpecHash      string `json:"specHash"`
-	Hostname      string `json:"hostname"`
-	Address       string `json:"address"`
-	Role          string `json:"role"`
-	Availability  string `json:"availability"`
-	State         string `json:"state"`
-	Message       string `json:"message,omitempty"`
-	Manager       bool   `json:"manager"`
-	Leader        bool   `json:"leader"`
-	Reachability  string `json:"reachability,omitempty"`
-	EngineVersion string `json:"engineVersion,omitempty"`
-	NanoCPUs      int64  `json:"nanoCpus"`
-	MemoryBytes   int64  `json:"memoryBytes"`
+	ID            string            `json:"id"`
+	Version       uint64            `json:"version"`
+	SpecHash      string            `json:"specHash"`
+	Hostname      string            `json:"hostname"`
+	Address       string            `json:"address"`
+	Role          string            `json:"role"`
+	Availability  string            `json:"availability"`
+	State         string            `json:"state"`
+	Message       string            `json:"message,omitempty"`
+	Manager       bool              `json:"manager"`
+	Leader        bool              `json:"leader"`
+	Reachability  string            `json:"reachability,omitempty"`
+	EngineVersion string            `json:"engineVersion,omitempty"`
+	NanoCPUs      int64             `json:"nanoCpus"`
+	MemoryBytes   int64             `json:"memoryBytes"`
 	Labels        map[string]string `json:"labels"`
 }
 
@@ -110,19 +110,19 @@ type NodeDetailResponse struct {
 }
 
 type NodeMutationRequest struct {
-	ExpectedVersion    uint64   `json:"expectedVersion"`
-	ExpectedSpecHash   string   `json:"expectedSpecHash"`
-	TargetSpecHash     string   `json:"targetSpecHash"`
+	ExpectedVersion    uint64            `json:"expectedVersion"`
+	ExpectedSpecHash   string            `json:"expectedSpecHash"`
+	TargetSpecHash     string            `json:"targetSpecHash"`
 	ExpectedServiceIDs []string          `json:"expectedServiceIds,omitempty"`
 	TargetLabels       map[string]string `json:"targetLabels,omitempty"`
 }
 
 type NodeMutationPlan struct {
-	NodeID             string   `json:"nodeId"`
-	Version            uint64   `json:"version"`
-	BeforeSpecHash     string   `json:"beforeSpecHash"`
-	TargetSpecHash     string   `json:"targetSpecHash"`
-	TargetAvailability string   `json:"targetAvailability"`
+	NodeID             string            `json:"nodeId"`
+	Version            uint64            `json:"version"`
+	BeforeSpecHash     string            `json:"beforeSpecHash"`
+	TargetSpecHash     string            `json:"targetSpecHash"`
+	TargetAvailability string            `json:"targetAvailability"`
 	AffectedServiceIDs []string          `json:"affectedServiceIds"`
 	TargetLabels       map[string]string `json:"targetLabels,omitempty"`
 }
@@ -133,7 +133,6 @@ type NodeMutationResponse struct {
 	TargetSpecHash     string `json:"targetSpecHash"`
 	TargetAvailability string `json:"targetAvailability"`
 }
-
 
 type NodeLabelPatchRequest struct {
 	ExpectedVersion uint64            `json:"expectedVersion"`
