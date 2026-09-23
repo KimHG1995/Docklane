@@ -218,7 +218,6 @@ func TestPlanRestart(t *testing.T) {
 	}
 }
 
-
 func TestNodeDetail(t *testing.T) {
 	s := New(config.Config{InsecureDev: true}, fakeReader{})
 	req := httptest.NewRequest(http.MethodGet, "/v1/nodes/node-1", nil)
