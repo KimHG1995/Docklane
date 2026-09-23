@@ -128,6 +128,22 @@ func (r *Reader) updateNodeAvailability(
 		)}
 	}
 
+	if targetAvailability == swarm.NodeAvailabilityDrain {
+		detail, err := r.Node(ctx, node.ID)
+		if err != nil {
+			return model.NodeMutationResponse{}, err
+		}
+		actualServiceIDs := append([]string(nil), detail.ServiceIDs...)
+		expectedServiceIDs := append([]string(nil), input.ExpectedServiceIDs...)
+		sort.Strings(actualServiceIDs)
+		sort.Strings(expectedServiceIDs)
+		if !equalStrings(actualServiceIDs, expectedServiceIDs) {
+			return model.NodeMutationResponse{}, &ConflictError{
+				Message: "node task set changed after mutation planning",
+			}
+		}
+	}
+
 	currentHash, err := nodeSpecHash(node.Spec)
 	if err != nil {
 		return model.NodeMutationResponse{}, err
@@ -184,4 +200,17 @@ func (r *Reader) updateNodeAvailability(
 		TargetSpecHash:     targetHash,
 		TargetAvailability: string(targetAvailability),
 	}, nil
+}
+
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
