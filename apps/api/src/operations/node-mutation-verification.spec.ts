@@ -110,3 +110,45 @@ test('activate succeeds when availability converges without requiring tasks', ()
     status: 'SUCCESS',
   });
 });
+
+
+test('label mutation succeeds only with the exact target labels', () => {
+  const operation: NodeOperationRecord = {
+    ...drainOperation,
+    type: 'LABELS',
+    targetSpecHash: 'labels-target',
+    targetAvailability: 'active',
+    targetLabels: { zone: 'a', tier: 'worker' },
+    labelPatch: {
+      set: { zone: 'a', tier: 'worker' },
+      remove: [],
+    },
+    affectedServiceIds: ['service-1'],
+  };
+
+  assert.deepEqual(
+    classifyNodeMutation(
+      operation,
+      nodeSnapshot({
+        version: 12,
+        specHash: 'labels-target',
+        availability: 'active',
+        labels: { zone: 'a', tier: 'worker' },
+      }),
+    ),
+    { status: 'SUCCESS' },
+  );
+
+  assert.equal(
+    classifyNodeMutation(
+      operation,
+      nodeSnapshot({
+        version: 13,
+        specHash: 'labels-target',
+        availability: 'active',
+        labels: { zone: 'b', tier: 'worker' },
+      }),
+    ).status,
+    'EXTERNAL_CONFLICT',
+  );
+});
