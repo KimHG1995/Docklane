@@ -17,7 +17,7 @@ interface NodeOperationRow extends RowDataPacket {
   expected_version: number;
   before_spec_hash: string;
   target_spec_hash: string;
-  target_availability: 'drain' | 'active';
+  target_availability: 'drain' | 'active' | 'pause';
   affected_service_ids: string | string[];
   target_labels: string | Record<string, string> | null;
   label_patch: string | { set: Record<string, string>; remove: string[] } | null;
