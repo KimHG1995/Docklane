@@ -101,6 +101,43 @@ export class NodeOperationRepository implements OnModuleInit {
     return rows[0] ? mapNodeOperation(rows[0]) : null;
   }
 
+  async findNonTerminalForNode(
+    clusterId: string,
+    nodeId: string,
+  ): Promise<NodeOperationRecord | null> {
+    const [rows] = await this.db.pool.query<NodeOperationRow[]>(
+      `SELECT * FROM node_operations
+       WHERE cluster_id = ?
+         AND node_id = ?
+         AND status IN ('PENDING', 'RUNNING', 'VERIFYING', 'NEEDS_ATTENTION')
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [clusterId, nodeId],
+    );
+    return rows[0] ? mapNodeOperation(rows[0]) : null;
+  }
+
+  async findNonTerminalAffectingServiceWithConnection(
+    connection: PoolConnection,
+    clusterId: string,
+    serviceId: string,
+  ): Promise<NodeOperationRecord | null> {
+    const [rows] = await connection.query<NodeOperationRow[]>(
+      `SELECT * FROM node_operations
+       WHERE cluster_id = ?
+         AND status IN ('PENDING', 'RUNNING', 'VERIFYING', 'NEEDS_ATTENTION')
+         AND JSON_CONTAINS(
+           affected_service_ids,
+           JSON_QUOTE(?),
+           '$'
+         )
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [clusterId, serviceId],
+    );
+    return rows[0] ? mapNodeOperation(rows[0]) : null;
+  }
+
   async create(
     connection: PoolConnection,
     input: {

@@ -71,7 +71,8 @@ func (r *Reader) planNodeAvailability(
 		return model.NodeMutationPlan{}, err
 	}
 
-	serviceIDs := append([]string(nil), detail.ServiceIDs...)
+	serviceIDs := make([]string, len(detail.ServiceIDs))
+	copy(serviceIDs, detail.ServiceIDs)
 	sort.Strings(serviceIDs)
 
 	return model.NodeMutationPlan{
