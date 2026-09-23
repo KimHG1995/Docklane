@@ -473,6 +473,15 @@ export class NodeMutationService implements OnApplicationBootstrap {
         lastError = null;
         const decision = classifyNodeMutation(operation, current);
 
+        if (
+          decision.status === 'SUCCESS' &&
+          operation.type === 'LABELS' &&
+          !(await this.affectedServicesConverged(operation.affectedServiceIds))
+        ) {
+          await sleep(VERIFY_INTERVAL_MS);
+          continue;
+        }
+
         if (decision.status === 'SUCCESS') {
           await connection.beginTransaction();
           try {
@@ -529,6 +538,20 @@ export class NodeMutationService implements OnApplicationBootstrap {
       last?.node,
     );
     return this.requireOperation(connection, operation.id);
+  }
+
+  private async affectedServicesConverged(
+    serviceIds: string[],
+  ): Promise<boolean> {
+    for (const serviceId of serviceIds) {
+      const current = await this.agentClient.inspectService(serviceId);
+      if (
+        current.service.desiredReplicas !== current.service.runningReplicas
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private async markRejected(
