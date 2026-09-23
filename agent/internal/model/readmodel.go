@@ -26,6 +26,7 @@ type NodeSummary struct {
 	EngineVersion string `json:"engineVersion,omitempty"`
 	NanoCPUs      int64  `json:"nanoCpus"`
 	MemoryBytes   int64  `json:"memoryBytes"`
+	Labels        map[string]string `json:"labels"`
 }
 
 type ClusterSummary struct {
@@ -112,7 +113,8 @@ type NodeMutationRequest struct {
 	ExpectedVersion    uint64   `json:"expectedVersion"`
 	ExpectedSpecHash   string   `json:"expectedSpecHash"`
 	TargetSpecHash     string   `json:"targetSpecHash"`
-	ExpectedServiceIDs []string `json:"expectedServiceIds,omitempty"`
+	ExpectedServiceIDs []string          `json:"expectedServiceIds,omitempty"`
+	TargetLabels       map[string]string `json:"targetLabels,omitempty"`
 }
 
 type NodeMutationPlan struct {
@@ -121,7 +123,8 @@ type NodeMutationPlan struct {
 	BeforeSpecHash     string   `json:"beforeSpecHash"`
 	TargetSpecHash     string   `json:"targetSpecHash"`
 	TargetAvailability string   `json:"targetAvailability"`
-	AffectedServiceIDs []string `json:"affectedServiceIds"`
+	AffectedServiceIDs []string          `json:"affectedServiceIds"`
+	TargetLabels       map[string]string `json:"targetLabels,omitempty"`
 }
 
 type NodeMutationResponse struct {
