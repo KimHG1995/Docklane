@@ -19,6 +19,7 @@ interface NodeOperationRow extends RowDataPacket {
   target_spec_hash: string;
   target_availability: 'drain' | 'active';
   affected_service_ids: string | string[];
+  target_labels: string | Record<string, string> | null;
   result_version: number | null;
   error_code: string | null;
   error_message: string | null;
@@ -44,6 +45,7 @@ export class NodeOperationRepository implements OnModuleInit {
         target_spec_hash VARCHAR(64) NOT NULL,
         target_availability VARCHAR(16) NOT NULL,
         affected_service_ids JSON NOT NULL,
+        target_labels JSON NULL,
         result_version BIGINT UNSIGNED NULL,
         error_code VARCHAR(64) NULL,
         error_message TEXT NULL,
@@ -54,6 +56,7 @@ export class NodeOperationRepository implements OnModuleInit {
         INDEX idx_node_operations_status (status, updated_at)
       ) ENGINE=InnoDB
     `);
+    await this.ensureColumn('target_labels', 'JSON NULL');
   }
 
   async find(id: string): Promise<NodeOperationRecord | null> {
@@ -151,6 +154,7 @@ export class NodeOperationRepository implements OnModuleInit {
       targetSpecHash: string;
       targetAvailability: 'drain' | 'active';
       affectedServiceIds: string[];
+      targetLabels?: Record<string, string> | null;
     },
   ): Promise<void> {
     await connection.execute(
@@ -158,9 +162,9 @@ export class NodeOperationRepository implements OnModuleInit {
        (
          id, cluster_id, node_id, type, status, actor_id,
          expected_version, before_spec_hash, target_spec_hash,
-         target_availability, affected_service_ids
+         target_availability, affected_service_ids, target_labels
        )
-       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.id,
         input.clusterId,
@@ -172,7 +176,29 @@ export class NodeOperationRepository implements OnModuleInit {
         input.targetSpecHash,
         input.targetAvailability,
         JSON.stringify(input.affectedServiceIds),
+        input.targetLabels == null ? null : JSON.stringify(input.targetLabels),
       ],
+    );
+  }
+
+  private async ensureColumn(
+    columnName: string,
+    definition: string,
+  ): Promise<void> {
+    const [rows] = await this.db.pool.query<Array<RowDataPacket & { count: number }>>(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE()
+         AND table_name = 'node_operations'
+         AND column_name = ?`,
+      [columnName],
+    );
+    if ((rows[0]?.count ?? 0) > 0) return;
+    if (!/^[a-z_]+$/.test(columnName)) {
+      throw new Error('Unsafe node operation column name');
+    }
+    await this.db.pool.query(
+      `ALTER TABLE node_operations ADD COLUMN ${columnName} ${definition}`,
     );
   }
 
@@ -246,6 +272,13 @@ function mapNodeOperation(row: NodeOperationRow): NodeOperationRecord {
       ? (JSON.parse(row.affected_service_ids) as unknown)
       : row.affected_service_ids;
 
+  const labels =
+    row.target_labels == null
+      ? null
+      : typeof row.target_labels === 'string'
+        ? (JSON.parse(row.target_labels) as unknown)
+        : row.target_labels;
+
   return {
     id: row.id,
     clusterId: row.cluster_id,
@@ -260,6 +293,14 @@ function mapNodeOperation(row: NodeOperationRow): NodeOperationRecord {
     affectedServiceIds: Array.isArray(affected)
       ? affected.filter((value): value is string => typeof value === 'string')
       : [],
+    targetLabels:
+      labels && typeof labels === 'object' && !Array.isArray(labels)
+        ? Object.fromEntries(
+            Object.entries(labels).filter(
+              (entry): entry is [string, string] => typeof entry[1] === 'string',
+            ),
+          )
+        : null,
     resultVersion:
       row.result_version === null ? null : Number(row.result_version),
     errorCode: row.error_code,
