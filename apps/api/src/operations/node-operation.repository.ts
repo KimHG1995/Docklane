@@ -20,6 +20,7 @@ interface NodeOperationRow extends RowDataPacket {
   target_availability: 'drain' | 'active';
   affected_service_ids: string | string[];
   target_labels: string | Record<string, string> | null;
+  label_patch: string | { set: Record<string, string>; remove: string[] } | null;
   result_version: number | null;
   error_code: string | null;
   error_message: string | null;
@@ -46,6 +47,7 @@ export class NodeOperationRepository implements OnModuleInit {
         target_availability VARCHAR(16) NOT NULL,
         affected_service_ids JSON NOT NULL,
         target_labels JSON NULL,
+        label_patch JSON NULL,
         result_version BIGINT UNSIGNED NULL,
         error_code VARCHAR(64) NULL,
         error_message TEXT NULL,
@@ -57,6 +59,7 @@ export class NodeOperationRepository implements OnModuleInit {
       ) ENGINE=InnoDB
     `);
     await this.ensureColumn('target_labels', 'JSON NULL');
+    await this.ensureColumn('label_patch', 'JSON NULL');
   }
 
   async find(id: string): Promise<NodeOperationRecord | null> {
@@ -152,9 +155,10 @@ export class NodeOperationRepository implements OnModuleInit {
       expectedVersion: number;
       beforeSpecHash: string;
       targetSpecHash: string;
-      targetAvailability: 'drain' | 'active';
+      targetAvailability: 'drain' | 'active' | 'pause';
       affectedServiceIds: string[];
       targetLabels?: Record<string, string> | null;
+      labelPatch?: { set: Record<string, string>; remove: string[] } | null;
     },
   ): Promise<void> {
     await connection.execute(
@@ -162,9 +166,9 @@ export class NodeOperationRepository implements OnModuleInit {
        (
          id, cluster_id, node_id, type, status, actor_id,
          expected_version, before_spec_hash, target_spec_hash,
-         target_availability, affected_service_ids, target_labels
+         target_availability, affected_service_ids, target_labels, label_patch
        )
-       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.id,
         input.clusterId,
@@ -177,6 +181,7 @@ export class NodeOperationRepository implements OnModuleInit {
         input.targetAvailability,
         JSON.stringify(input.affectedServiceIds),
         input.targetLabels == null ? null : JSON.stringify(input.targetLabels),
+        input.labelPatch == null ? null : JSON.stringify(input.labelPatch),
       ],
     );
   }
@@ -279,6 +284,13 @@ function mapNodeOperation(row: NodeOperationRow): NodeOperationRecord {
         ? (JSON.parse(row.target_labels) as unknown)
         : row.target_labels;
 
+  const patch =
+    row.label_patch == null
+      ? null
+      : typeof row.label_patch === 'string'
+        ? (JSON.parse(row.label_patch) as unknown)
+        : row.label_patch;
+
   return {
     id: row.id,
     clusterId: row.cluster_id,
@@ -300,6 +312,27 @@ function mapNodeOperation(row: NodeOperationRow): NodeOperationRecord {
               (entry): entry is [string, string] => typeof entry[1] === 'string',
             ),
           )
+        : null,
+    labelPatch:
+      patch &&
+      typeof patch === 'object' &&
+      !Array.isArray(patch) &&
+      'set' in patch &&
+      'remove' in patch &&
+      typeof patch.set === 'object' &&
+      patch.set !== null &&
+      Array.isArray(patch.remove)
+        ? {
+            set: Object.fromEntries(
+              Object.entries(patch.set).filter(
+                (entry): entry is [string, string] =>
+                  typeof entry[1] === 'string',
+              ),
+            ),
+            remove: patch.remove.filter(
+              (value): value is string => typeof value === 'string',
+            ),
+          }
         : null,
     resultVersion:
       row.result_version === null ? null : Number(row.result_version),
