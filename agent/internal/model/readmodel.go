@@ -110,20 +110,20 @@ type NodeDetailResponse struct {
 }
 
 type NodeMutationRequest struct {
-	ExpectedVersion    uint64            `json:"expectedVersion"`
-	ExpectedSpecHash   string            `json:"expectedSpecHash"`
-	TargetSpecHash     string            `json:"targetSpecHash"`
-	ExpectedServiceIDs []string          `json:"expectedServiceIds,omitempty"`
+	ExpectedVersion    uint64             `json:"expectedVersion"`
+	ExpectedSpecHash   string             `json:"expectedSpecHash"`
+	TargetSpecHash     string             `json:"targetSpecHash"`
+	ExpectedServiceIDs []string           `json:"expectedServiceIds,omitempty"`
 	TargetLabels       *map[string]string `json:"targetLabels,omitempty"`
 }
 
 type NodeMutationPlan struct {
-	NodeID             string            `json:"nodeId"`
-	Version            uint64            `json:"version"`
-	BeforeSpecHash     string            `json:"beforeSpecHash"`
-	TargetSpecHash     string            `json:"targetSpecHash"`
-	TargetAvailability string            `json:"targetAvailability"`
-	AffectedServiceIDs []string          `json:"affectedServiceIds"`
+	NodeID             string             `json:"nodeId"`
+	Version            uint64             `json:"version"`
+	BeforeSpecHash     string             `json:"beforeSpecHash"`
+	TargetSpecHash     string             `json:"targetSpecHash"`
+	TargetAvailability string             `json:"targetAvailability"`
+	AffectedServiceIDs []string           `json:"affectedServiceIds"`
 	TargetLabels       *map[string]string `json:"targetLabels,omitempty"`
 }
 

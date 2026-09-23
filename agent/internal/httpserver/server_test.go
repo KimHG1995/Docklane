@@ -155,7 +155,7 @@ func (fakeReader) PlanNodeLabels(
 		TargetSpecHash:     "node-labels",
 		TargetAvailability: "active",
 		AffectedServiceIDs: []string{},
-		TargetLabels:       func() *map[string]string {
+		TargetLabels: func() *map[string]string {
 			labels := map[string]string{"zone": "a"}
 			return &labels
 		}(),
