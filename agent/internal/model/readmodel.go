@@ -110,9 +110,10 @@ type NodeDetailResponse struct {
 }
 
 type NodeMutationRequest struct {
-	ExpectedVersion  uint64 `json:"expectedVersion"`
-	ExpectedSpecHash string `json:"expectedSpecHash"`
-	TargetSpecHash   string `json:"targetSpecHash"`
+	ExpectedVersion    uint64   `json:"expectedVersion"`
+	ExpectedSpecHash   string   `json:"expectedSpecHash"`
+	TargetSpecHash     string   `json:"targetSpecHash"`
+	ExpectedServiceIDs []string `json:"expectedServiceIds,omitempty"`
 }
 
 type NodeMutationPlan struct {
