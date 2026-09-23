@@ -133,3 +133,10 @@ type NodeMutationResponse struct {
 	TargetSpecHash     string `json:"targetSpecHash"`
 	TargetAvailability string `json:"targetAvailability"`
 }
+
+
+type NodeLabelPatchRequest struct {
+	ExpectedVersion uint64            `json:"expectedVersion"`
+	Set             map[string]string `json:"set"`
+	Remove          []string          `json:"remove"`
+}
