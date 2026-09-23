@@ -2,6 +2,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { AGENT_CLIENT, type AgentClient } from '../agent/agent-client.js';
 import type {
   ClusterResponse,
+  NodeDetailResponse,
   ServiceDetailResponse,
   ServiceSummary,
   TaskSummary,
@@ -18,6 +19,11 @@ export class ReadService {
   async cluster(clusterId: string): Promise<ClusterResponse> {
     this.assertCluster(clusterId);
     return this.agentClient.inspectCluster();
+  }
+
+  async node(clusterId: string, nodeId: string): Promise<NodeDetailResponse> {
+    this.assertCluster(clusterId);
+    return this.agentClient.inspectNode(nodeId);
   }
 
   async services(clusterId: string): Promise<ServiceSummary[]> {
