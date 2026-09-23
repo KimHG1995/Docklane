@@ -378,11 +378,43 @@ PoC에서 반드시 실제 LB를 경유해 rolling update 중 요청 오류율, 
 
 `start-first` update는 old/new task가 겹쳐 실행될 여유 자원이 필요하다.
 
-배포 전에 가능한 범위에서 resource reservation 및 target placement를 검사한다.
+Docklane capacity pre-check는 Swarm scheduler를 재구현하지 않는다. Docker가 runtime scheduling의 source of truth이며, Docklane은 **명백한 capacity 부족을 mutation 전에 차단하는 보수적 사전 판정**만 수행한다.
 
-배치할 노드가 없으면 자동으로 `stop-first`로 변경하지 않는다. 명확한 capacity failure reason과 timeout을 노출하고 운영자가 정책을 선택하도록 한다.
+현재 판정 입력:
 
-배포/rollback에는 phase timeout을 둔다. 무한 PENDING 상태를 성공 대기로 취급하지 않는다.
+- ready + active node capacity
+- node CPU / memory
+- non-terminal task resource reservation
+- target replica 증가분
+- `start-first` update parallelism에 따른 overlap
+- supported placement constraints
+- placement platform
+- `max_replicas_per_node`
+
+결과는 다음 세 상태다.
+
+```text
+SUFFICIENT
+INSUFFICIENT
+UNKNOWN
+```
+
+`INSUFFICIENT`일 때만 mutation을 사전 차단하며 `INSUFFICIENT_CLUSTER_CAPACITY`를 반환한다.
+
+다음 경우에는 scheduler 결과를 안전하게 예측할 수 없으므로 `UNKNOWN`으로 표시하고 Swarm의 실제 scheduling에 최종 판단을 맡긴다.
+
+- CPU/Memory reservation이 모두 없음
+- 지원하지 않는 placement constraint
+- generic resource reservation 사용
+
+현재 자동 pre-check 적용 범위:
+
+- replica scale-up
+- service restart의 `start-first` overlap
+
+Deployment/rollback에도 동일 evaluator를 연결하되 해당 vertical slice 구현 시 target spec 기준으로 확장한다.
+
+capacity가 부족하다고 자동으로 `stop-first`로 변경하지 않는다. phase timeout과 명확한 capacity failure reason을 노출하고 운영자가 정책을 선택하도록 한다.
 
 ## 14. Authentication / Authorization
 

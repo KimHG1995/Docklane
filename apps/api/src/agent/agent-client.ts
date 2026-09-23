@@ -1,4 +1,8 @@
 import type {
+  CapacityCheckRequest,
+  CapacityCheckResponse,
+} from './capacity-model.js';
+import type {
   ClusterResponse,
   HealthResponse,
   NodeDetailResponse,
@@ -17,6 +21,10 @@ export interface AgentClient {
   listServices(): Promise<ServiceSummary[]>;
   inspectService(serviceId: string): Promise<ServiceDetailResponse>;
   listServiceTasks(serviceId: string): Promise<TaskSummary[]>;
+  checkServiceCapacity(
+    serviceId: string,
+    input: CapacityCheckRequest,
+  ): Promise<CapacityCheckResponse>;
   inspectNode(nodeId: string): Promise<NodeDetailResponse>;
   planDrainNode(nodeId: string, expectedVersion: number): Promise<NodeMutationPlan>;
   drainNode(

@@ -5,6 +5,13 @@ import { z } from 'zod';
 import { AgentRequestError, type AgentClient } from './agent-client.js';
 import { loadAgentConfig, type AgentConfig } from './agent-config.js';
 import {
+  CapacityCheckResponseSchema,
+} from './capacity-model.js';
+import type {
+  CapacityCheckRequest,
+  CapacityCheckResponse,
+} from './capacity-model.js';
+import {
   ClusterResponseSchema,
   HealthResponseSchema,
   NodeDetailResponseSchema,
@@ -59,6 +66,18 @@ export class HttpAgentClient implements AgentClient {
       'GET',
       `/v1/services/${encodeURIComponent(serviceId)}/tasks`,
       z.array(TaskSummarySchema),
+    );
+  }
+
+  checkServiceCapacity(
+    serviceId: string,
+    input: CapacityCheckRequest,
+  ): Promise<CapacityCheckResponse> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/capacity-check`,
+      CapacityCheckResponseSchema,
+      input,
     );
   }
 

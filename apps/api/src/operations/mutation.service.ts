@@ -19,6 +19,7 @@ import type {
   ServiceMutationResponse,
 } from '../agent/read-model.js';
 import type { Principal } from '../auth/auth.types.js';
+import { CapacityService } from '../capacity/capacity.service.js';
 import { OperationLock } from './operation-lock.js';
 import { OperationRepository } from './operation.repository.js';
 import { NodeOperationRepository } from './node-operation.repository.js';
@@ -58,6 +59,7 @@ export class MutationService implements OnApplicationBootstrap {
     @Inject(NodeOperationRepository)
     private readonly nodeOperations: NodeOperationRepository,
     @Inject(OperationLock) private readonly lock: OperationLock,
+    @Inject(CapacityService) private readonly capacity: CapacityService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -157,6 +159,12 @@ export class MutationService implements OnApplicationBootstrap {
         }
         const before = await this.agentClient.inspectService(canonicalServiceId);
         this.assertPlanMatchesCurrent(plan, before);
+
+        await this.capacity.assertAvailable(canonicalServiceId, {
+          expectedVersion: plan.version,
+          targetReplicas: input.replicas,
+          includeUpdateOverlap: false,
+        });
 
         await this.persistIntent(connection, {
           operationId: input.operationId,
@@ -265,6 +273,12 @@ export class MutationService implements OnApplicationBootstrap {
         }
         const before = await this.agentClient.inspectService(canonicalServiceId);
         this.assertPlanMatchesCurrent(plan, before);
+
+        await this.capacity.assertAvailable(canonicalServiceId, {
+          expectedVersion: plan.version,
+          targetReplicas: before.service.desiredReplicas,
+          includeUpdateOverlap: true,
+        });
 
         await this.persistIntent(connection, {
           operationId: input.operationId,

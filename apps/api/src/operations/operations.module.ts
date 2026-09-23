@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AgentModule } from '../agent/agent.module.js';
+import { CapacityModule } from '../capacity/capacity.module.js';
 import { DbModule } from '../db/db.module.js';
 import { OperationLock } from './operation-lock.js';
 import { OperationRepository } from './operation.repository.js';
@@ -10,7 +11,7 @@ import { NodeMutationService } from './node-mutation.service.js';
 import { NodeOperationRepository } from './node-operation.repository.js';
 
 @Module({
-  imports: [DbModule, AgentModule],
+  imports: [DbModule, AgentModule, CapacityModule],
   controllers: [MutationController, NodeMutationController],
   providers: [
     OperationRepository,

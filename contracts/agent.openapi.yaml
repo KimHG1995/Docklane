@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.6.0
+  version: 0.7.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -210,6 +210,27 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/TaskSummary'
+
+  /v1/services/{serviceId}/capacity-check:
+    post:
+      operationId: checkServiceCapacity
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CapacityCheckRequest'
+      responses:
+        '200':
+          description: Conservative Swarm capacity estimate for the requested target replicas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapacityCheckResponse'
+        '409':
+          description: Expected service version is stale.
 
   /v1/services/{serviceId}/plan-scale:
     post:
@@ -542,6 +563,66 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TaskSummary'
+
+    CapacityCheckRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, targetReplicas, includeUpdateOverlap]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        targetReplicas: { type: integer, minimum: 0 }
+        includeUpdateOverlap: { type: boolean }
+
+    CapacityResource:
+      type: object
+      additionalProperties: false
+      required: [nanoCpus, memoryBytes]
+      properties:
+        nanoCpus: { type: integer, minimum: 0 }
+        memoryBytes: { type: integer, minimum: 0 }
+
+    CapacityNode:
+      type: object
+      additionalProperties: false
+      required:
+        [nodeId, hostname, availableNanoCpus, availableMemoryBytes, existingServiceTasks, maxAdditionalReplicas]
+      properties:
+        nodeId: { type: string }
+        hostname: { type: string }
+        availableNanoCpus: { type: integer, minimum: 0 }
+        availableMemoryBytes: { type: integer, minimum: 0 }
+        existingServiceTasks: { type: integer, minimum: 0 }
+        maxAdditionalReplicas: { type: integer, minimum: 0 }
+
+    CapacityCheckResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [serviceId, status, currentReplicas, targetReplicas, updateOverlapReplicas, requiredAdditionalReplicas, schedulableAdditionalReplicas, unplacedReplicas, eligibleNodeCount, reservation, reasons, unsupportedConstraints, nodes]
+      properties:
+        serviceId: { type: string }
+        status:
+          type: string
+          enum: [SUFFICIENT, INSUFFICIENT, UNKNOWN]
+        currentReplicas: { type: integer, minimum: 0 }
+        targetReplicas: { type: integer, minimum: 0 }
+        updateOverlapReplicas: { type: integer, minimum: 0 }
+        requiredAdditionalReplicas: { type: integer, minimum: 0 }
+        schedulableAdditionalReplicas: { type: integer, minimum: 0 }
+        unplacedReplicas: { type: integer, minimum: 0 }
+        eligibleNodeCount: { type: integer, minimum: 0 }
+        reservation:
+          $ref: '#/components/schemas/CapacityResource'
+        reasons:
+          type: array
+          items: { type: string }
+        unsupportedConstraints:
+          type: array
+          items: { type: string }
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CapacityNode'
 
     ScalePlanRequest:
       type: object

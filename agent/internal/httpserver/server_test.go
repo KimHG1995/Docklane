@@ -40,6 +40,25 @@ func (fakeReader) ServiceTasks(context.Context, string) ([]model.TaskSummary, er
 	return []model.TaskSummary{}, nil
 }
 
+func (fakeReader) CheckServiceCapacity(
+	context.Context,
+	string,
+	model.CapacityCheckRequest,
+) (model.CapacityCheckResponse, error) {
+	return model.CapacityCheckResponse{
+		ServiceID:                     "service-1",
+		Status:                        model.CapacityStatusSufficient,
+		CurrentReplicas:               1,
+		TargetReplicas:                2,
+		RequiredAdditionalReplicas:    1,
+		SchedulableAdditionalReplicas: 1,
+		Reservation:                   model.CapacityResource{},
+		Reasons:                       []string{},
+		UnsupportedConstraints:        []string{},
+		Nodes:                         []model.CapacityNode{},
+	}, nil
+}
+
 func (fakeReader) Node(context.Context, string) (model.NodeDetailResponse, error) {
 	return model.NodeDetailResponse{
 		Node: model.NodeSummary{
@@ -281,6 +300,22 @@ func TestPlanNodeLabels(t *testing.T) {
 		http.MethodPost,
 		"/v1/nodes/node-1/plan-labels",
 		strings.NewReader(`{"expectedVersion":1,"set":{"zone":"a"},"remove":[]}`),
+	)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}
+
+func TestServiceCapacityCheck(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/services/service-1/capacity-check",
+		strings.NewReader(`{"expectedVersion":1,"targetReplicas":2,"includeUpdateOverlap":false}`),
 	)
 	res := httptest.NewRecorder()
 
