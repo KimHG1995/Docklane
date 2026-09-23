@@ -2,6 +2,7 @@ import { Controller, Get, Inject, Param } from '@nestjs/common';
 import { RequireRole } from '../auth/auth.decorators.js';
 import type {
   ClusterResponse,
+  NodeDetailResponse,
   ServiceDetailResponse,
   ServiceSummary,
   TaskSummary,
@@ -16,6 +17,14 @@ export class ReadController {
   @Get()
   cluster(@Param('clusterId') clusterId: string): Promise<ClusterResponse> {
     return this.readService.cluster(clusterId);
+  }
+
+  @Get('nodes/:nodeId')
+  node(
+    @Param('clusterId') clusterId: string,
+    @Param('nodeId') nodeId: string,
+  ): Promise<NodeDetailResponse> {
+    return this.readService.node(clusterId, nodeId);
   }
 
   @Get('services')
