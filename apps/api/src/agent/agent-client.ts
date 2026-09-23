@@ -38,6 +38,26 @@ export interface AgentClient {
     },
   ): Promise<NodeMutationResponse>;
 
+  planNodeLabels(
+    nodeId: string,
+    input: {
+      expectedVersion: number;
+      set: Record<string, string>;
+      remove: string[];
+    },
+  ): Promise<NodeMutationPlan>;
+
+  updateNodeLabels(
+    nodeId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+      expectedServiceIds: string[];
+      targetLabels: Record<string, string>;
+    },
+  ): Promise<NodeMutationResponse>;
+
 
   planScaleService(
     serviceId: string,
