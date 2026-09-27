@@ -180,7 +180,7 @@ test('node retry locks stored affected services after tasks have moved away', as
 
 
 test('node label mutation is blocked by another unresolved node operation affecting the same service', async () => {
-  let planned = false;
+  let planned = 0;
 
   const crossNodeOperation: NodeOperationRecord = {
     ...unresolvedNodeOperation,
@@ -208,10 +208,17 @@ test('node label mutation is blocked by another unresolved node operation affect
       tasks: [],
       serviceIds: [],
     }),
-    listServices: async () => [{ id: 'service-1' }],
     planNodeLabels: async () => {
-      planned = true;
-      throw new Error('must not plan');
+      planned += 1;
+      return {
+        nodeId: 'node-b',
+        version: 5,
+        beforeSpecHash: 'node-before',
+        targetSpecHash: 'node-after',
+        targetAvailability: 'active',
+        affectedServiceIds: ['service-1'],
+        targetLabels: { zone: 'b' },
+      };
     },
   };
 
@@ -259,7 +266,88 @@ test('node label mutation is blocked by another unresolved node operation affect
     /unresolved node operation/,
   );
 
-  assert.equal(planned, false);
+  assert.equal(planned, 2);
+});
+
+test('node label mutation locks only services affected by the changed labels', async () => {
+  let capturedServiceIds: string[] = [];
+  let planCalls = 0;
+
+  const agent = {
+    inspectNode: async () => ({
+      node: {
+        id: 'node-1',
+        version: 5,
+        specHash: 'node-before',
+        hostname: 'worker-1',
+        address: '10.0.0.1',
+        role: 'worker',
+        availability: 'active',
+        state: 'ready',
+        manager: false,
+        leader: false,
+        nanoCpus: 1,
+        memoryBytes: 1,
+        labels: { zone: 'a' },
+      },
+      tasks: [],
+      serviceIds: [],
+    }),
+    planNodeLabels: async () => {
+      planCalls += 1;
+      return {
+        nodeId: 'node-1',
+        version: 5,
+        beforeSpecHash: 'node-before',
+        targetSpecHash: 'node-after',
+        targetAvailability: 'active',
+        affectedServiceIds: ['service-placement-zone'],
+        targetLabels: { zone: 'b' },
+      };
+    },
+  };
+
+  const nodeOperations = {
+    listNonTerminal: async () => [],
+    find: async () => null,
+    findNonTerminalForNode: async () => null,
+  };
+  const sentinel = new Error('captured-label-lock-set');
+  const lock = {
+    withNodeAndServiceLocks: async (
+      _clusterId: string,
+      _nodeId: string,
+      serviceIds: string[],
+    ) => {
+      capturedServiceIds = [...serviceIds];
+      throw sentinel;
+    },
+  };
+
+  const service = new NodeMutationService(
+    agent as never,
+    nodeOperations as never,
+    {} as never,
+    lock as never,
+  );
+
+  await assert.rejects(
+    service.labels(
+      'default',
+      'node-1',
+      {
+        operationId: '00000000-0000-4000-8000-000000000030',
+        expectedVersion: 5,
+        set: { zone: 'b' },
+        remove: [],
+      },
+      principal,
+    ),
+    sentinel,
+  );
+
+  assert.equal(planCalls, 1);
+  assert.deepEqual(capturedServiceIds, ['service-placement-zone']);
 });
 
 test('node label convergence waits for placement convergence', async () => {
