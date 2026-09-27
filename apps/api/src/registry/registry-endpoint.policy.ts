@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { Injectable } from '@nestjs/common';
-import { RegistryRequestError } from './registry.client.js';
+import { RegistryRequestError } from './registry.errors.js';
 
 @Injectable()
 export class RegistryEndpointPolicy {
