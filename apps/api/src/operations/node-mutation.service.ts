@@ -133,14 +133,29 @@ export class NodeMutationService implements OnApplicationBootstrap {
 
     const initial = await this.agentClient.inspectNode(nodeRef);
     const canonicalNodeId = initial.node.id;
-    const initiallyAffected =
-      type === 'LABELS'
-        ? sortedUnique(
-            (await this.agentClient.listServices()).map((service) => service.id),
-          )
-        : sortedUnique(initial.serviceIds);
-
     const existingBeforeLock = await this.nodeOperations.find(input.operationId);
+
+    let initialLabelPlan: NodeMutationPlan | null = null;
+    let initiallyAffected: string[];
+    if (type === 'LABELS' && !existingBeforeLock) {
+      try {
+        initialLabelPlan = await this.plan(
+          type,
+          canonicalNodeId,
+          input.expectedVersion,
+          input as NodeLabelsRequest,
+        );
+      } catch (error) {
+        throw mapPlanningError(error);
+      }
+      initiallyAffected = sortedUnique(initialLabelPlan.affectedServiceIds);
+    } else {
+      initiallyAffected =
+        type === 'LABELS'
+          ? sortedUnique(existingBeforeLock?.affectedServiceIds ?? [])
+          : sortedUnique(initial.serviceIds);
+    }
+
     const priorBeforeLock =
       await this.nodeOperations.findNonTerminalForNode(
         clusterId,
@@ -198,17 +213,30 @@ export class NodeMutationService implements OnApplicationBootstrap {
         }
 
         const lockedNode = await this.agentClient.inspectNode(canonicalNodeId);
-        const lockedServices =
-          type === 'LABELS'
-            ? sortedUnique(
-                (await this.agentClient.listServices()).map(
-                  (service) => service.id,
-                ),
-              )
-            : sortedUnique(lockedNode.serviceIds);
+        let plan: NodeMutationPlan | null = null;
+        let lockedServices: string[];
+
+        if (type === 'LABELS') {
+          try {
+            plan = await this.plan(
+              type,
+              canonicalNodeId,
+              input.expectedVersion,
+              input as NodeLabelsRequest,
+            );
+          } catch (error) {
+            throw mapPlanningError(error);
+          }
+          lockedServices = sortedUnique(plan.affectedServiceIds);
+        } else {
+          lockedServices = sortedUnique(lockedNode.serviceIds);
+        }
+
         if (!sameStrings(initiallyAffected, lockedServices)) {
           throw new ConflictException(
-            'Node task set changed while acquiring mutation locks; retry the operation',
+            type === 'LABELS'
+              ? 'Node label impact set changed while acquiring mutation locks; retry the operation'
+              : 'Node task set changed while acquiring mutation locks; retry the operation',
           );
         }
 
@@ -238,16 +266,16 @@ export class NodeMutationService implements OnApplicationBootstrap {
           }
         }
 
-        let plan: NodeMutationPlan;
-        try {
-          plan = await this.plan(
-            type,
-            canonicalNodeId,
-            input.expectedVersion,
-            type === 'LABELS' ? (input as NodeLabelsRequest) : undefined,
-          );
-        } catch (error) {
-          throw mapPlanningError(error);
+        if (!plan) {
+          try {
+            plan = await this.plan(
+              type,
+              canonicalNodeId,
+              input.expectedVersion,
+            );
+          } catch (error) {
+            throw mapPlanningError(error);
+          }
         }
         this.assertPlanMatchesLockedNode(plan, lockedNode, lockedServices);
 
