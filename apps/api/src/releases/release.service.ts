@@ -8,10 +8,8 @@ import {
 } from '@nestjs/common';
 import { AGENT_CLIENT, type AgentClient } from '../agent/agent-client.js';
 import type { Principal } from '../auth/auth.types.js';
-import {
-  RegistryClient,
-  RegistryRequestError,
-} from '../registry/registry.client.js';
+import { RegistryClient } from '../registry/registry.client.js';
+import { RegistryRequestError } from '../registry/registry.errors.js';
 import type {
   CreateApplicationRequest,
   CreateDeploymentTargetRequest,
