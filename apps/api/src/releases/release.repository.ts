@@ -1,0 +1,271 @@
+import { randomUUID } from 'node:crypto';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import type { RowDataPacket } from 'mysql2/promise';
+import { Database } from '../db/database.js';
+import type {
+  ApplicationRecord,
+  DeploymentTargetRecord,
+  ReleaseRecord,
+} from './release.types.js';
+import type {
+  CreateApplicationRequest,
+  CreateDeploymentTargetRequest,
+  CreateReleaseRequest,
+} from './release.dto.js';
+
+interface ApplicationRow extends RowDataPacket {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface DeploymentTargetRow extends RowDataPacket {
+  id: string;
+  application_id: string;
+  cluster_id: string;
+  environment: string;
+  docker_service_id: string;
+  service_name: string;
+  routing_mode: 'INGRESS';
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface ReleaseRow extends RowDataPacket {
+  id: string;
+  application_id: string;
+  version: string;
+  image_repository: string;
+  image_tag: string | null;
+  image_digest: string;
+  git_commit: string | null;
+  build_number: string | null;
+  created_by: string;
+  created_at: Date;
+}
+
+@Injectable()
+export class ReleaseRepository implements OnModuleInit {
+  constructor(@Inject(Database) private readonly db: Database) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.db.pool.query(`
+      CREATE TABLE IF NOT EXISTS applications (
+        id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT NULL,
+        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+          ON UPDATE CURRENT_TIMESTAMP(6),
+        UNIQUE KEY uq_applications_name (name)
+      ) ENGINE=InnoDB
+    `);
+
+    await this.db.pool.query(`
+      CREATE TABLE IF NOT EXISTS deployment_targets (
+        id VARCHAR(64) PRIMARY KEY,
+        application_id VARCHAR(64) NOT NULL,
+        cluster_id VARCHAR(128) NOT NULL,
+        environment VARCHAR(255) NOT NULL,
+        docker_service_id VARCHAR(255) NOT NULL,
+        service_name VARCHAR(255) NOT NULL,
+        routing_mode VARCHAR(32) NOT NULL,
+        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+          ON UPDATE CURRENT_TIMESTAMP(6),
+        UNIQUE KEY uq_target_cluster_service (cluster_id, docker_service_id),
+        UNIQUE KEY uq_target_application_environment (application_id, environment),
+        INDEX idx_targets_application (application_id),
+        CONSTRAINT fk_targets_application
+          FOREIGN KEY (application_id) REFERENCES applications(id)
+          ON DELETE RESTRICT
+      ) ENGINE=InnoDB
+    `);
+
+    await this.db.pool.query(`
+      CREATE TABLE IF NOT EXISTS releases (
+        id VARCHAR(64) PRIMARY KEY,
+        application_id VARCHAR(64) NOT NULL,
+        version VARCHAR(255) NOT NULL,
+        image_repository VARCHAR(512) NOT NULL,
+        image_tag VARCHAR(255) NULL,
+        image_digest VARCHAR(80) NOT NULL,
+        git_commit VARCHAR(128) NULL,
+        build_number VARCHAR(128) NULL,
+        created_by VARCHAR(128) NOT NULL,
+        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        UNIQUE KEY uq_release_application_version (application_id, version),
+        INDEX idx_releases_application_created (application_id, created_at),
+        CONSTRAINT fk_releases_application
+          FOREIGN KEY (application_id) REFERENCES applications(id)
+          ON DELETE RESTRICT
+      ) ENGINE=InnoDB
+    `);
+  }
+
+  async createApplication(
+    input: CreateApplicationRequest,
+  ): Promise<ApplicationRecord> {
+    const id = randomUUID();
+    await this.db.pool.execute(
+      'INSERT INTO applications (id, name, description) VALUES (?, ?, ?)',
+      [id, input.name, input.description ?? null],
+    );
+    return this.requireApplication(id);
+  }
+
+  async listApplications(): Promise<ApplicationRecord[]> {
+    const [rows] = await this.db.pool.query<ApplicationRow[]>(
+      'SELECT * FROM applications ORDER BY name ASC',
+    );
+    return rows.map(mapApplication);
+  }
+
+  async findApplication(id: string): Promise<ApplicationRecord | null> {
+    const [rows] = await this.db.pool.query<ApplicationRow[]>(
+      'SELECT * FROM applications WHERE id = ? LIMIT 1',
+      [id],
+    );
+    return rows[0] ? mapApplication(rows[0]) : null;
+  }
+
+  async createDeploymentTarget(
+    applicationId: string,
+    clusterId: string,
+    input: CreateDeploymentTargetRequest,
+  ): Promise<DeploymentTargetRecord> {
+    const id = randomUUID();
+    await this.db.pool.execute(
+      `INSERT INTO deployment_targets
+       (id, application_id, cluster_id, environment, docker_service_id, service_name, routing_mode)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        applicationId,
+        clusterId,
+        input.environment,
+        input.dockerServiceId,
+        input.serviceName,
+        input.routingMode,
+      ],
+    );
+    return this.requireDeploymentTarget(id);
+  }
+
+  async listDeploymentTargets(
+    applicationId: string,
+    clusterId: string,
+  ): Promise<DeploymentTargetRecord[]> {
+    const [rows] = await this.db.pool.query<DeploymentTargetRow[]>(
+      `SELECT * FROM deployment_targets
+       WHERE application_id = ? AND cluster_id = ?
+       ORDER BY environment ASC`,
+      [applicationId, clusterId],
+    );
+    return rows.map(mapDeploymentTarget);
+  }
+
+  async createRelease(
+    applicationId: string,
+    input: CreateReleaseRequest,
+    createdBy: string,
+  ): Promise<ReleaseRecord> {
+    const id = randomUUID();
+    await this.db.pool.execute(
+      `INSERT INTO releases
+       (id, application_id, version, image_repository, image_tag, image_digest, git_commit, build_number, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        applicationId,
+        input.version,
+        input.imageRepository,
+        input.imageTag ?? null,
+        input.imageDigest.toLowerCase(),
+        input.gitCommit ?? null,
+        input.buildNumber ?? null,
+        createdBy,
+      ],
+    );
+    return this.requireRelease(id);
+  }
+
+  async listReleases(applicationId: string): Promise<ReleaseRecord[]> {
+    const [rows] = await this.db.pool.query<ReleaseRow[]>(
+      `SELECT * FROM releases
+       WHERE application_id = ?
+       ORDER BY created_at DESC`,
+      [applicationId],
+    );
+    return rows.map(mapRelease);
+  }
+
+  private async requireApplication(id: string): Promise<ApplicationRecord> {
+    const found = await this.findApplication(id);
+    if (!found) throw new Error('Application disappeared after insert');
+    return found;
+  }
+
+  private async requireDeploymentTarget(
+    id: string,
+  ): Promise<DeploymentTargetRecord> {
+    const [rows] = await this.db.pool.query<DeploymentTargetRow[]>(
+      'SELECT * FROM deployment_targets WHERE id = ? LIMIT 1',
+      [id],
+    );
+    if (!rows[0]) throw new Error('Deployment target disappeared after insert');
+    return mapDeploymentTarget(rows[0]);
+  }
+
+  private async requireRelease(id: string): Promise<ReleaseRecord> {
+    const [rows] = await this.db.pool.query<ReleaseRow[]>(
+      'SELECT * FROM releases WHERE id = ? LIMIT 1',
+      [id],
+    );
+    if (!rows[0]) throw new Error('Release disappeared after insert');
+    return mapRelease(rows[0]);
+  }
+}
+
+function mapApplication(row: ApplicationRow): ApplicationRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function mapDeploymentTarget(
+  row: DeploymentTargetRow,
+): DeploymentTargetRecord {
+  return {
+    id: row.id,
+    applicationId: row.application_id,
+    clusterId: row.cluster_id,
+    environment: row.environment,
+    dockerServiceId: row.docker_service_id,
+    serviceName: row.service_name,
+    routingMode: row.routing_mode,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function mapRelease(row: ReleaseRow): ReleaseRecord {
+  return {
+    id: row.id,
+    applicationId: row.application_id,
+    version: row.version,
+    imageRepository: row.image_repository,
+    imageTag: row.image_tag,
+    imageDigest: row.image_digest,
+    gitCommit: row.git_commit,
+    buildNumber: row.build_number,
+    createdBy: row.created_by,
+    createdAt: row.created_at.toISOString(),
+  };
+}
