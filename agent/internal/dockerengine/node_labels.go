@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/KimHG1995/Docklane/agent/internal/model"
 	cerrdefs "github.com/containerd/errdefs"
@@ -33,7 +34,8 @@ func (r *Reader) PlanNodeLabels(
 		return model.NodeMutationPlan{}, err
 	}
 
-	labels := cloneLabels(node.Spec.Annotations.Labels)
+	beforeLabels := cloneLabels(node.Spec.Annotations.Labels)
+	labels := cloneLabels(beforeLabels)
 	for key, value := range input.Set {
 		labels[key] = value
 	}
@@ -47,7 +49,10 @@ func (r *Reader) PlanNodeLabels(
 		return model.NodeMutationPlan{}, err
 	}
 
-	serviceIDs, err := r.allServiceIDs(ctx)
+	serviceIDs, err := r.serviceIDsAffectedByNodeLabels(
+		ctx,
+		changedNodeLabelKeys(beforeLabels, labels),
+	)
 	if err != nil {
 		return model.NodeMutationPlan{}, err
 	}
@@ -80,18 +85,6 @@ func (r *Reader) UpdateNodeLabels(
 		)}
 	}
 
-	actualServiceIDs, err := r.allServiceIDs(ctx)
-	if err != nil {
-		return model.NodeMutationResponse{}, err
-	}
-	expectedServiceIDs := append([]string(nil), input.ExpectedServiceIDs...)
-	sort.Strings(expectedServiceIDs)
-	if !equalStrings(actualServiceIDs, expectedServiceIDs) {
-		return model.NodeMutationResponse{}, &ConflictError{
-			Message: "cluster service set changed after label mutation planning",
-		}
-	}
-
 	if input.TargetLabels == nil {
 		return model.NodeMutationResponse{}, &ValidationError{
 			Message: "targetLabels is required for node label mutation",
@@ -108,7 +101,23 @@ func (r *Reader) UpdateNodeLabels(
 		}
 	}
 
-	node.Spec.Annotations.Labels = cloneLabels(*input.TargetLabels)
+	targetLabels := cloneLabels(*input.TargetLabels)
+	actualServiceIDs, err := r.serviceIDsAffectedByNodeLabels(
+		ctx,
+		changedNodeLabelKeys(node.Spec.Annotations.Labels, targetLabels),
+	)
+	if err != nil {
+		return model.NodeMutationResponse{}, err
+	}
+	expectedServiceIDs := append([]string(nil), input.ExpectedServiceIDs...)
+	sort.Strings(expectedServiceIDs)
+	if !equalStrings(actualServiceIDs, expectedServiceIDs) {
+		return model.NodeMutationResponse{}, &ConflictError{
+			Message: "affected service set changed after label mutation planning",
+		}
+	}
+
+	node.Spec.Annotations.Labels = targetLabels
 	targetHash, err := nodeSpecHash(node.Spec)
 	if err != nil {
 		return model.NodeMutationResponse{}, err
@@ -154,6 +163,128 @@ func (r *Reader) UpdateNodeLabels(
 		TargetSpecHash:     targetHash,
 		TargetAvailability: string(after.Node.Spec.Availability),
 	}, nil
+}
+
+func (r *Reader) serviceIDsAffectedByNodeLabels(
+	ctx context.Context,
+	changedKeys []string,
+) ([]string, error) {
+	if len(changedKeys) == 0 {
+		return make([]string, 0), nil
+	}
+
+	result, err := r.client.ServiceList(ctx, client.ServiceListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list swarm services: %w", err)
+	}
+
+	return affectedServiceIDsForNodeLabels(result.Items, changedKeys), nil
+}
+
+func affectedServiceIDsForNodeLabels(
+	services []swarm.Service,
+	changedKeys []string,
+) []string {
+	changed := make(map[string]struct{}, len(changedKeys))
+	for _, key := range changedKeys {
+		changed[key] = struct{}{}
+	}
+
+	ids := make([]string, 0)
+	for _, service := range services {
+		if placementReferencesNodeLabels(
+			service.Spec.TaskTemplate.Placement,
+			changed,
+		) {
+			ids = append(ids, service.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func placementReferencesNodeLabels(
+	placement *swarm.Placement,
+	changedKeys map[string]struct{},
+) bool {
+	if placement == nil || len(changedKeys) == 0 {
+		return false
+	}
+
+	for _, raw := range placement.Constraints {
+		key, ok := nodeLabelKeyFromConstraint(raw)
+		if !ok {
+			continue
+		}
+		if _, changed := changedKeys[key]; changed {
+			return true
+		}
+	}
+
+	for _, preference := range placement.Preferences {
+		if preference.Spread == nil {
+			continue
+		}
+		key, ok := nodeLabelKeyFromDescriptor(
+			preference.Spread.SpreadDescriptor,
+		)
+		if !ok {
+			continue
+		}
+		if _, changed := changedKeys[key]; changed {
+			return true
+		}
+	}
+
+	return false
+}
+
+func nodeLabelKeyFromConstraint(raw string) (string, bool) {
+	for _, op := range []string{"==", "!="} {
+		if !strings.Contains(raw, op) {
+			continue
+		}
+		parts := strings.SplitN(raw, op, 2)
+		return nodeLabelKeyFromDescriptor(strings.TrimSpace(parts[0]))
+	}
+	return "", false
+}
+
+func nodeLabelKeyFromDescriptor(raw string) (string, bool) {
+	const prefix = "node.labels."
+	value := strings.TrimSpace(raw)
+	if len(value) <= len(prefix) ||
+		!strings.EqualFold(value[:len(prefix)], prefix) {
+		return "", false
+	}
+	return value[len(prefix):], true
+}
+
+func changedNodeLabelKeys(
+	before map[string]string,
+	after map[string]string,
+) []string {
+	changed := make(map[string]struct{})
+
+	for key, beforeValue := range before {
+		afterValue, exists := after[key]
+		if !exists || beforeValue != afterValue {
+			changed[key] = struct{}{}
+		}
+	}
+	for key, afterValue := range after {
+		beforeValue, exists := before[key]
+		if !exists || beforeValue != afterValue {
+			changed[key] = struct{}{}
+		}
+	}
+
+	keys := make([]string, 0, len(changed))
+	for key := range changed {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (r *Reader) allServiceIDs(ctx context.Context) ([]string, error) {
