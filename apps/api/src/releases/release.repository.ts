@@ -10,7 +10,7 @@ import type {
 import type {
   CreateApplicationRequest,
   CreateDeploymentTargetRequest,
-  CreateReleaseRequest,
+  ResolvedReleaseRequest,
 } from './release.dto.js';
 
 interface ApplicationRow extends RowDataPacket {
@@ -169,7 +169,7 @@ export class ReleaseRepository implements OnModuleInit {
 
   async createRelease(
     applicationId: string,
-    input: CreateReleaseRequest,
+    input: ResolvedReleaseRequest,
     createdBy: string,
   ): Promise<ReleaseRecord> {
     const id = randomUUID();
