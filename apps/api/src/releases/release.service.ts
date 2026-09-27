@@ -1,4 +1,6 @@
 import {
+  BadGatewayException,
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -6,6 +8,10 @@ import {
 } from '@nestjs/common';
 import { AGENT_CLIENT, type AgentClient } from '../agent/agent-client.js';
 import type { Principal } from '../auth/auth.types.js';
+import {
+  RegistryClient,
+  RegistryRequestError,
+} from '../registry/registry.client.js';
 import type {
   CreateApplicationRequest,
   CreateDeploymentTargetRequest,
@@ -26,6 +32,7 @@ export class ReleaseService {
     @Inject(ReleaseRepository)
     private readonly repository: ReleaseRepository,
     @Inject(AGENT_CLIENT) private readonly agentClient: AgentClient,
+    @Inject(RegistryClient) private readonly registryClient: RegistryClient,
   ) {}
 
   applications(): Promise<ApplicationRecord[]> {
@@ -96,10 +103,40 @@ export class ReleaseService {
     principal: Principal,
   ): Promise<ReleaseRecord> {
     await this.requireApplication(applicationId);
+
+    const reference = input.imageDigest ?? input.imageTag;
+    if (!reference) {
+      throw new BadRequestException('Release image reference is required');
+    }
+
+    let artifact;
+    try {
+      artifact = await this.registryClient.resolve(
+        input.imageRepository,
+        reference,
+      );
+    } catch (error) {
+      throw mapRegistryError(error);
+    }
+
+    if (
+      input.imageDigest &&
+      artifact.digest.toLowerCase() !== input.imageDigest.toLowerCase()
+    ) {
+      throw new BadRequestException(
+        'Registry digest does not match requested imageDigest',
+      );
+    }
+
+    const resolvedInput = {
+      ...input,
+      imageDigest: artifact.digest,
+    };
+
     try {
       return await this.repository.createRelease(
         applicationId,
-        input,
+        resolvedInput,
         principal.actorId,
       );
     } catch (error) {
@@ -130,4 +167,22 @@ function mapDuplicate(error: unknown, message: string): Error {
     return new ConflictException(message);
   }
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function mapRegistryError(error: unknown): Error {
+  if (!(error instanceof RegistryRequestError)) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  if (error.code === 'MANIFEST_NOT_FOUND') {
+    return new NotFoundException(error.message);
+  }
+  if (
+    error.code === 'INVALID_REPOSITORY' ||
+    error.code === 'INVALID_DIGEST'
+  ) {
+    return new BadRequestException(error.message);
+  }
+
+  return new BadGatewayException(error.message);
 }
