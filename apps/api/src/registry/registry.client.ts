@@ -1,6 +1,6 @@
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
 import { Inject, Injectable } from '@nestjs/common';
+import { RegistryEndpointPolicy } from './registry-endpoint.policy.js';
+import { RegistryRequestError } from './registry.errors.js';
 import {
   REGISTRY_CREDENTIAL_PROVIDER,
   type RegistryCredentialProvider,
@@ -17,28 +17,13 @@ const ACCEPT_MANIFESTS = [
 
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/i;
 
-export class RegistryRequestError extends Error {
-  constructor(
-    readonly code:
-      | 'INVALID_REPOSITORY'
-      | 'AUTHENTICATION_REQUIRED'
-      | 'ACCESS_DENIED'
-      | 'MANIFEST_NOT_FOUND'
-      | 'RATE_LIMITED'
-      | 'INVALID_DIGEST'
-      | 'REGISTRY_UNAVAILABLE',
-    message: string,
-  ) {
-    super(message);
-    this.name = 'RegistryRequestError';
-  }
-}
-
 @Injectable()
 export class RegistryClient {
   constructor(
     @Inject(REGISTRY_CREDENTIAL_PROVIDER)
     private readonly credentials: RegistryCredentialProvider,
+    @Inject(RegistryEndpointPolicy)
+    private readonly endpointPolicy: RegistryEndpointPolicy,
   ) {}
 
   async resolve(
@@ -46,7 +31,7 @@ export class RegistryClient {
     reference: string,
   ): Promise<ResolvedRegistryArtifact> {
     const repository = parseRepository(imageRepository);
-    await assertSafeEndpoint(new URL(repository.baseUrl));
+    await this.endpointPolicy.assertAllowed(new URL(repository.baseUrl));
     const manifestUrl =
       `${repository.baseUrl}/v2/${encodeRepositoryPath(repository.path)}/manifests/${encodeURIComponent(reference)}`;
 
@@ -155,7 +140,7 @@ export class RegistryClient {
       );
     }
 
-    await assertSafeEndpoint(url);
+    await this.endpointPolicy.assertAllowed(url);
 
     if (challenge.service) {
       url.searchParams.set('service', challenge.service);
@@ -368,96 +353,3 @@ function mapManifestFailure(response: Response): void {
 }
 
 
-const configuredPrivateHosts = new Set(
-  (process.env.DOCKLANE_REGISTRY_PRIVATE_HOSTS ?? '')
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean),
-);
-
-async function assertSafeEndpoint(url: URL): Promise<void> {
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new RegistryRequestError(
-      'INVALID_REPOSITORY',
-      'Registry endpoint must use HTTP or HTTPS',
-    );
-  }
-
-  const host = url.host.toLowerCase();
-  if (configuredPrivateHosts.has(host)) {
-    return;
-  }
-
-  if (url.protocol !== 'https:') {
-    throw new RegistryRequestError(
-      'INVALID_REPOSITORY',
-      'Public registry endpoints must use HTTPS',
-    );
-  }
-
-  const hostname = url.hostname.toLowerCase();
-  if (
-    hostname === 'localhost' ||
-    hostname.endsWith('.localhost') ||
-    hostname.endsWith('.local')
-  ) {
-    throw new RegistryRequestError(
-      'INVALID_REPOSITORY',
-      'Private registry hosts must be explicitly allowlisted',
-    );
-  }
-
-  let addresses: Array<{ address: string; family: number }>;
-  try {
-    addresses = await lookup(hostname, { all: true, verbatim: true });
-  } catch {
-    throw new RegistryRequestError(
-      'REGISTRY_UNAVAILABLE',
-      'Registry hostname could not be resolved',
-    );
-  }
-
-  if (
-    addresses.length === 0 ||
-    addresses.some(({ address }) => isPrivateAddress(address))
-  ) {
-    throw new RegistryRequestError(
-      'INVALID_REPOSITORY',
-      'Private registry hosts must be explicitly allowlisted',
-    );
-  }
-}
-
-function isPrivateAddress(address: string): boolean {
-  const family = isIP(address);
-  if (family === 4) {
-    const octets = address.split('.').map(Number);
-    const [a, b] = octets;
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224
-    );
-  }
-
-  if (family === 6) {
-    const value = address.toLowerCase();
-    return (
-      value === '::' ||
-      value === '::1' ||
-      value.startsWith('fe8') ||
-      value.startsWith('fe9') ||
-      value.startsWith('fea') ||
-      value.startsWith('feb') ||
-      value.startsWith('fc') ||
-      value.startsWith('fd') ||
-      value.startsWith('ff')
-    );
-  }
-
-  return true;
-}
