@@ -18,14 +18,19 @@ export const CreateDeploymentTargetRequestSchema = z.object({
   routingMode: z.literal('INGRESS').default('INGRESS'),
 });
 
-export const CreateReleaseRequestSchema = z.object({
-  version: IdentifierSchema,
-  imageRepository: z.string().trim().min(1).max(512),
-  imageTag: z.string().trim().min(1).max(255).nullable().optional(),
-  imageDigest: DigestSchema,
-  gitCommit: z.string().trim().min(1).max(128).nullable().optional(),
-  buildNumber: z.string().trim().min(1).max(128).nullable().optional(),
-});
+export const CreateReleaseRequestSchema = z
+  .object({
+    version: IdentifierSchema,
+    imageRepository: z.string().trim().min(1).max(512),
+    imageTag: z.string().trim().min(1).max(255).nullable().optional(),
+    imageDigest: DigestSchema.nullable().optional(),
+    gitCommit: z.string().trim().min(1).max(128).nullable().optional(),
+    buildNumber: z.string().trim().min(1).max(128).nullable().optional(),
+  })
+  .refine(
+    (value) => Boolean(value.imageTag || value.imageDigest),
+    'Either imageTag or imageDigest is required',
+  );
 
 export type CreateApplicationRequest = z.infer<
   typeof CreateApplicationRequestSchema
@@ -34,3 +39,10 @@ export type CreateDeploymentTargetRequest = z.infer<
   typeof CreateDeploymentTargetRequestSchema
 >;
 export type CreateReleaseRequest = z.infer<typeof CreateReleaseRequestSchema>;
+
+export type ResolvedReleaseRequest = Omit<
+  CreateReleaseRequest,
+  'imageDigest'
+> & {
+  imageDigest: string;
+};
