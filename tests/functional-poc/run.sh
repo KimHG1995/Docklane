@@ -109,7 +109,7 @@ done
 
 docker exec "$MYSQL_CONTAINER"   mysqladmin ping -uroot -pdocklane --silent >/dev/null 2>&1   || fail "MySQL did not become ready"
 
-log "building and pushing v1/v2 fixture images"
+log "building and pushing v1/v2/broken fixture images"
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v1   -t "$IMAGE_REPO:v1"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v1.log"
 
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v2   -t "$IMAGE_REPO:v2"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v2.log"
@@ -217,7 +217,7 @@ RELEASE_DIGEST="$(jq -er '.imageDigest' <<<"$RELEASE_JSON")"
 [[ "$RELEASE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]   || fail "Release did not persist a sha256 digest: $RELEASE_DIGEST"
 
 HEALTH_JSON='{
-  "url":"http://127.0.0.1:18080/",
+  "url":"http://127.0.0.1:18080/health",
   "intervalMs":100,
   "timeoutMs":1000,
   "retries":3,
