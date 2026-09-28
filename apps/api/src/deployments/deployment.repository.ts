@@ -159,7 +159,7 @@ export class DeploymentRepository implements OnModuleInit {
   ): Promise<void> {
     await connection.execute(
       `UPDATE deployments
-       SET status = 'VERIFYING', reason = NULL
+       SET status = 'VERIFYING', reason = NULL, finished_at = NULL
        WHERE id = ?`,
       [id],
     );
