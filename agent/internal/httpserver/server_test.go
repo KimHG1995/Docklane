@@ -206,6 +206,22 @@ func (fakeReader) PlanRestartService(
 	}, nil
 }
 
+func (fakeReader) PlanUpdateServiceImage(
+	context.Context,
+	string,
+	uint64,
+	string,
+) (model.ServiceMutationPlan, error) {
+	return model.ServiceMutationPlan{
+		ServiceID:         "service-1",
+		Version:           1,
+		BeforeSpecHash:    "before",
+		TargetSpecHash:    "target-image",
+		TargetForceUpdate: 0,
+		TargetImage:       "registry.example.com/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, nil
+}
+
 func (fakeReader) ScaleService(
 	context.Context,
 	string,
@@ -229,6 +245,19 @@ func (fakeReader) RestartService(
 		Version:           2,
 		TargetSpecHash:    "target",
 		TargetForceUpdate: 1,
+	}, nil
+}
+
+func (fakeReader) UpdateServiceImage(
+	context.Context,
+	string,
+	model.ServiceMutationRequest,
+) (model.ServiceMutationResponse, error) {
+	return model.ServiceMutationResponse{
+		ServiceID:         "service-1",
+		Version:           2,
+		TargetSpecHash:    "target-image",
+		TargetForceUpdate: 0,
 	}, nil
 }
 
@@ -350,6 +379,23 @@ func TestServicePlacementCheck(t *testing.T) {
 		http.MethodGet,
 		"/v1/services/service-1/placement-check",
 		nil,
+	)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}
+
+
+func TestPlanImageUpdate(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/services/service-1/plan-image-update",
+		strings.NewReader(`{"expectedVersion":1,"image":"registry.example.com/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
 	)
 	res := httptest.NewRecorder()
 
