@@ -52,3 +52,22 @@ func TestNodeMutationPlanSerializesEmptyAffectedServicesAsArray(t *testing.T) {
 		t.Fatalf("expected empty array, got %s", body)
 	}
 }
+
+
+func TestDigestPinnedImageValidation(t *testing.T) {
+	valid := "registry.example.com/team/api@sha256:" + strings.Repeat("a", 64)
+	if !isDigestPinnedImage(valid) {
+		t.Fatalf("expected valid digest-pinned image: %s", valid)
+	}
+
+	for _, invalid := range []string{
+		"registry.example.com/team/api:latest",
+		"registry.example.com/team/api@sha256:abc",
+		"registry.example.com/team/api@sha256:" + strings.Repeat("g", 64),
+		"registry.example.com/team/api@sha256:" + strings.Repeat("a", 64) + "-extra",
+	} {
+		if isDigestPinnedImage(invalid) {
+			t.Fatalf("expected invalid image reference to be rejected: %s", invalid)
+		}
+	}
+}
