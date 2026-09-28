@@ -134,11 +134,11 @@ func (r *Reader) PlanUpdateServiceImage(
 	}
 
 	return model.ServiceMutationPlan{
-		ServiceID:         service.ID,
-		Version:           service.Version.Index,
-		BeforeSpecHash:    beforeHash,
-		TargetSpecHash:    targetHash,
-		TargetForceUpdate: service.Spec.TaskTemplate.ForceUpdate,
+		ServiceID:          service.ID,
+		Version:            service.Version.Index,
+		BeforeSpecHash:     beforeHash,
+		TargetSpecHash:     targetHash,
+		TargetForceUpdate:  service.Spec.TaskTemplate.ForceUpdate,
 		TargetImage:        image,
 		TargetTaskSpecHash: targetTaskSpecHash,
 	}, nil
