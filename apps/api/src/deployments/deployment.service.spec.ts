@@ -1383,3 +1383,414 @@ test('deployment convergence requires placement after runtime fingerprint matche
     'SUCCESS',
   );
 });
+
+
+test('external spec with paused or rollback_completed stays protected as external conflict', () => {
+  for (const updateState of ['paused', 'rollback_completed'] as const) {
+    assert.equal(
+      classifyDeploymentSnapshot(
+        snapshot({
+          version: 20,
+          specHash: 'external-spec',
+          updateState,
+        }),
+        plan,
+        digest,
+        false,
+      ),
+      'EXTERNAL_CONFLICT',
+    );
+
+    assert.equal(
+      classifyDeploymentReconciliationSnapshot(
+        deploymentOperation,
+        snapshot({
+          version: 20,
+          specHash: 'external-spec',
+          updateState,
+        }),
+      ),
+      'EXTERNAL_CONFLICT',
+    );
+  }
+});
+
+test('no-op deploy accepts stale rollback_completed when target state already matches', () => {
+  assert.equal(
+    classifyDeploymentSnapshot(
+      snapshot({
+        version: 20,
+        specHash: 'target-spec',
+        updateState: 'rollback_completed',
+      }),
+      { ...plan, beforeSpecHash: 'target-spec' },
+      digest,
+      true,
+    ),
+    'SUCCESS',
+  );
+});
+
+test('legacy deploy and rollback intents safely backfill runtime fingerprint', async () => {
+  const legacyDeploy: OperationRecord = {
+    ...deploymentOperation,
+    id: 'legacy-deploy',
+    type: 'DEPLOY',
+    targetRuntimeSpecHash: null,
+  };
+  const legacyRollback: OperationRecord = {
+    ...deploymentOperation,
+    id: 'legacy-rollback',
+    type: 'ROLLBACK',
+    targetRuntimeSpecHash: null,
+  };
+
+  let inspectCalls = 0;
+  const backfilled: Array<{ id: string; hash: string }> = [];
+  const agent = {
+    inspectService: async () => {
+      inspectCalls += 1;
+      return snapshot({
+        specHash: 'target-spec',
+        runtimeSpecHash: 'legacy-runtime-spec',
+      });
+    },
+  };
+  const operations = {
+    backfillTargetRuntimeSpecHash: async (
+      _connection: unknown,
+      id: string,
+      hash: string,
+    ) => {
+      backfilled.push({ id, hash });
+    },
+  };
+  const service = new DeploymentService(
+    {} as never,
+    {} as never,
+    agent as never,
+    operations as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+
+  const compat = service as unknown as {
+    hydrateLegacyRuntimeFingerprint(
+      connection: unknown,
+      operation: OperationRecord,
+    ): Promise<OperationRecord | null>;
+  };
+
+  const deployResult = await compat.hydrateLegacyRuntimeFingerprint(
+    {},
+    legacyDeploy,
+  );
+  const rollbackResult = await compat.hydrateLegacyRuntimeFingerprint(
+    {},
+    legacyRollback,
+  );
+
+  assert.equal(inspectCalls, 2);
+  assert.equal(deployResult?.targetRuntimeSpecHash, 'legacy-runtime-spec');
+  assert.equal(rollbackResult?.targetRuntimeSpecHash, 'legacy-runtime-spec');
+  assert.deepEqual(backfilled, [
+    { id: 'legacy-deploy', hash: 'legacy-runtime-spec' },
+    { id: 'legacy-rollback', hash: 'legacy-runtime-spec' },
+  ]);
+});
+
+test('historical redeploy race reuses persisted provenance inside service lock', async () => {
+  const stored: DeploymentRecord = {
+    kind: 'HISTORICAL_REDEPLOY',
+    sourceDeploymentId: 'source-original',
+    id: 'redeploy-race-result',
+    releaseId: 'release-old',
+    previousReleaseId: 'release-new',
+    deploymentTargetId: 'target-1',
+    operationId: 'redeploy-race-op',
+    rollbackOperationId: null,
+    status: 'SUCCESS',
+    reason: null,
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {},
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+  const existingOperation: OperationRecord = {
+    ...deploymentOperation,
+    id: stored.operationId,
+    status: 'SUCCESS',
+  };
+  let poolFindCalls = 0;
+  let sourceLookups = 0;
+  let agentCalls = 0;
+
+  const releases = {
+    findDeploymentTarget: async () => ({
+      id: 'target-1',
+      applicationId: 'app-1',
+      clusterId: 'default',
+      environment: 'production',
+      dockerServiceId: 'service-1',
+      serviceName: 'api',
+      routingMode: 'INGRESS',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }),
+    findRelease: async () => ({
+      id: 'release-old',
+      applicationId: 'app-1',
+      version: '0.9.0',
+      imageRepository: 'registry.example.com/team/api',
+      imageTag: '0.9.0',
+      imageDigest: digest,
+      gitCommit: null,
+      buildNumber: null,
+      createdBy: 'operator-1',
+      createdAt: new Date(0).toISOString(),
+    }),
+  };
+  const deployments = {
+    findByOperation: async () => {
+      poolFindCalls += 1;
+      return null;
+    },
+    findByOperationWithConnection: async () => stored,
+    findLatestSuccessfulForReleaseWithConnection: async () => {
+      sourceLookups += 1;
+      return {
+        ...stored,
+        id: 'new-latest-source',
+      };
+    },
+  };
+  const operations = {
+    find: async () => null,
+    findWithConnection: async () => existingOperation,
+  };
+  const agent = {
+    inspectService: async () => {
+      agentCalls += 1;
+      throw new Error('terminal race retry must not inspect Agent');
+    },
+  };
+  const lock = {
+    withServiceLock: async (
+      _clusterId: string,
+      _serviceId: string,
+      fn: (connection: unknown) => Promise<unknown>,
+    ) => fn({}),
+  };
+  const service = new DeploymentService(
+    releases as never,
+    deployments as never,
+    agent as never,
+    operations as never,
+    {} as never,
+    lock as never,
+    {} as never,
+    {} as never,
+  );
+
+  const result = await service.historicalRedeploy(
+    'default',
+    'target-1',
+    {
+      operationId: stored.operationId,
+      releaseId: stored.releaseId,
+      health: stored.health,
+    },
+    {
+      actorId: 'operator-1',
+      role: 'OPERATOR',
+      clusters: ['default'],
+    },
+  );
+
+  assert.equal(result.id, stored.id);
+  assert.equal(result.sourceDeploymentId, 'source-original');
+  assert.equal(poolFindCalls, 1);
+  assert.equal(sourceLookups, 0);
+  assert.equal(agentCalls, 0);
+});
+
+test('terminal deploy retry returns persisted result before Agent lookup', async () => {
+  const stored: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
+    id: 'terminal-deploy',
+    releaseId: 'release-1',
+    previousReleaseId: null,
+    deploymentTargetId: 'target-1',
+    operationId: 'terminal-deploy-op',
+    rollbackOperationId: null,
+    status: 'SUCCESS',
+    reason: null,
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {},
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+  const operation: OperationRecord = {
+    ...deploymentOperation,
+    id: stored.operationId,
+    status: 'SUCCESS',
+  };
+  let agentCalls = 0;
+  const service = new DeploymentService(
+    {
+      findDeploymentTarget: async () => ({
+        id: 'target-1',
+        applicationId: 'app-1',
+        clusterId: 'default',
+        dockerServiceId: 'service-1',
+      }),
+      findRelease: async () => ({
+        id: 'release-1',
+        applicationId: 'app-1',
+      }),
+    } as never,
+    {
+      findByOperation: async () => stored,
+    } as never,
+    {
+      inspectService: async () => {
+        agentCalls += 1;
+        throw new Error('Agent unavailable');
+      },
+    } as never,
+    {
+      find: async () => operation,
+    } as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+
+  const result = await service.deploy(
+    'default',
+    'target-1',
+    {
+      operationId: stored.operationId,
+      releaseId: stored.releaseId,
+      health: stored.health,
+    },
+    {
+      actorId: 'operator-1',
+      role: 'OPERATOR',
+      clusters: ['default'],
+    },
+  );
+
+  assert.equal(result.id, stored.id);
+  assert.equal(agentCalls, 0);
+});
+
+test('terminal rollback retry returns persisted result before Agent lookup', async () => {
+  const stored: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
+    id: 'terminal-rollback',
+    releaseId: 'release-b',
+    previousReleaseId: 'release-a',
+    deploymentTargetId: 'target-1',
+    operationId: 'deploy-b',
+    rollbackOperationId: 'rollback-terminal-op',
+    status: 'ROLLED_BACK',
+    reason: null,
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {},
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+  const rollbackOperation: OperationRecord = {
+    ...deploymentOperation,
+    id: stored.rollbackOperationId!,
+    type: 'ROLLBACK',
+    status: 'SUCCESS',
+  };
+  let agentCalls = 0;
+  const service = new DeploymentService(
+    {
+      findDeploymentTarget: async () => ({
+        id: 'target-1',
+        applicationId: 'app-1',
+        clusterId: 'default',
+        dockerServiceId: 'service-1',
+      }),
+      findRelease: async () => ({
+        id: 'release-a',
+        applicationId: 'app-1',
+      }),
+    } as never,
+    {
+      find: async () => stored,
+    } as never,
+    {
+      inspectService: async () => {
+        agentCalls += 1;
+        throw new Error('Agent unavailable');
+      },
+    } as never,
+    {
+      find: async () => rollbackOperation,
+    } as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+
+  const result = await service.rollback(
+    'default',
+    stored.id,
+    { operationId: stored.rollbackOperationId! },
+    {
+      actorId: 'operator-1',
+      role: 'OPERATOR',
+      clusters: ['default'],
+    },
+  );
+
+  assert.equal(result.id, stored.id);
+  assert.equal(agentCalls, 0);
+});
