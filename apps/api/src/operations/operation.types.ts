@@ -1,4 +1,4 @@
-export type OperationType = 'SCALE' | 'RESTART' | 'DEPLOY';
+export type OperationType = 'SCALE' | 'RESTART' | 'DEPLOY' | 'ROLLBACK';
 export type OperationStatus =
   | 'PENDING'
   | 'RUNNING'
