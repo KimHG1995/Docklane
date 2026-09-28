@@ -51,6 +51,7 @@ export const ServiceSummarySchema = z.object({
   specHash: z.string().min(1),
   forceUpdate: z.number().int().nonnegative(),
   taskSpecHash: z.string().min(1).optional(),
+  runtimeSpecHash: z.string().min(1).optional(),
   image: z.string().optional(),
   mode: z.string(),
   desiredReplicas: z.number().int().nonnegative(),
@@ -65,6 +66,7 @@ export const TaskSummarySchema = z.object({
   id: z.string(),
   serviceId: z.string(),
   specHash: z.string().min(1),
+  runtimeSpecHash: z.string().min(1),
   slot: z.number().int(),
   nodeId: z.string().optional(),
   desiredState: z.string(),
@@ -91,11 +93,13 @@ export const ServiceMutationPlanSchema = z.object({
   targetReplicas: z.number().int().nonnegative().optional(),
   targetImage: z.string().optional(),
   targetTaskSpecHash: z.string().optional(),
+  targetRuntimeSpecHash: z.string().optional(),
 });
 
 export const ServiceImageMutationPlanSchema = ServiceMutationPlanSchema.extend({
   targetImage: z.string(),
   targetTaskSpecHash: z.string().min(1),
+  targetRuntimeSpecHash: z.string().min(1),
 });
 
 export const ServiceMutationResponseSchema = z.object({
