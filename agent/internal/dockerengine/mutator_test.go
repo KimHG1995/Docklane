@@ -53,7 +53,6 @@ func TestNodeMutationPlanSerializesEmptyAffectedServicesAsArray(t *testing.T) {
 	}
 }
 
-
 func TestDigestPinnedImageValidation(t *testing.T) {
 	valid := "registry.example.com/team/api@sha256:" + strings.Repeat("a", 64)
 	if !isDigestPinnedImage(valid) {
