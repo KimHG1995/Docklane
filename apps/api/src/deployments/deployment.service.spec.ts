@@ -409,13 +409,13 @@ test('rollback_paused is an explicit protected rollback state', () => {
   );
 });
 
-test('deployment reconciliation treats completed rollback as terminal failure', () => {
+test('deployment reconciliation observes target spec before interpreting completed rollback', () => {
   assert.equal(
     classifyDeploymentReconciliationSnapshot(
       deploymentOperation,
       snapshot({ updateState: 'rollback_completed' }),
     ),
-    'FAILED',
+    'TARGET_OBSERVED',
   );
 });
 
@@ -794,6 +794,7 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
   };
 
   const operations = {
+    find: async () => null,
     findWithConnection: async () => operation,
     findNonTerminalForServiceWithConnection: async () => null,
     create: async (_connection: unknown, input: {
@@ -941,7 +942,7 @@ test('historical redeploy requires a successful deployment of the release on the
     releases as never,
     deployments as never,
     {} as never,
-    {} as never,
+    { find: async () => null } as never,
     {} as never,
     {} as never,
     {} as never,
@@ -1150,6 +1151,7 @@ test('manual rollback rejects a service that no longer matches the failed deploy
   };
 
   const operations = {
+    find: async () => null,
     findWithConnection: async () => null,
     findNonTerminalForServiceWithConnection: async () => null,
   };
