@@ -11,6 +11,7 @@ import type {
 interface DeploymentRow extends RowDataPacket {
   id: string;
   release_id: string;
+  previous_release_id: string | null;
   deployment_target_id: string;
   operation_id: string;
   status: DeploymentStatus;
@@ -35,6 +36,7 @@ export class DeploymentRepository implements OnModuleInit {
       CREATE TABLE IF NOT EXISTS deployments (
         id VARCHAR(64) PRIMARY KEY,
         release_id VARCHAR(64) NOT NULL,
+        previous_release_id VARCHAR(64) NULL,
         deployment_target_id VARCHAR(64) NOT NULL,
         operation_id VARCHAR(64) NOT NULL,
         status VARCHAR(32) NOT NULL,
@@ -54,6 +56,9 @@ export class DeploymentRepository implements OnModuleInit {
         CONSTRAINT fk_deployments_release
           FOREIGN KEY (release_id) REFERENCES releases(id)
           ON DELETE RESTRICT,
+        CONSTRAINT fk_deployments_previous_release
+          FOREIGN KEY (previous_release_id) REFERENCES releases(id)
+          ON DELETE RESTRICT,
         CONSTRAINT fk_deployments_target
           FOREIGN KEY (deployment_target_id) REFERENCES deployment_targets(id)
           ON DELETE RESTRICT
@@ -65,6 +70,7 @@ export class DeploymentRepository implements OnModuleInit {
     connection: PoolConnection,
     input: {
       releaseId: string;
+      previousReleaseId: string | null;
       deploymentTargetId: string;
       operationId: string;
       status: DeploymentStatus;
@@ -80,14 +86,15 @@ export class DeploymentRepository implements OnModuleInit {
     await connection.execute(
       `INSERT INTO deployments
        (
-         id, release_id, deployment_target_id, operation_id, status,
+         id, release_id, previous_release_id, deployment_target_id, operation_id, status,
          no_op, before_spec, target_spec, health_json,
          expected_service_version, created_by
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         input.releaseId,
+        input.previousReleaseId,
         input.deploymentTargetId,
         input.operationId,
         input.status,
@@ -100,6 +107,21 @@ export class DeploymentRepository implements OnModuleInit {
       ],
     );
     return this.requireWithConnection(connection, id);
+  }
+
+  async latestSuccessfulReleaseId(
+    connection: PoolConnection,
+    targetId: string,
+  ): Promise<string | null> {
+    const [rows] = await connection.query<Array<RowDataPacket & { release_id: string }>>(
+      `SELECT release_id
+       FROM deployments
+       WHERE deployment_target_id = ? AND status = 'SUCCESS'
+       ORDER BY finished_at DESC, created_at DESC
+       LIMIT 1`,
+      [targetId],
+    );
+    return rows[0]?.release_id ?? null;
   }
 
   async listForTarget(targetId: string): Promise<DeploymentRecord[]> {
@@ -195,6 +217,7 @@ function mapDeployment(row: DeploymentRow): DeploymentRecord {
   return {
     id: row.id,
     releaseId: row.release_id,
+    previousReleaseId: row.previous_release_id,
     deploymentTargetId: row.deployment_target_id,
     operationId: row.operation_id,
     status: row.status,
