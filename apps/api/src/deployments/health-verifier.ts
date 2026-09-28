@@ -23,11 +23,7 @@ export class HealthVerifier {
     while (Date.now() < deadline) {
       let ok = false;
       try {
-        const response = await fetch(url, {
-          method: 'GET',
-          redirect: 'follow',
-          signal: AbortSignal.timeout(config.timeoutMs),
-        });
+        const response = await this.safeFetch(url, config.timeoutMs);
         ok = response.status === config.expectedStatus;
         await response.body?.cancel();
       } catch {
@@ -53,6 +49,36 @@ export class HealthVerifier {
     }
 
     throw new Error('Health endpoint did not remain stable for the required window');
+  }
+
+  private async safeFetch(
+    initial: URL,
+    timeoutMs: number,
+  ): Promise<Response> {
+    let current = new URL(initial);
+
+    for (let redirects = 0; redirects <= 5; redirects += 1) {
+      await this.endpointPolicy.assertAllowed(current);
+      const response = await fetch(current, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+      if (![301, 302, 303, 307, 308].includes(response.status)) {
+        return response;
+      }
+
+      const location = response.headers.get('location');
+      await response.body?.cancel();
+      if (!location) {
+        throw new Error('Health redirect did not include a Location header');
+      }
+
+      current = new URL(location, current);
+    }
+
+    throw new Error('Health endpoint exceeded the redirect limit');
   }
 }
 
