@@ -3,7 +3,9 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
+  type OnApplicationBootstrap,
 } from '@nestjs/common';
 import type { PoolConnection } from 'mysql2/promise';
 import {
@@ -31,9 +33,11 @@ import { HealthVerifier } from './health-verifier.js';
 
 const VERIFY_TIMEOUT_MS = 30_000;
 const VERIFY_INTERVAL_MS = 500;
+const RECONCILE_OBSERVATION_MS = 10_000;
 
 @Injectable()
-export class DeploymentService {
+export class DeploymentService implements OnApplicationBootstrap {
+  private readonly logger = new Logger(DeploymentService.name);
   constructor(
     @Inject(ReleaseRepository)
     private readonly releases: ReleaseRepository,
@@ -48,6 +52,57 @@ export class DeploymentService {
     @Inject(CapacityService) private readonly capacity: CapacityService,
     @Inject(HealthVerifier) private readonly health: HealthVerifier,
   ) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    const pending = (await this.operations.listNonTerminal()).filter(
+      (operation) =>
+        operation.type === 'DEPLOY' &&
+        operation.status !== 'NEEDS_ATTENTION',
+    );
+
+    for (const operation of pending) {
+      try {
+        await this.lock.withServiceLock(
+          operation.clusterId,
+          operation.serviceId,
+          async (connection) => {
+            const current = await this.operations.findWithConnection(
+              connection,
+              operation.id,
+            );
+            if (
+              !current ||
+              current.type !== 'DEPLOY' ||
+              current.status === 'SUCCESS' ||
+              current.status === 'FAILED' ||
+              current.status === 'NEEDS_ATTENTION'
+            ) {
+              return;
+            }
+
+            const deployment =
+              await this.deployments.findByOperationWithConnection(
+                connection,
+                current.id,
+              );
+            if (!deployment) {
+              this.logger.error(
+                `Deployment operation ${current.id} has no deployment record`,
+              );
+              return;
+            }
+
+            await this.reconcileLocked(connection, current, deployment);
+          },
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to reconcile deployment operation ${operation.id}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+  }
 
   async history(
     clusterId: string,
@@ -138,7 +193,19 @@ export class DeploymentService {
               'operationId was already used for a different deployment',
             );
           }
-          return deployment;
+
+          if (
+            existing.status === 'SUCCESS' ||
+            existing.status === 'FAILED'
+          ) {
+            return deployment;
+          }
+
+          return this.reconcileLocked(
+            connection,
+            existing,
+            deployment,
+          );
         }
 
         const prior =
@@ -255,15 +322,15 @@ export class DeploymentService {
             throw mapAgentError(error, 'Deployment mutation failed');
           }
 
-          await this.attention(
+          const operation = await this.requireOperation(
             connection,
-            deployment.id,
             input.operationId,
-            `Deployment mutation outcome is uncertain: ${errorMessage(error)}`,
           );
-          return this.deployments.requireWithConnection(
+          return this.reconcileLocked(
             connection,
-            deployment.id,
+            operation,
+            deployment,
+            errorMessage(error),
           );
         }
 
@@ -275,6 +342,7 @@ export class DeploymentService {
             connection,
             deployment.id,
             input.operationId,
+            'AGENT_RESPONSE_MISMATCH',
             'Agent response did not match deployment plan',
           );
           return this.deployments.requireWithConnection(
@@ -483,6 +551,7 @@ export class DeploymentService {
             connection,
             deploymentId,
             operationId,
+            'EXTERNAL_SERVICE_CONFLICT',
             'Current service spec diverged from the deployment target',
           );
           return this.deployments.requireWithConnection(connection, deploymentId);
@@ -494,16 +563,174 @@ export class DeploymentService {
       await sleep(VERIFY_INTERVAL_MS);
     }
 
-    await this.fail(
-      connection,
-      deploymentId,
-      operationId,
-      'DEPLOYMENT_TIMEOUT',
-      lastError
-        ? `Deployment verification timed out after Agent errors: ${lastError}`
-        : 'Deployment did not converge before timeout',
-    );
+    if (lastError) {
+      await this.attention(
+        connection,
+        deploymentId,
+        operationId,
+        'DEPLOYMENT_VERIFICATION_UNAVAILABLE',
+        `Deployment verification timed out after Agent errors: ${lastError}`,
+      );
+    } else {
+      await this.fail(
+        connection,
+        deploymentId,
+        operationId,
+        'DEPLOYMENT_TIMEOUT',
+        'Deployment did not converge before timeout',
+      );
+    }
     return this.deployments.requireWithConnection(connection, deploymentId);
+  }
+
+  private async reconcileLocked(
+    connection: PoolConnection,
+    operation: OperationRecord,
+    deployment: DeploymentRecord,
+    initialError?: string,
+  ): Promise<DeploymentRecord> {
+    if (
+      operation.type !== 'DEPLOY' ||
+      !operation.beforeSpecHash ||
+      !operation.targetSpecHash ||
+      !operation.targetImage
+    ) {
+      await this.attention(
+        connection,
+        deployment.id,
+        operation.id,
+        'DEPLOYMENT_MISSING_TARGET',
+        'Deployment intent is missing the persisted target needed for reconciliation',
+      );
+      return this.deployments.requireWithConnection(
+        connection,
+        deployment.id,
+      );
+    }
+
+    const digest = digestFromImage(operation.targetImage);
+    if (!digest) {
+      await this.attention(
+        connection,
+        deployment.id,
+        operation.id,
+        'DEPLOYMENT_INVALID_TARGET_IMAGE',
+        'Persisted deployment target image is not digest-pinned',
+      );
+      return this.deployments.requireWithConnection(
+        connection,
+        deployment.id,
+      );
+    }
+
+    const plan: ServiceMutationPlan = {
+      serviceId: operation.serviceId,
+      version: operation.expectedVersion,
+      beforeSpecHash: operation.beforeSpecHash,
+      targetSpecHash: operation.targetSpecHash,
+      targetForceUpdate: operation.targetForceUpdate,
+      targetReplicas: operation.targetReplicas ?? undefined,
+      targetImage: operation.targetImage,
+    };
+
+    const deadline = Date.now() + RECONCILE_OBSERVATION_MS;
+    let lastError = initialError ?? null;
+    let observedService = false;
+
+    while (Date.now() < deadline) {
+      let current: ServiceDetailResponse;
+      try {
+        current = await this.agentClient.inspectService(operation.serviceId);
+        observedService = true;
+        lastError = null;
+      } catch (error) {
+        lastError = errorMessage(error);
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+
+      const snapshot = classifyDeploymentReconciliationSnapshot(
+        operation,
+        current,
+      );
+
+      if (snapshot === 'FAILED') {
+        await this.fail(
+          connection,
+          deployment.id,
+          operation.id,
+          'CONVERGENCE_FAILED',
+          `Swarm update entered ${current.service.updateState}`,
+        );
+        return this.deployments.requireWithConnection(
+          connection,
+          deployment.id,
+        );
+      }
+
+      if (snapshot === 'TARGET_OBSERVED') {
+        if (
+          operation.status !== 'VERIFYING' ||
+          deployment.status !== 'VERIFYING'
+        ) {
+          await this.markVerifying(
+            connection,
+            deployment.id,
+            operation.id,
+            current.service.version,
+          );
+        }
+
+        return this.verifyAndComplete(
+          connection,
+          deployment.id,
+          operation.id,
+          plan,
+          digest,
+          deployment.noOp,
+          deployment.health,
+        );
+      }
+
+      if (snapshot === 'WAITING_FOR_MUTATION') {
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+
+      await this.attention(
+        connection,
+        deployment.id,
+        operation.id,
+        'EXTERNAL_SERVICE_CONFLICT',
+        'Service changed outside the recorded deployment target',
+      );
+      return this.deployments.requireWithConnection(
+        connection,
+        deployment.id,
+      );
+    }
+
+    if (!observedService && lastError) {
+      await this.attention(
+        connection,
+        deployment.id,
+        operation.id,
+        'DEPLOYMENT_RECONCILIATION_UNAVAILABLE',
+        `Unable to inspect deployment outcome: ${lastError}`,
+      );
+    } else {
+      await this.attention(
+        connection,
+        deployment.id,
+        operation.id,
+        'DEPLOYMENT_MUTATION_NOT_OBSERVED',
+        initialError
+          ? `Agent response was lost and the deployment target was not observed: ${initialError}`
+          : 'Persisted deployment intent exists but the target service spec was not observed',
+      );
+    }
+
+    return this.deployments.requireWithConnection(connection, deployment.id);
   }
 
   private async fail(
@@ -541,6 +768,7 @@ export class DeploymentService {
     connection: PoolConnection,
     deploymentId: string,
     operationId: string,
+    code: string,
     message: string,
   ): Promise<void> {
     await connection.beginTransaction();
@@ -548,7 +776,7 @@ export class DeploymentService {
       await this.operations.markNeedsAttention(
         connection,
         operationId,
-        'EXTERNAL_SERVICE_CONFLICT',
+        code,
         message,
       );
       await this.deployments.markNeedsAttention(
@@ -567,13 +795,27 @@ export class DeploymentService {
         clusterId: operation.clusterId,
         serviceId: operation.serviceId,
         action: 'DEPLOY_NEEDS_ATTENTION',
-        afterJson: { message },
+        afterJson: { code, message },
       });
       await connection.commit();
     } catch (error) {
       await connection.rollback();
       throw error;
     }
+  }
+
+  private async requireOperation(
+    connection: PoolConnection,
+    operationId: string,
+  ): Promise<OperationRecord> {
+    const operation = await this.operations.findWithConnection(
+      connection,
+      operationId,
+    );
+    if (!operation) {
+      throw new Error('Deployment operation disappeared after persistence');
+    }
+    return operation;
   }
 
   private assertIdempotent(
@@ -591,6 +833,42 @@ export class DeploymentService {
       );
     }
   }
+}
+
+export type DeploymentReconciliationDecision =
+  | 'TARGET_OBSERVED'
+  | 'WAITING_FOR_MUTATION'
+  | 'FAILED'
+  | 'EXTERNAL_CONFLICT';
+
+export function classifyDeploymentReconciliationSnapshot(
+  operation: OperationRecord,
+  current: ServiceDetailResponse,
+): DeploymentReconciliationDecision {
+  const updateState = current.service.updateState;
+  if (
+    updateState === 'paused' ||
+    updateState === 'rollback_started' ||
+    updateState === 'rollback_completed'
+  ) {
+    return 'FAILED';
+  }
+
+  if (current.service.specHash === operation.targetSpecHash) {
+    return 'TARGET_OBSERVED';
+  }
+
+  if (
+    current.service.version < operation.expectedVersion ||
+    (
+      current.service.version === operation.expectedVersion &&
+      current.service.specHash === operation.beforeSpecHash
+    )
+  ) {
+    return 'WAITING_FOR_MUTATION';
+  }
+
+  return 'EXTERNAL_CONFLICT';
 }
 
 type DeploymentDecision =
@@ -643,6 +921,11 @@ export function classifyDeploymentSnapshot(
 export function dockerImageReference(repository: string, digest: string): string {
   const withoutScheme = repository.replace(/^https?:\/\//i, '').replace(/\/$/, '');
   return `${withoutScheme}@${digest.toLowerCase()}`;
+}
+
+function digestFromImage(image: string): string | null {
+  const match = image.match(/@(sha256:[A-Fa-f0-9]{64})$/);
+  return match?.[1]?.toLowerCase() ?? null;
 }
 
 function imageContainsDigest(
