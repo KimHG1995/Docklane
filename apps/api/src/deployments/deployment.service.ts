@@ -189,7 +189,9 @@ export class DeploymentService
     if (!target || target.clusterId !== clusterId) {
       throw new NotFoundException('Deployment not found');
     }
-    if (deployment.status !== 'FAILED') {
+    const sameRollbackRequest =
+      deployment.rollbackOperationId === input.operationId;
+    if (!sameRollbackRequest && deployment.status !== 'FAILED') {
       throw new ConflictException(
         'Only FAILED deployments can be rolled back manually',
       );
