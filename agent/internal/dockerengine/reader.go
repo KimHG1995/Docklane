@@ -138,7 +138,7 @@ func (r *Reader) resolveNode(ctx context.Context, nodeRef string) (swarm.Node, e
 			return node, nil
 		}
 	}
-	return swarm.Node{}, fmt.Errorf("node %q not found", nodeRef)
+	return swarm.Node{}, &NotFoundError{Resource: "node", Ref: nodeRef}
 }
 
 func isTerminalTaskState(state swarm.TaskState) bool {
@@ -182,7 +182,10 @@ func (r *Reader) Service(ctx context.Context, serviceID string) (model.ServiceDe
 		}
 	}
 	if found == nil {
-		return model.ServiceDetailResponse{}, fmt.Errorf("service %q not found", serviceID)
+		return model.ServiceDetailResponse{}, &NotFoundError{
+			Resource: "service",
+			Ref:      serviceID,
+		}
 	}
 
 	tasks, err := r.ServiceTasks(ctx, found.ID)
