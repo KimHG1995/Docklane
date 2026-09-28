@@ -87,6 +87,11 @@ export interface AgentClient {
     image: string,
   ): Promise<ServiceImageMutationPlan>;
 
+  planRollbackService(
+    serviceId: string,
+    expectedVersion: number,
+  ): Promise<ServiceImageMutationPlan>;
+
   scaleService(
     serviceId: string,
     input: {
@@ -113,6 +118,15 @@ export interface AgentClient {
       expectedSpecHash: string;
       targetSpecHash: string;
       image: string;
+    },
+  ): Promise<ServiceMutationResponse>;
+
+  rollbackService(
+    serviceId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
     },
   ): Promise<ServiceMutationResponse>;
 }
