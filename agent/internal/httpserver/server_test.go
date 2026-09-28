@@ -462,7 +462,6 @@ func TestMissingServiceReturnsNotFound(t *testing.T) {
 	}
 }
 
-
 func TestPlanRollback(t *testing.T) {
 	s := New(config.Config{InsecureDev: true}, fakeReader{})
 	req := httptest.NewRequest(
