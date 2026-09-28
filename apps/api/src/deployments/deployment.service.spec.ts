@@ -9,6 +9,7 @@ import type { DeploymentRecord } from './deployment.types.js';
 import {
   classifyDeploymentReconciliationSnapshot,
   classifyDeploymentSnapshot,
+  classifyRollbackSnapshot,
   DeploymentService,
   dockerImageReference,
 } from './deployment.service.js';
@@ -173,6 +174,111 @@ test('deployment requires unique running slots and target TaskSpec identity', ()
   );
 });
 
+test('rollback convergence accepts the restored spec and task set', () => {
+  const rollbackDigest = `sha256:${'b'.repeat(64)}`;
+  const rollbackImage =
+    `registry.example.com/team/api@${rollbackDigest}`;
+  const rollbackPlan: ServiceMutationPlan = {
+    serviceId: 'service-1',
+    version: 12,
+    beforeSpecHash: 'failed-spec',
+    targetSpecHash: 'previous-spec',
+    targetForceUpdate: 0,
+    targetReplicas: 2,
+    targetImage: rollbackImage,
+    targetTaskSpecHash: 'previous-task-spec',
+  };
+  const current = snapshot(
+    {
+      version: 13,
+      specHash: 'previous-spec',
+      image: rollbackImage,
+      updateState: 'rollback_completed',
+    },
+    rollbackImage,
+  );
+  for (const task of current.tasks) {
+    task.specHash = 'previous-task-spec';
+  }
+
+  assert.equal(
+    classifyRollbackSnapshot(
+      current,
+      rollbackPlan,
+      rollbackDigest,
+    ),
+    'SUCCESS',
+  );
+});
+
+test('rollback convergence remains pending while rollback is running', () => {
+  const rollbackDigest = `sha256:${'b'.repeat(64)}`;
+  const rollbackImage =
+    `registry.example.com/team/api@${rollbackDigest}`;
+  const rollbackPlan: ServiceMutationPlan = {
+    serviceId: 'service-1',
+    version: 12,
+    beforeSpecHash: 'failed-spec',
+    targetSpecHash: 'previous-spec',
+    targetForceUpdate: 0,
+    targetReplicas: 2,
+    targetImage: rollbackImage,
+    targetTaskSpecHash: 'previous-task-spec',
+  };
+
+  assert.equal(
+    classifyRollbackSnapshot(
+      snapshot({
+        version: 13,
+        specHash: 'failed-spec',
+        image,
+        updateState: 'rollback_started',
+      }),
+      rollbackPlan,
+      rollbackDigest,
+    ),
+    'PENDING',
+  );
+});
+
+test('rollback convergence rejects desired-shutdown restored tasks', () => {
+  const rollbackDigest = `sha256:${'b'.repeat(64)}`;
+  const rollbackImage =
+    `registry.example.com/team/api@${rollbackDigest}`;
+  const rollbackPlan: ServiceMutationPlan = {
+    serviceId: 'service-1',
+    version: 12,
+    beforeSpecHash: 'failed-spec',
+    targetSpecHash: 'previous-spec',
+    targetForceUpdate: 0,
+    targetReplicas: 2,
+    targetImage: rollbackImage,
+    targetTaskSpecHash: 'previous-task-spec',
+  };
+  const current = snapshot(
+    {
+      version: 13,
+      specHash: 'previous-spec',
+      image: rollbackImage,
+      updateState: 'rollback_completed',
+    },
+    rollbackImage,
+  );
+  for (const task of current.tasks) {
+    task.specHash = 'previous-task-spec';
+  }
+  current.tasks[0]!.desiredState = 'shutdown';
+
+  assert.equal(
+    classifyRollbackSnapshot(
+      current,
+      rollbackPlan,
+      rollbackDigest,
+    ),
+    'PENDING',
+  );
+});
+
 test('Docker image reference strips registry URL scheme and pins digest', () => {
   assert.equal(
     dockerImageReference('https://registry.example.com/team/api/', digest),
@@ -265,6 +371,7 @@ test('deployment bootstrap reconciles target state without replaying mutation', 
     previousReleaseId: null,
     deploymentTargetId: 'target-1',
     operationId: operation.id,
+    rollbackOperationId: null,
     status: 'DEPLOYING',
     reason: null,
     noOp: false,
@@ -376,6 +483,7 @@ test('deployment does not persist SUCCESS when service changes during health sta
     previousReleaseId: null,
     deploymentTargetId: 'target-1',
     operationId: operation.id,
+    rollbackOperationId: null,
     status: 'VERIFYING',
     reason: null,
     noOp: false,
