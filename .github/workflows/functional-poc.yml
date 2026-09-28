@@ -1,0 +1,59 @@
+name: functional-poc
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: functional-poc
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install workspace dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Verify disposable Docker host
+        run: |
+          docker version
+          docker info
+          test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive"
+
+      - name: Run single-node Functional PoC smoke
+        env:
+          DOCKLANE_POC_LOG_DIR: ${{ runner.temp }}/docklane-poc
+        run: bash tests/functional-poc/run.sh
+
+      - name: Upload Functional PoC evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-functional-poc-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-poc
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup Functional PoC
+        if: always()
+        env:
+          DOCKLANE_POC_LOG_DIR: ${{ runner.temp }}/docklane-poc
+        run: bash tests/functional-poc/cleanup.sh
