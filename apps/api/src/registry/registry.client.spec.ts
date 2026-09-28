@@ -149,3 +149,62 @@ test('registry client rejects digest mismatch', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('registry redirect revalidates destination and strips cross-origin authorization', async () => {
+  const digest = `sha256:${'9'.repeat(64)}`;
+  const originalFetch = globalThis.fetch;
+  const seenAuth: Array<string | null> = [];
+  const checked: string[] = [];
+
+  globalThis.fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    seenAuth.push(new Headers(init?.headers).get('authorization'));
+    const url = String(input);
+
+    if (url.startsWith('https://registry.example.com/')) {
+      return new Response(null, {
+        status: 307,
+        headers: {
+          location: 'https://cdn.example.net/manifests/latest',
+        },
+      });
+    }
+
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'docker-content-digest': digest,
+      },
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new RegistryClient(
+      {
+        credentialsFor: () => ({
+          username: 'docklane',
+          password: 'secret',
+        }),
+      },
+      {
+        assertAllowed: async (url: URL) => {
+          checked.push(url.toString());
+        },
+      } as never,
+    );
+
+    const result = await client.resolve(
+      'registry.example.com/team/api',
+      'latest',
+    );
+
+    assert.equal(result.digest, digest);
+    assert.match(seenAuth[0] ?? '', /^Basic /);
+    assert.equal(seenAuth[1], null);
+    assert.ok(checked.some((url) => url.startsWith('https://cdn.example.net/')));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
