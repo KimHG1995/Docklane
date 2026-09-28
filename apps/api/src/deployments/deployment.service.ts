@@ -1652,7 +1652,12 @@ export class DeploymentService
   ): Promise<void> {
     await connection.beginTransaction();
     try {
-      await this.operations.markFailed(connection, operationId, code, message);
+      await this.operations.markNeedsAttention(
+        connection,
+        operationId,
+        code,
+        message,
+      );
       await this.deployments.markRollbackFailed(
         connection,
         deploymentId,
