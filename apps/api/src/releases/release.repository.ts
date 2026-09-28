@@ -187,6 +187,16 @@ export class ReleaseRepository implements OnModuleInit {
     });
   }
 
+  async findDeploymentTarget(
+    id: string,
+  ): Promise<DeploymentTargetRecord | null> {
+    const [rows] = await this.db.pool.query<DeploymentTargetRow[]>(
+      'SELECT * FROM deployment_targets WHERE id = ? LIMIT 1',
+      [id],
+    );
+    return rows[0] ? mapDeploymentTarget(rows[0]) : null;
+  }
+
   async listDeploymentTargets(
     applicationId: string,
     clusterId: string,
@@ -235,6 +245,14 @@ export class ReleaseRepository implements OnModuleInit {
       });
       return created;
     });
+  }
+
+  async findRelease(id: string): Promise<ReleaseRecord | null> {
+    const [rows] = await this.db.pool.query<ReleaseRow[]>(
+      'SELECT * FROM releases WHERE id = ? LIMIT 1',
+      [id],
+    );
+    return rows[0] ? mapRelease(rows[0]) : null;
   }
 
   async listReleases(applicationId: string): Promise<ReleaseRecord[]> {
