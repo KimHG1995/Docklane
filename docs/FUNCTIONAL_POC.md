@@ -45,6 +45,17 @@ GitHub runner
 - `noOp=true`
 - health 안정 구간 통과
 
+### Broken release + manual rollback
+
+1. health endpoint가 503을 반환하는 `vbroken` image를 registry에 push한다.
+2. Release를 생성하고 현재 v2 service에 배포한다.
+3. service image가 broken digest로 실제 변경됐는지 확인한다.
+4. application health 실패로 Deployment가 `FAILED`인지 확인한다.
+5. 해당 Deployment에 manual rollback을 요청한다.
+6. `ROLLED_BACK`을 확인한다.
+7. 실제 service image digest가 이전 v2 Release digest로 복구됐는지 확인한다.
+8. root response가 다시 `v2`, `/health`가 HTTP 200인지 확인한다.
+
 ### Authorization rejection
 
 VIEWER token으로 Application 생성 요청을 보내 HTTP 403을 확인한다.
@@ -75,7 +86,12 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `release.json`
 - `deploy.json`
 - `noop-deploy.json`
+- `broken-release.json`
+- `broken-deploy.json`
+- `rollback.json`
 - `service-after-deploy.json`
+- `service-after-broken-deploy.json`
+- `service-after-rollback.json`
 - `audit-actions.txt`
 - Docker build/push/swarm 생성 로그
 
@@ -102,7 +118,7 @@ bash tests/functional-poc/cleanup.sh
 ## 아직 수동/후속 검증인 v0.6 항목
 
 - 3-node manager-01 / worker-01 / worker-02 topology
-- broken release + automatic/manual rollback
+- broken release + automatic rollback
 - external CLI conflict
 - API restart during update
 - Agent response loss
