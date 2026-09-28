@@ -17,6 +17,10 @@ func nodeSpecHash(spec swarm.NodeSpec) (string, error) {
 	return specHash("node", spec)
 }
 
+func taskSpecHash(spec swarm.TaskSpec) (string, error) {
+	return specHash("task", spec)
+}
+
 func specHash(kind string, spec any) (string, error) {
 	payload, err := json.Marshal(spec)
 	if err != nil {
