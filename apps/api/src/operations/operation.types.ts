@@ -21,6 +21,7 @@ export interface OperationRecord {
   targetReplicas: number | null;
   targetImage?: string | null;
   targetTaskSpecHash?: string | null;
+  targetRuntimeSpecHash?: string | null;
   resultVersion: number | null;
   errorCode: string | null;
   errorMessage: string | null;
