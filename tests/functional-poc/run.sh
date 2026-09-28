@@ -277,6 +277,18 @@ BROKEN_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
 printf '%s\n' "$BROKEN_SERVICE_JSON" >"$LOG_DIR/service-after-broken-deploy.json"
 jq -e --arg digest "$BROKEN_DIGEST"   '.service.image | contains("@" + $digest)'   <<<"$BROKEN_SERVICE_JSON" >/dev/null   || fail "broken service was not updated to the broken release digest"
 
+log "scenario: manual rollback recovery"
+ROLLBACK_JSON="$(api_post   "/v1/clusters/default/deployments/$BROKEN_DEPLOYMENT_ID/rollback"   '{"operationId":"functional-poc-rollback-broken"}')"
+printf '%s\n' "$ROLLBACK_JSON" >"$LOG_DIR/rollback.json"
+jq -e '.status == "ROLLED_BACK"' <<<"$ROLLBACK_JSON" >/dev/null   || fail "manual rollback did not finish ROLLED_BACK"
+
+wait_for_body "$HEALTH_URL" "v2"
+wait_http "$HEALTH_URL/health" 200 60
+
+ROLLED_BACK_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
+printf '%s\n' "$ROLLED_BACK_SERVICE_JSON" >"$LOG_DIR/service-after-rollback.json"
+jq -e --arg digest "$RELEASE_DIGEST"   '.service.image | contains("@" + $digest)'   <<<"$ROLLED_BACK_SERVICE_JSON" >/dev/null   || fail "rollback did not restore the previous release digest"
+
 log "scenario: audit completeness"
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
 
