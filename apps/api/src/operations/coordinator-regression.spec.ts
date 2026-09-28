@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { AgentRequestError } from '../agent/agent-client.js';
 import { MutationService } from './mutation.service.js';
 import { NodeMutationService } from './node-mutation.service.js';
 import type { NodeOperationRecord, OperationRecord } from './operation.types.js';
@@ -394,4 +395,94 @@ test('node label convergence waits for placement convergence', async () => {
     await verifier.affectedServicesConverged(['service-1']),
     true,
   );
+});
+
+
+test('idempotent node label retry survives a stale pre-plan race', async () => {
+  const operation: NodeOperationRecord = {
+    id: '00000000-0000-4000-8000-000000000040',
+    clusterId: 'default',
+    nodeId: 'node-1',
+    type: 'LABELS',
+    status: 'SUCCESS',
+    actorId: 'tester',
+    expectedVersion: 5,
+    beforeSpecHash: 'node-before',
+    targetSpecHash: 'node-after',
+    targetAvailability: 'active',
+    affectedServiceIds: ['service-1'],
+    targetLabels: { zone: 'b' },
+    labelPatch: { set: { zone: 'b' }, remove: [] },
+    resultVersion: 6,
+    errorCode: null,
+    errorMessage: null,
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  };
+
+  let findCalls = 0;
+  const agent = {
+    inspectNode: async () => ({
+      node: {
+        id: 'node-1',
+        version: 6,
+        specHash: 'node-after',
+        hostname: 'worker-1',
+        address: '10.0.0.1',
+        role: 'worker',
+        availability: 'active',
+        state: 'ready',
+        manager: false,
+        leader: false,
+        nanoCpus: 1,
+        memoryBytes: 1,
+        labels: { zone: 'b' },
+      },
+      tasks: [],
+      serviceIds: [],
+    }),
+    planNodeLabels: async () => {
+      throw new AgentRequestError(409, 'stale');
+    },
+  };
+  const nodeOperations = {
+    listNonTerminal: async () => [],
+    find: async () => {
+      findCalls += 1;
+      return findCalls === 1 ? null : operation;
+    },
+    findNonTerminalForNode: async () => null,
+    findWithConnection: async () => operation,
+  };
+  const lock = {
+    withNodeAndServiceLocks: async (
+      _clusterId: string,
+      _nodeId: string,
+      _serviceIds: string[],
+      fn: (connection: unknown) => Promise<unknown>,
+    ) => fn({}),
+  };
+
+  const service = new NodeMutationService(
+    agent as never,
+    nodeOperations as never,
+    {} as never,
+    lock as never,
+  );
+
+  const result = await service.labels(
+    'default',
+    'node-1',
+    {
+      operationId: operation.id,
+      expectedVersion: 5,
+      set: { zone: 'b' },
+      remove: [],
+    },
+    principal,
+  );
+
+  assert.equal(result.status, 'SUCCESS');
+  assert.equal(result.id, operation.id);
+  assert.equal(findCalls, 2);
 });
