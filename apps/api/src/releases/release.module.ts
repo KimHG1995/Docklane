@@ -11,5 +11,6 @@ import { ReleaseService } from './release.service.js';
   imports: [DbModule, AgentModule, RegistryModule, AuditModule],
   controllers: [ReleaseController],
   providers: [ReleaseRepository, ReleaseService],
+  exports: [ReleaseRepository],
 })
 export class ReleaseModule {}
