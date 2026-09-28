@@ -14,6 +14,7 @@ interface DeploymentRow extends RowDataPacket {
   previous_release_id: string | null;
   deployment_target_id: string;
   operation_id: string;
+  rollback_operation_id: string | null;
   status: DeploymentStatus;
   reason: string | null;
   no_op: number;
@@ -39,6 +40,7 @@ export class DeploymentRepository implements OnModuleInit {
         previous_release_id VARCHAR(64) NULL,
         deployment_target_id VARCHAR(64) NOT NULL,
         operation_id VARCHAR(64) NOT NULL,
+        rollback_operation_id VARCHAR(64) NULL,
         status VARCHAR(32) NOT NULL,
         reason TEXT NULL,
         no_op BOOLEAN NOT NULL DEFAULT FALSE,
@@ -51,6 +53,7 @@ export class DeploymentRepository implements OnModuleInit {
         created_by VARCHAR(128) NOT NULL,
         created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
         UNIQUE KEY uq_deployments_operation (operation_id),
+        UNIQUE KEY uq_deployments_rollback_operation (rollback_operation_id),
         INDEX idx_deployments_target_created (deployment_target_id, created_at),
         INDEX idx_deployments_status (status, created_at),
         CONSTRAINT fk_deployments_release
@@ -64,6 +67,11 @@ export class DeploymentRepository implements OnModuleInit {
           ON DELETE RESTRICT
       ) ENGINE=InnoDB
     `);
+
+    await this.ensureColumn(
+      'rollback_operation_id',
+      'VARCHAR(64) NULL',
+    );
   }
 
   async create(
@@ -142,6 +150,17 @@ export class DeploymentRepository implements OnModuleInit {
     return rows[0] ? mapDeployment(rows[0]) : null;
   }
 
+  async findByRollbackOperationWithConnection(
+    connection: PoolConnection,
+    operationId: string,
+  ): Promise<DeploymentRecord | null> {
+    const [rows] = await connection.query<DeploymentRow[]>(
+      'SELECT * FROM deployments WHERE rollback_operation_id = ? LIMIT 1',
+      [operationId],
+    );
+    return rows[0] ? mapDeployment(rows[0]) : null;
+  }
+
   async findByOperationWithConnection(
     connection: PoolConnection,
     operationId: string,
@@ -151,6 +170,65 @@ export class DeploymentRepository implements OnModuleInit {
       [operationId],
     );
     return rows[0] ? mapDeployment(rows[0]) : null;
+  }
+
+  async markRollingBack(
+    connection: PoolConnection,
+    id: string,
+    rollbackOperationId: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE deployments
+       SET status = 'ROLLING_BACK',
+           rollback_operation_id = ?,
+           reason = NULL,
+           finished_at = NULL
+       WHERE id = ?`,
+      [rollbackOperationId, id],
+    );
+  }
+
+  async markRollbackVerifying(
+    connection: PoolConnection,
+    id: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE deployments
+       SET status = 'ROLLBACK_VERIFYING',
+           reason = NULL,
+           finished_at = NULL
+       WHERE id = ?`,
+      [id],
+    );
+  }
+
+  async markRolledBack(
+    connection: PoolConnection,
+    id: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE deployments
+       SET status = 'ROLLED_BACK',
+           reason = NULL,
+           finished_at = CURRENT_TIMESTAMP(6)
+       WHERE id = ?`,
+      [id],
+    );
+  }
+
+  async markRollbackFailed(
+    connection: PoolConnection,
+    id: string,
+    reason: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE deployments
+       SET status = 'ROLLBACK_FAILED',
+           reason = ?,
+           finished_at = CURRENT_TIMESTAMP(6)
+       WHERE id = ?`,
+      [reason, id],
+    );
   }
 
   async markVerifying(
@@ -213,6 +291,30 @@ export class DeploymentRepository implements OnModuleInit {
     );
   }
 
+  private async ensureColumn(
+    columnName: string,
+    definition: string,
+  ): Promise<void> {
+    const [rows] = await this.db.pool.query<
+      Array<RowDataPacket & { count: number }>
+    >(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE()
+         AND table_name = 'deployments'
+         AND column_name = ?`,
+      [columnName],
+    );
+    if ((rows[0]?.count ?? 0) > 0) return;
+
+    if (!/^[a-z_]+$/.test(columnName)) {
+      throw new Error('Unsafe deployment column name');
+    }
+    await this.db.pool.query(
+      `ALTER TABLE deployments ADD COLUMN ${columnName} ${definition}`,
+    );
+  }
+
   async requireWithConnection(
     connection: PoolConnection,
     id: string,
@@ -233,6 +335,7 @@ function mapDeployment(row: DeploymentRow): DeploymentRecord {
     previousReleaseId: row.previous_release_id,
     deploymentTargetId: row.deployment_target_id,
     operationId: row.operation_id,
+    rollbackOperationId: row.rollback_operation_id,
     status: row.status,
     reason: row.reason,
     noOp: Boolean(row.no_op),
