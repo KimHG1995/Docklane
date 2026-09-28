@@ -49,6 +49,7 @@ type ServiceSummary struct {
 	Version         uint64    `json:"version"`
 	SpecHash        string    `json:"specHash"`
 	ForceUpdate     uint64    `json:"forceUpdate"`
+	TaskSpecHash    string    `json:"taskSpecHash,omitempty"`
 	Image           string    `json:"image,omitempty"`
 	Mode            string    `json:"mode"`
 	DesiredReplicas uint64    `json:"desiredReplicas"`
