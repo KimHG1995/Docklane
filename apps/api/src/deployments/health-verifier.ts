@@ -9,7 +9,10 @@ export class HealthVerifier {
     private readonly endpointPolicy: HealthEndpointPolicy,
   ) {}
 
-  async verify(config: HealthCheckConfig): Promise<void> {
+  async verify(
+    config: HealthCheckConfig,
+    assertConverged?: () => Promise<void>,
+  ): Promise<void> {
     const url = new URL(config.url);
     await this.endpointPolicy.assertAllowed(url);
 
@@ -21,6 +24,7 @@ export class HealthVerifier {
     let failures = 0;
 
     while (Date.now() < deadline) {
+      await assertConverged?.();
       let ok = false;
       try {
         const response = await this.safeFetch(url, config.timeoutMs);
@@ -31,8 +35,10 @@ export class HealthVerifier {
       }
 
       if (ok) {
+        await assertConverged?.();
         stableSince ??= Date.now();
         if (Date.now() - stableSince >= config.stabilityWindowMs) {
+          await assertConverged?.();
           return;
         }
       } else {
