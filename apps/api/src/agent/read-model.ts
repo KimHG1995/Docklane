@@ -90,6 +90,10 @@ export const ServiceMutationPlanSchema = z.object({
   targetImage: z.string().optional(),
 });
 
+export const ServiceImageMutationPlanSchema = ServiceMutationPlanSchema.extend({
+  targetImage: z.string(),
+});
+
 export const ServiceMutationResponseSchema = z.object({
   serviceId: z.string(),
   version: z.number().int().nonnegative(),
@@ -104,6 +108,9 @@ export type ServiceSummary = z.infer<typeof ServiceSummarySchema>;
 export type TaskSummary = z.infer<typeof TaskSummarySchema>;
 export type ServiceDetailResponse = z.infer<typeof ServiceDetailResponseSchema>;
 export type ServiceMutationPlan = z.infer<typeof ServiceMutationPlanSchema>;
+export type ServiceImageMutationPlan = z.infer<
+  typeof ServiceImageMutationPlanSchema
+>;
 export type ServiceMutationResponse = z.infer<typeof ServiceMutationResponseSchema>;
 
 
