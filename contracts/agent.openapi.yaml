@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.9.0
+  version: 0.10.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -332,6 +332,52 @@ paths:
           description: Image is not digest-pinned or service mode is unsupported.
         '409':
           description: Version, spec, or target precondition failed.
+
+  /v1/services/{serviceId}/plan-rollback:
+    post:
+      operationId: planRollbackService
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestartPlanRequest'
+      responses:
+        '200':
+          description: Deterministic previous service spec selected by Swarm.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationPlan'
+        '400':
+          description: Service has no supported previous spec.
+        '409':
+          description: Expected service version is stale.
+
+  /v1/services/{serviceId}/rollback:
+    post:
+      operationId: rollbackService
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestartMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted native rollback to the planned previous spec.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationResponse'
+        '400':
+          description: Service has no supported previous spec.
+        '409':
+          description: Version, current spec, or previous spec precondition failed.
 
   /v1/services/{serviceId}/scale:
     post:
