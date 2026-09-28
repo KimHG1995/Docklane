@@ -208,3 +208,69 @@ test('registry redirect revalidates destination and strips cross-origin authoriz
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test('registry retries bearer auth at the redirected challenge origin', async () => {
+  const digest = `sha256:${'7'.repeat(64)}`;
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; authorization: string | null }> = [];
+
+  globalThis.fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = String(input);
+    const authorization = new Headers(init?.headers).get('authorization');
+    calls.push({ url, authorization });
+
+    if (calls.length === 1) {
+      return new Response(null, {
+        status: 307,
+        headers: {
+          location:
+            'https://backend.example.net/v2/team/api/manifests/latest',
+        },
+      });
+    }
+
+    if (calls.length === 2) {
+      return new Response(null, {
+        status: 401,
+        headers: {
+          'www-authenticate':
+            'Bearer realm="https://auth.backend.example.net/token",service="backend.example.net",scope="repository:team/api:pull"',
+        },
+      });
+    }
+
+    if (calls.length === 3) {
+      return Response.json({ token: 'redirect-token' });
+    }
+
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'docker-content-digest': digest,
+      },
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new RegistryClient(
+      { credentialsFor: () => null },
+      { assertAllowed: async () => undefined } as never,
+    );
+
+    const result = await client.resolve(
+      'registry.example.com/team/api',
+      'latest',
+    );
+
+    assert.equal(result.digest, digest);
+    assert.equal(calls.length, 4);
+    assert.match(calls[3]!.url, /^https:\/\/backend\.example\.net\//);
+    assert.equal(calls[3]!.authorization, 'Bearer redirect-token');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
