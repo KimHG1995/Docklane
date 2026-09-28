@@ -13,10 +13,14 @@ import { RequireRole } from '../auth/auth.decorators.js';
 import type { AuthenticatedRequest, Principal } from '../auth/auth.types.js';
 import {
   DeployRequestSchema,
+  HistoricalRedeployRequestSchema,
   RollbackRequestSchema,
 } from './deployment.dto.js';
 import { DeploymentService } from './deployment.service.js';
-import type { DeploymentRecord } from './deployment.types.js';
+import type {
+  DeploymentRecord,
+  DeploymentStatusView,
+} from './deployment.types.js';
 
 @Controller('v1/clusters/:clusterId')
 export class DeploymentController {
@@ -32,6 +36,29 @@ export class DeploymentController {
     @Param('targetId') targetId: string,
   ): Promise<DeploymentRecord[]> {
     return this.deployments.history(clusterId, targetId);
+  }
+
+  @Post('targets/:targetId/historical-redeploy')
+  @HttpCode(200)
+  @RequireRole('OPERATOR')
+  historicalRedeploy(
+    @Param('clusterId') clusterId: string,
+    @Param('targetId') targetId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<DeploymentRecord> {
+    let input;
+    try {
+      input = HistoricalRedeployRequestSchema.parse(body);
+    } catch {
+      throw new BadRequestException('Invalid historical redeploy request');
+    }
+    return this.deployments.historicalRedeploy(
+      clusterId,
+      targetId,
+      input,
+      principal(request),
+    );
   }
 
   @Post('targets/:targetId/deploy')
@@ -78,6 +105,15 @@ export class DeploymentController {
       input,
       principal(request),
     );
+  }
+
+  @Get('deployments/:deploymentId/status')
+  @RequireRole('VIEWER')
+  status(
+    @Param('clusterId') clusterId: string,
+    @Param('deploymentId') deploymentId: string,
+  ): Promise<DeploymentStatusView> {
+    return this.deployments.status(clusterId, deploymentId);
   }
 
   @Get('deployments/:deploymentId')
