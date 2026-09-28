@@ -935,16 +935,26 @@ test('historical redeploy requires a successful deployment of the release on the
   };
   const deployments = {
     findByOperation: async () => null,
-    findLatestSuccessfulForRelease: async () => null,
+    findLatestSuccessfulForReleaseWithConnection: async () => null,
+  };
+  const lock = {
+    withServiceLock: async (
+      _clusterId: string,
+      _serviceId: string,
+      fn: (connection: unknown) => Promise<unknown>,
+    ) => fn({}),
   };
 
   const service = new DeploymentService(
     releases as never,
     deployments as never,
     {} as never,
-    { find: async () => null } as never,
+    {
+      find: async () => null,
+      findWithConnection: async () => null,
+    } as never,
     {} as never,
-    {} as never,
+    lock as never,
     {} as never,
     {} as never,
   );
@@ -1625,7 +1635,7 @@ test('historical redeploy race reuses persisted provenance inside service lock',
 
   assert.equal(result.id, stored.id);
   assert.equal(result.sourceDeploymentId, 'source-original');
-  assert.equal(poolFindCalls, 1);
+  assert.equal(poolFindCalls, 0);
   assert.equal(sourceLookups, 0);
   assert.equal(agentCalls, 0);
 });
