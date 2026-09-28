@@ -19,7 +19,7 @@ export interface OperationRecord {
   targetSpecHash: string;
   targetForceUpdate: number;
   targetReplicas: number | null;
-  targetImage: string | null;
+  targetImage?: string | null;
   resultVersion: number | null;
   errorCode: string | null;
   errorMessage: string | null;
