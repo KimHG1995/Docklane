@@ -315,11 +315,11 @@ func toTaskSummary(task swarm.Task) model.TaskSummary {
 	}
 
 	return model.TaskSummary{
-		ID:           task.ID,
-		ServiceID:    task.ServiceID,
+		ID:              task.ID,
+		ServiceID:       task.ServiceID,
 		SpecHash:        specHash,
 		RuntimeSpecHash: runtimeSpecHash,
-		Slot:         task.Slot,
+		Slot:            task.Slot,
 		NodeID:       task.NodeID,
 		DesiredState: string(task.DesiredState),
 		State:        string(task.Status.State),
