@@ -3,6 +3,7 @@ package dockerengine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
 
@@ -143,4 +144,62 @@ func mapServiceUpdateError(action, serviceID string, err error) error {
 	}
 
 	return fmt.Errorf("%s service %q: %w", action, serviceID, err)
+}
+
+
+func (r *Reader) UpdateServiceImage(
+	ctx context.Context,
+	serviceID string,
+	input model.ServiceMutationRequest,
+) (model.ServiceMutationResponse, error) {
+	result, err := r.client.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
+	if err != nil {
+		return model.ServiceMutationResponse{}, fmt.Errorf("inspect service %q: %w", serviceID, err)
+	}
+	service := result.Service
+	if err := validateMutationPrecondition(service, input); err != nil {
+		return model.ServiceMutationResponse{}, err
+	}
+	if input.Image == nil || !strings.Contains(*input.Image, "@sha256:") {
+		return model.ServiceMutationResponse{}, &ValidationError{
+			Message: "deployment image must be pinned by sha256 digest",
+		}
+	}
+	if service.Spec.Mode.Replicated == nil || service.Spec.TaskTemplate.ContainerSpec == nil {
+		return model.ServiceMutationResponse{}, &ValidationError{
+			Message: fmt.Sprintf("service %q is not a supported replicated container service", serviceID),
+		}
+	}
+
+	service.Spec.TaskTemplate.ContainerSpec.Image = *input.Image
+	targetHash, err := serviceSpecHash(service.Spec)
+	if err != nil {
+		return model.ServiceMutationResponse{}, err
+	}
+	if targetHash != input.TargetSpecHash {
+		return model.ServiceMutationResponse{}, &ConflictError{
+			Message: "target service spec changed after deployment planning",
+		}
+	}
+
+	update, err := r.client.ServiceUpdate(ctx, service.ID, client.ServiceUpdateOptions{
+		Version: swarm.Version{Index: input.ExpectedVersion},
+		Spec:    service.Spec,
+	})
+	if err != nil {
+		return model.ServiceMutationResponse{}, mapServiceUpdateError("update image", serviceID, err)
+	}
+
+	after, err := r.client.ServiceInspect(ctx, service.ID, client.ServiceInspectOptions{})
+	if err != nil {
+		return model.ServiceMutationResponse{}, fmt.Errorf("inspect updated service %q: %w", serviceID, err)
+	}
+
+	return model.ServiceMutationResponse{
+		ServiceID:         service.ID,
+		Version:           after.Service.Version.Index,
+		TargetSpecHash:    targetHash,
+		TargetForceUpdate: service.Spec.TaskTemplate.ForceUpdate,
+		Warnings:          update.Warnings,
+	}, nil
 }
