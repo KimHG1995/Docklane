@@ -640,6 +640,7 @@ components:
         version: { type: integer, minimum: 0 }
         specHash: { type: string, minLength: 1 }
         forceUpdate: { type: integer, minimum: 0 }
+        taskSpecHash: { type: string, minLength: 1 }
         image: { type: string }
         mode: { type: string }
         desiredReplicas: { type: integer, minimum: 0 }
