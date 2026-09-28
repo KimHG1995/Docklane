@@ -145,7 +145,6 @@ func mapServiceUpdateError(action, serviceID string, err error) error {
 	return fmt.Errorf("%s service %q: %w", action, serviceID, err)
 }
 
-
 func (r *Reader) UpdateServiceImage(
 	ctx context.Context,
 	serviceID string,
