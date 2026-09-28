@@ -89,7 +89,6 @@ func (r *Reader) PlanRestartService(
 	}, nil
 }
 
-
 func (r *Reader) PlanUpdateServiceImage(
 	ctx context.Context,
 	serviceID string,
