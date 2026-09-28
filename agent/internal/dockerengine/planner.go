@@ -3,7 +3,6 @@ package dockerengine
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/KimHG1995/Docklane/agent/internal/model"
 	"github.com/moby/moby/client"
@@ -97,7 +96,7 @@ func (r *Reader) PlanUpdateServiceImage(
 	expectedVersion uint64,
 	image string,
 ) (model.ServiceMutationPlan, error) {
-	if !strings.Contains(image, "@sha256:") {
+	if !isDigestPinnedImage(image) {
 		return model.ServiceMutationPlan{}, &ValidationError{
 			Message: "deployment image must be pinned by sha256 digest",
 		}
