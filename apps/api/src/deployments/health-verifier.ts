@@ -9,10 +9,14 @@ export class HealthVerifier {
       throw new Error('Health URL must not contain credentials');
     }
 
-    const stableUntil = Date.now() + config.stabilityWindowMs;
+    const deadline =
+      Date.now() +
+      config.stabilityWindowMs +
+      (config.retries + 1) * (config.timeoutMs + config.intervalMs);
+    let stableSince: number | null = null;
     let failures = 0;
 
-    while (Date.now() < stableUntil) {
+    while (Date.now() < deadline) {
       let ok = false;
       try {
         const response = await fetch(url, {
@@ -26,21 +30,25 @@ export class HealthVerifier {
         ok = false;
       }
 
-      if (!ok) {
+      if (ok) {
+        stableSince ??= Date.now();
+        if (Date.now() - stableSince >= config.stabilityWindowMs) {
+          return;
+        }
+      } else {
+        stableSince = null;
         failures += 1;
         if (failures > config.retries) {
           throw new Error(
             `Health verification failed after ${failures} unsuccessful checks`,
           );
         }
-      } else {
-        failures = 0;
       }
 
-      if (Date.now() < stableUntil) {
-        await sleep(config.intervalMs);
-      }
+      await sleep(config.intervalMs);
     }
+
+    throw new Error('Health endpoint did not remain stable for the required window');
   }
 }
 
