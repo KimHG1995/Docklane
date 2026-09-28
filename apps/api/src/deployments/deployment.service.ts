@@ -90,9 +90,14 @@ export class DeploymentService {
       throw new NotFoundException('Release not found for deployment target');
     }
 
-    const resolved = await this.agentClient.inspectService(
-      target.dockerServiceId,
-    );
+    let resolved: ServiceDetailResponse;
+    try {
+      resolved = await this.agentClient.inspectService(
+        target.dockerServiceId,
+      );
+    } catch (error) {
+      throw mapAgentError(error, 'Deployment target lookup failed');
+    }
     if (
       resolved.service.id !== target.dockerServiceId ||
       resolved.service.mode !== 'replicated'
@@ -120,6 +125,16 @@ export class DeploymentService {
           if (!deployment) {
             throw new ConflictException(
               'Deployment operation exists without deployment record',
+            );
+          }
+          if (
+            deployment.releaseId !== input.releaseId ||
+            deployment.deploymentTargetId !== targetId ||
+            deployment.createdBy !== principal.actorId ||
+            JSON.stringify(deployment.health) !== JSON.stringify(input.health)
+          ) {
+            throw new ConflictException(
+              'operationId was already used for a different deployment',
             );
           }
           return deployment;
@@ -169,13 +184,14 @@ export class DeploymentService {
         }
         assertPlanMatchesCurrent(plan, before);
 
-        await this.capacity.assertAvailable(target.dockerServiceId, {
-          expectedVersion: plan.version,
-          targetReplicas: before.service.desiredReplicas,
-          includeUpdateOverlap: true,
-        });
-
         const noOp = plan.beforeSpecHash === plan.targetSpecHash;
+        if (!noOp) {
+          await this.capacity.assertAvailable(target.dockerServiceId, {
+            expectedVersion: plan.version,
+            targetReplicas: before.service.desiredReplicas,
+            includeUpdateOverlap: true,
+          });
+        }
         const deployment = await this.persistIntent(
           connection,
           clusterId,
