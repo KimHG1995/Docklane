@@ -649,11 +649,12 @@ export class DeploymentService implements OnApplicationBootstrap {
         continue;
       }
 
-      if (
-        current.service.updateState === 'paused' ||
-        current.service.updateState === 'rollback_started' ||
-        current.service.updateState === 'rollback_completed'
-      ) {
+      const snapshot = classifyDeploymentReconciliationSnapshot(
+        operation,
+        current,
+      );
+
+      if (snapshot === 'FAILED') {
         await this.fail(
           connection,
           deployment.id,
@@ -667,7 +668,7 @@ export class DeploymentService implements OnApplicationBootstrap {
         );
       }
 
-      if (current.service.specHash === operation.targetSpecHash) {
+      if (snapshot === 'TARGET_OBSERVED') {
         if (
           operation.status !== 'VERIFYING' ||
           deployment.status !== 'VERIFYING'
@@ -691,13 +692,7 @@ export class DeploymentService implements OnApplicationBootstrap {
         );
       }
 
-      if (
-        current.service.version < operation.expectedVersion ||
-        (
-          current.service.version === operation.expectedVersion &&
-          current.service.specHash === operation.beforeSpecHash
-        )
-      ) {
+      if (snapshot === 'WAITING_FOR_MUTATION') {
         await sleep(VERIFY_INTERVAL_MS);
         continue;
       }
@@ -838,6 +833,42 @@ export class DeploymentService implements OnApplicationBootstrap {
       );
     }
   }
+}
+
+export type DeploymentReconciliationDecision =
+  | 'TARGET_OBSERVED'
+  | 'WAITING_FOR_MUTATION'
+  | 'FAILED'
+  | 'EXTERNAL_CONFLICT';
+
+export function classifyDeploymentReconciliationSnapshot(
+  operation: OperationRecord,
+  current: ServiceDetailResponse,
+): DeploymentReconciliationDecision {
+  const updateState = current.service.updateState;
+  if (
+    updateState === 'paused' ||
+    updateState === 'rollback_started' ||
+    updateState === 'rollback_completed'
+  ) {
+    return 'FAILED';
+  }
+
+  if (current.service.specHash === operation.targetSpecHash) {
+    return 'TARGET_OBSERVED';
+  }
+
+  if (
+    current.service.version < operation.expectedVersion ||
+    (
+      current.service.version === operation.expectedVersion &&
+      current.service.specHash === operation.beforeSpecHash
+    )
+  ) {
+    return 'WAITING_FOR_MUTATION';
+  }
+
+  return 'EXTERNAL_CONFLICT';
 }
 
 type DeploymentDecision =
