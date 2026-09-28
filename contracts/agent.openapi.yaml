@@ -607,10 +607,11 @@ components:
       type: object
       additionalProperties: false
       required:
-        [id, serviceId, slot, desiredState, state, forceUpdate, timestamp]
+        [id, serviceId, specHash, slot, desiredState, state, forceUpdate, timestamp]
       properties:
         id: { type: string }
         serviceId: { type: string }
+        specHash: { type: string, minLength: 1 }
         slot: { type: integer }
         nodeId: { type: string }
         desiredState: { type: string }
@@ -796,6 +797,7 @@ components:
         targetForceUpdate: { type: integer, minimum: 0 }
         targetReplicas: { type: integer, minimum: 0 }
         targetImage: { type: string }
+        targetTaskSpecHash: { type: string, minLength: 1 }
 
     ServiceMutationResponse:
       type: object
