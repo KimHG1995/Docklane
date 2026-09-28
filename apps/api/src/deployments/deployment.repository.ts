@@ -102,6 +102,16 @@ export class DeploymentRepository implements OnModuleInit {
     return this.requireWithConnection(connection, id);
   }
 
+  async listForTarget(targetId: string): Promise<DeploymentRecord[]> {
+    const [rows] = await this.db.pool.query<DeploymentRow[]>(
+      `SELECT * FROM deployments
+       WHERE deployment_target_id = ?
+       ORDER BY created_at DESC`,
+      [targetId],
+    );
+    return rows.map(mapDeployment);
+  }
+
   async find(id: string): Promise<DeploymentRecord | null> {
     const [rows] = await this.db.pool.query<DeploymentRow[]>(
       'SELECT * FROM deployments WHERE id = ? LIMIT 1',
