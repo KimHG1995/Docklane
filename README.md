@@ -192,6 +192,7 @@ worker-02
 - [Security Policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Development Workflow](docs/DEVELOPMENT_WORKFLOW.md)
+- [Registry Integration](docs/REGISTRY.md)
 
 ## References
 
