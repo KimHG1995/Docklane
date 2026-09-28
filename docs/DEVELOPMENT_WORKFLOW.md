@@ -85,7 +85,9 @@ PR을 CI를 얻기 위한 임시 실행 버튼처럼 사용하지 않는다.
 
 ## 5. CI Rule
 
-Workflow는 PR과 `main` push에서 실행된다.
+Workflow는 PR과 `main` push에서 실행되지만, 모든 컴포넌트를 무조건 빌드하지 않는다.
+
+변경 경로를 먼저 분류한 뒤 영향을 받는 API/Web/Agent job만 실행한다. 문서-only 변경은 runtime build를 생략한다. 상세 기준은 [CI/CD Change Scope Policy](CI_CD_POLICY.md)를 따른다.
 
 동일 PR에 새 commit이 들어오면 이전 run은 취소될 수 있다. merge 판단은 항상 **latest head**의 결과만 사용한다.
 
@@ -118,7 +120,7 @@ guess one fix
 
 PR branch에서 과거 run이 failed여도 최신 head가 green이면 현재 코드는 검증된 상태다.
 
-`main`에서 merge commit에 대해 validation이 다시 실행되는 것은 의도된 동작이다.
+`main`에서 merge commit에 대해 validation이 다시 실행되는 것은 의도된 동작이다. 단, 변경 영향이 없는 component job은 skip될 수 있다.
 
 ```text
 PR latest head ✅
