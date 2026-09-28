@@ -80,6 +80,12 @@ export interface AgentClient {
     expectedVersion: number,
   ): Promise<ServiceMutationPlan>;
 
+  planUpdateServiceImage(
+    serviceId: string,
+    expectedVersion: number,
+    image: string,
+  ): Promise<ServiceMutationPlan>;
+
   scaleService(
     serviceId: string,
     input: {
@@ -96,6 +102,16 @@ export interface AgentClient {
       expectedVersion: number;
       expectedSpecHash: string;
       targetSpecHash: string;
+    },
+  ): Promise<ServiceMutationResponse>;
+
+  updateServiceImage(
+    serviceId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+      image: string;
     },
   ): Promise<ServiceMutationResponse>;
 }
