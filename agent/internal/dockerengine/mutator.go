@@ -3,7 +3,6 @@ package dockerengine
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
 
@@ -160,7 +159,7 @@ func (r *Reader) UpdateServiceImage(
 	if err := validateMutationPrecondition(service, input); err != nil {
 		return model.ServiceMutationResponse{}, err
 	}
-	if input.Image == nil || !strings.Contains(*input.Image, "@sha256:") {
+	if input.Image == nil || !isDigestPinnedImage(*input.Image) {
 		return model.ServiceMutationResponse{}, &ValidationError{
 			Message: "deployment image must be pinned by sha256 digest",
 		}
