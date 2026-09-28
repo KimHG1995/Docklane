@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { AgentRequestError } from '../agent/agent-client.js';
 import { ReleaseService } from './release.service.js';
 
 const application = {
@@ -18,8 +19,9 @@ test('deployment target binds canonical Swarm service identity', async () => {
       applicationId: string,
       clusterId: string,
       input: unknown,
+      actorId: string,
     ) => {
-      persisted = { applicationId, clusterId, input };
+      persisted = { applicationId, clusterId, input, actorId };
       return {
         id: 'target-1',
         applicationId,
@@ -35,6 +37,7 @@ test('deployment target binds canonical Swarm service identity', async () => {
       service: {
         id: 'canonical-service-id',
         name: 'api-prod',
+        mode: 'replicated',
       },
     }),
   };
@@ -44,12 +47,21 @@ test('deployment target binds canonical Swarm service identity', async () => {
     agent as never,
     {} as never,
   );
-  await service.createTarget('default', 'app-1', {
-    environment: 'production',
-    dockerServiceId: 'api-prod',
-    serviceName: 'client-supplied-name',
-    routingMode: 'INGRESS',
-  });
+  await service.createTarget(
+    'default',
+    'app-1',
+    {
+      environment: 'production',
+      dockerServiceId: 'api-prod',
+      serviceName: 'client-supplied-name',
+      routingMode: 'INGRESS',
+    },
+    {
+      actorId: 'operator-1',
+      role: 'OPERATOR',
+      clusters: ['default'],
+    },
+  );
 
   assert.deepEqual(persisted, {
     applicationId: 'app-1',
@@ -60,6 +72,7 @@ test('deployment target binds canonical Swarm service identity', async () => {
       serviceName: 'api-prod',
       routingMode: 'INGRESS',
     },
+    actorId: 'operator-1',
   });
 });
 
@@ -170,4 +183,85 @@ test('release creation verifies an explicitly supplied digest', async () => {
   );
 
   assert.equal(persisted, false);
+});
+
+
+test('deployment target rejects unsupported Swarm service modes before persistence', async () => {
+  let persisted = false;
+  const repository = {
+    findApplication: async () => application,
+    createDeploymentTarget: async () => {
+      persisted = true;
+      throw new Error('must not persist');
+    },
+  };
+  const agent = {
+    inspectService: async () => ({
+      service: {
+        id: 'global-service',
+        name: 'global-service',
+        mode: 'global',
+      },
+    }),
+  };
+  const service = new ReleaseService(
+    repository as never,
+    agent as never,
+    {} as never,
+  );
+
+  await assert.rejects(
+    service.createTarget(
+      'default',
+      'app-1',
+      {
+        environment: 'production',
+        dockerServiceId: 'global-service',
+        serviceName: 'global-service',
+        routingMode: 'INGRESS',
+      },
+      {
+        actorId: 'operator-1',
+        role: 'OPERATOR',
+        clusters: ['default'],
+      },
+    ),
+    /only supports replicated services/,
+  );
+  assert.equal(persisted, false);
+});
+
+test('deployment target preserves Agent failures instead of returning service not found', async () => {
+  const repository = {
+    findApplication: async () => application,
+  };
+  const agent = {
+    inspectService: async () => {
+      throw new AgentRequestError(502, 'upstream unavailable');
+    },
+  };
+  const service = new ReleaseService(
+    repository as never,
+    agent as never,
+    {} as never,
+  );
+
+  await assert.rejects(
+    service.createTarget(
+      'default',
+      'app-1',
+      {
+        environment: 'production',
+        dockerServiceId: 'api',
+        serviceName: 'api',
+        routingMode: 'INGRESS',
+      },
+      {
+        actorId: 'operator-1',
+        role: 'OPERATOR',
+        clusters: ['default'],
+      },
+    ),
+    /Agent service lookup failed with HTTP 502/,
+  );
 });
