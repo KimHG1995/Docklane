@@ -152,6 +152,23 @@ export class DeploymentRepository implements OnModuleInit {
     return rows[0]?.release_id ?? null;
   }
 
+  async findLatestSuccessfulForReleaseWithConnection(
+    connection: PoolConnection,
+    targetId: string,
+    releaseId: string,
+  ): Promise<DeploymentRecord | null> {
+    const [rows] = await connection.query<DeploymentRow[]>(
+      `SELECT * FROM deployments
+       WHERE deployment_target_id = ?
+         AND release_id = ?
+         AND status = 'SUCCESS'
+       ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC
+       LIMIT 1`,
+      [targetId, releaseId],
+    );
+    return rows[0] ? mapDeployment(rows[0]) : null;
+  }
+
   async findLatestSuccessfulForRelease(
     targetId: string,
     releaseId: string,
