@@ -133,22 +133,29 @@ export class NodeMutationService implements OnApplicationBootstrap {
 
     const initial = await this.agentClient.inspectNode(nodeRef);
     const canonicalNodeId = initial.node.id;
-    const existingBeforeLock = await this.nodeOperations.find(input.operationId);
+    let existingBeforeLock = await this.nodeOperations.find(input.operationId);
 
-    let initialLabelPlan: NodeMutationPlan | null = null;
     let initiallyAffected: string[];
     if (type === 'LABELS' && !existingBeforeLock) {
       try {
-        initialLabelPlan = await this.plan(
+        const initialLabelPlan = await this.plan(
           type,
           canonicalNodeId,
           input.expectedVersion,
           input as NodeLabelsRequest,
         );
+        initiallyAffected = sortedUnique(initialLabelPlan.affectedServiceIds);
       } catch (error) {
-        throw mapPlanningError(error);
+        const racedExisting = await this.nodeOperations.find(input.operationId);
+        if (!racedExisting) {
+          throw mapPlanningError(error);
+        }
+        existingBeforeLock = racedExisting;
+        initiallyAffected =
+          racedExisting.nodeId === canonicalNodeId
+            ? sortedUnique(racedExisting.affectedServiceIds)
+            : [];
       }
-      initiallyAffected = sortedUnique(initialLabelPlan.affectedServiceIds);
     } else {
       initiallyAffected =
         type === 'LABELS'
