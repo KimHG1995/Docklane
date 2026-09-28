@@ -62,6 +62,7 @@ type ServiceSummary struct {
 type TaskSummary struct {
 	ID           string    `json:"id"`
 	ServiceID    string    `json:"serviceId"`
+	SpecHash     string    `json:"specHash"`
 	Slot         int       `json:"slot"`
 	NodeID       string    `json:"nodeId,omitempty"`
 	DesiredState string    `json:"desiredState"`
@@ -95,6 +96,7 @@ type ServiceMutationPlan struct {
 	TargetForceUpdate uint64  `json:"targetForceUpdate"`
 	TargetReplicas    *uint64 `json:"targetReplicas,omitempty"`
 	TargetImage       string  `json:"targetImage,omitempty"`
+	TargetTaskSpecHash string `json:"targetTaskSpecHash,omitempty"`
 }
 
 type ServiceMutationResponse struct {
