@@ -38,9 +38,13 @@ export class ReleaseController {
   @Post('applications')
   @HttpCode(201)
   @RequireRole('OPERATOR')
-  createApplication(@Body() body: unknown): Promise<ApplicationRecord> {
+  createApplication(
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ApplicationRecord> {
     return this.releases.createApplication(
       parseBody(CreateApplicationRequestSchema, body),
+      principal(request),
     );
   }
 
@@ -83,11 +87,13 @@ export class ReleaseController {
     @Param('clusterId') clusterId: string,
     @Param('applicationId') applicationId: string,
     @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
   ): Promise<DeploymentTargetRecord> {
     return this.releases.createTarget(
       clusterId,
       applicationId,
       parseBody(CreateDeploymentTargetRequestSchema, body),
+      principal(request),
     );
   }
 }
