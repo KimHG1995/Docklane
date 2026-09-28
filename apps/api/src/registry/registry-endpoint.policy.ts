@@ -70,7 +70,9 @@ function isPrivateAddress(address: string): boolean {
   const family = isIP(address);
   if (family === 4) {
     const octets = address.split('.').map(Number);
-    const [a, b] = octets;
+    if (octets.length !== 4) return true;
+    const a = octets[0]!;
+    const b = octets[1]!;
     return (
       a === 0 ||
       a === 10 ||
