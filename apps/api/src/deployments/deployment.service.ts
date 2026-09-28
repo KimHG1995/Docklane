@@ -184,10 +184,18 @@ export class DeploymentService
     id: string,
   ): Promise<DeploymentStatusView> {
     const deployment = await this.deployment(clusterId, id);
-    const operation = await this.operations.find(deployment.operationId);
-    const rollbackOperation = deployment.rollbackOperationId
+    const foundOperation = await this.operations.find(
+      deployment.operationId,
+    );
+    const foundRollbackOperation = deployment.rollbackOperationId
       ? await this.operations.find(deployment.rollbackOperationId)
       : null;
+    const operation =
+      foundOperation?.clusterId === clusterId ? foundOperation : null;
+    const rollbackOperation =
+      foundRollbackOperation?.clusterId === clusterId
+        ? foundRollbackOperation
+        : null;
     return {
       deployment,
       operation,
