@@ -87,6 +87,7 @@ export const ServiceMutationPlanSchema = z.object({
   targetSpecHash: z.string().min(1),
   targetForceUpdate: z.number().int().nonnegative(),
   targetReplicas: z.number().int().nonnegative().optional(),
+  targetImage: z.string().optional(),
 });
 
 export const ServiceMutationResponseSchema = z.object({
