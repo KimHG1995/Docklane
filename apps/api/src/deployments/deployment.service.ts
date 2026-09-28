@@ -974,6 +974,17 @@ export class DeploymentService
         noOp,
       );
 
+      if (decision === 'ROLLBACK_PAUSED') {
+        await this.attention(
+          connection,
+          deploymentId,
+          operationId,
+          'SWARM_ROLLBACK_PAUSED',
+          'Swarm automatic rollback is paused and requires operator attention',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+
       if (decision === 'FAILED') {
         await this.fail(
           connection,
@@ -1038,6 +1049,19 @@ export class DeploymentService
               deploymentId,
             );
           }
+          if (error.decision === 'ROLLBACK_PAUSED') {
+            await this.attention(
+              connection,
+              deploymentId,
+              operationId,
+              'SWARM_ROLLBACK_PAUSED',
+              'Swarm automatic rollback paused during health verification',
+            );
+            return this.deployments.requireWithConnection(
+              connection,
+              deploymentId,
+            );
+          }
           if (error.decision === 'FAILED') {
             await this.fail(
               connection,
@@ -1091,6 +1115,16 @@ export class DeploymentService
       if (finalDecision === 'PENDING') {
         await sleep(VERIFY_INTERVAL_MS);
         continue;
+      }
+      if (finalDecision === 'ROLLBACK_PAUSED') {
+        await this.attention(
+          connection,
+          deploymentId,
+          operationId,
+          'SWARM_ROLLBACK_PAUSED',
+          'Swarm automatic rollback paused before deployment success persistence',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
       }
       if (finalDecision === 'FAILED') {
         await this.fail(
@@ -1254,6 +1288,20 @@ export class DeploymentService
         rollbackInProgress = true;
         await sleep(VERIFY_INTERVAL_MS);
         continue;
+      }
+
+      if (snapshot === 'ROLLBACK_PAUSED') {
+        await this.attention(
+          connection,
+          deployment.id,
+          operation.id,
+          'SWARM_ROLLBACK_PAUSED',
+          'Swarm automatic rollback is paused and requires operator attention',
+        );
+        return this.deployments.requireWithConnection(
+          connection,
+          deployment.id,
+        );
       }
 
       if (snapshot === 'FAILED') {
@@ -1955,15 +2003,18 @@ export class DeploymentService
     current: ServiceDetailResponse,
   ): void {
     const previousSpecHash = readSpecHash(deployment.beforeSpec);
+    const failedSpecHash = readSpecHash(deployment.targetSpec);
     if (
       !previousSpecHash ||
+      !failedSpecHash ||
+      current.service.specHash !== failedSpecHash ||
+      plan.beforeSpecHash !== failedSpecHash ||
       plan.targetSpecHash !== previousSpecHash ||
-      plan.beforeSpecHash !== current.service.specHash ||
       digestFromImage(plan.targetImage) !== previousDigest.toLowerCase() ||
       !plan.targetTaskSpecHash
     ) {
       throw new ConflictException(
-        'Swarm previous spec does not match the recorded deployment rollback target',
+        'Swarm rollback ownership does not match the failed deployment transition',
       );
     }
   }
@@ -2015,6 +2066,7 @@ export type DeploymentReconciliationDecision =
   | 'TARGET_OBSERVED'
   | 'WAITING_FOR_MUTATION'
   | 'ROLLBACK_IN_PROGRESS'
+  | 'ROLLBACK_PAUSED'
   | 'FAILED'
   | 'EXTERNAL_CONFLICT';
 
@@ -2025,6 +2077,9 @@ export function classifyDeploymentReconciliationSnapshot(
   const updateState = current.service.updateState;
   if (updateState === 'rollback_started') {
     return 'ROLLBACK_IN_PROGRESS';
+  }
+  if (updateState === 'rollback_paused') {
+    return 'ROLLBACK_PAUSED';
   }
   if (updateState === 'paused' || updateState === 'rollback_completed') {
     return 'FAILED';
@@ -2050,6 +2105,7 @@ export function classifyDeploymentReconciliationSnapshot(
 type DeploymentDecision =
   | 'PENDING'
   | 'SUCCESS'
+  | 'ROLLBACK_PAUSED'
   | 'FAILED'
   | 'EXTERNAL_CONFLICT';
 
@@ -2059,18 +2115,19 @@ export function classifyDeploymentSnapshot(
   digest: string,
   noOp: boolean,
 ): DeploymentDecision {
+  const updateState = current.service.updateState;
+  if (updateState === 'rollback_started') return 'PENDING';
+  if (updateState === 'rollback_paused') return 'ROLLBACK_PAUSED';
+  if (updateState === 'paused' || updateState === 'rollback_completed') {
+    return 'FAILED';
+  }
+
   if (current.service.specHash !== plan.targetSpecHash) {
     if (current.service.version > plan.version) return 'EXTERNAL_CONFLICT';
     return 'PENDING';
   }
 
   if (!imageContainsDigest(current.service.image, digest)) return 'PENDING';
-
-  const updateState = current.service.updateState;
-  if (updateState === 'rollback_started') return 'PENDING';
-  if (updateState === 'paused' || updateState === 'rollback_completed') {
-    return 'FAILED';
-  }
 
   if (!noOp && updateState !== 'completed') return 'PENDING';
   if (current.service.desiredReplicas !== current.service.runningReplicas) {
@@ -2113,7 +2170,12 @@ export function classifyRollbackSnapshot(
   }
 
   if (!imageContainsDigest(current.service.image, digest)) return 'PENDING';
-  if (current.service.updateState === 'paused') return 'FAILED';
+  if (
+    current.service.updateState === 'paused' ||
+    current.service.updateState === 'rollback_paused'
+  ) {
+    return 'FAILED';
+  }
   if (current.service.updateState === 'rollback_started') return 'PENDING';
 
   if (!plan.targetTaskSpecHash) return 'PENDING';
