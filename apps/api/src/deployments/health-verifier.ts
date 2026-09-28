@@ -1,13 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import { HealthEndpointPolicy } from './health-endpoint.policy.js';
 import type { HealthCheckConfig } from './deployment.types.js';
 
 @Injectable()
 export class HealthVerifier {
+  constructor(
+    @Inject(HealthEndpointPolicy)
+    private readonly endpointPolicy: HealthEndpointPolicy,
+  ) {}
+
   async verify(config: HealthCheckConfig): Promise<void> {
     const url = new URL(config.url);
-    if (url.username || url.password) {
-      throw new Error('Health URL must not contain credentials');
-    }
+    await this.endpointPolicy.assertAllowed(url);
 
     const deadline =
       Date.now() +
