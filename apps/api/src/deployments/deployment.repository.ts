@@ -178,6 +178,16 @@ export class DeploymentRepository implements OnModuleInit {
     return rows.map(mapDeployment);
   }
 
+  async findByOperation(
+    operationId: string,
+  ): Promise<DeploymentRecord | null> {
+    const [rows] = await this.db.pool.query<DeploymentRow[]>(
+      'SELECT * FROM deployments WHERE operation_id = ? LIMIT 1',
+      [operationId],
+    );
+    return rows[0] ? mapDeployment(rows[0]) : null;
+  }
+
   async find(id: string): Promise<DeploymentRecord | null> {
     const [rows] = await this.db.pool.query<DeploymentRow[]>(
       'SELECT * FROM deployments WHERE id = ? LIMIT 1',
