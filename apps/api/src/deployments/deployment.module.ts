@@ -7,6 +7,7 @@ import { ReleaseModule } from '../releases/release.module.js';
 import { DeploymentController } from './deployment.controller.js';
 import { DeploymentRepository } from './deployment.repository.js';
 import { DeploymentService } from './deployment.service.js';
+import { HealthEndpointPolicy } from './health-endpoint.policy.js';
 import { HealthVerifier } from './health-verifier.js';
 
 @Module({
@@ -18,6 +19,11 @@ import { HealthVerifier } from './health-verifier.js';
     ReleaseModule,
   ],
   controllers: [DeploymentController],
-  providers: [DeploymentRepository, DeploymentService, HealthVerifier],
+  providers: [
+    DeploymentRepository,
+    DeploymentService,
+    HealthEndpointPolicy,
+    HealthVerifier,
+  ],
 })
 export class DeploymentModule {}
