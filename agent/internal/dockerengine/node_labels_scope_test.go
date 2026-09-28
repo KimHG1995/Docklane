@@ -89,7 +89,6 @@ func TestChangedNodeLabelKeysTracksSetRemoveAndNoop(t *testing.T) {
 	}
 }
 
-
 func TestValidateAffectedServiceModesRejectsGlobalService(t *testing.T) {
 	services := []swarm.Service{
 		{
