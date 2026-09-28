@@ -324,7 +324,10 @@ function parseBearerChallenge(
   for (const match of body.matchAll(
     /([a-zA-Z][a-zA-Z0-9_-]*)="((?:[^"\\]|\\.)*)"/g,
   )) {
-    params.set(match[1].toLowerCase(), match[2].replace(/\\(.)/g, '$1'));
+    const key = match[1];
+    const value = match[2];
+    if (!key || value === undefined) continue;
+    params.set(key.toLowerCase(), value.replace(/\\(.)/g, '$1'));
   }
 
   const realm = params.get('realm');
