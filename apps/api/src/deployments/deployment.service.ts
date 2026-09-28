@@ -208,14 +208,30 @@ export class DeploymentService {
             },
           );
         } catch (error) {
-          await this.fail(
+          if (
+            error instanceof AgentRequestError &&
+            (error.statusCode === 400 || error.statusCode === 409)
+          ) {
+            await this.fail(
+              connection,
+              deployment.id,
+              input.operationId,
+              'AGENT_MUTATION_REJECTED',
+              error.responseBody,
+            );
+            throw mapAgentError(error, 'Deployment mutation failed');
+          }
+
+          await this.attention(
             connection,
             deployment.id,
             input.operationId,
-            'AGENT_MUTATION_REJECTED',
-            errorMessage(error),
+            `Deployment mutation outcome is uncertain: ${errorMessage(error)}`,
           );
-          throw mapAgentError(error, 'Deployment mutation failed');
+          return this.deployments.requireWithConnection(
+            connection,
+            deployment.id,
+          );
         }
 
         if (
@@ -547,7 +563,11 @@ export function classifyDeploymentSnapshot(
   const running = current.tasks.filter((task) => task.state === 'running');
   if (
     running.length !== current.service.desiredReplicas ||
-    !running.every((task) => imageContainsDigest(task.image, digest))
+    !running.every(
+      (task) =>
+        imageContainsDigest(task.image, digest) &&
+        task.forceUpdate === plan.targetForceUpdate,
+    )
   ) {
     return 'PENDING';
   }
