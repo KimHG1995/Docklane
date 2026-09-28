@@ -66,6 +66,7 @@ export class MutationService implements OnApplicationBootstrap {
     const pending = await this.operations.listNonTerminal();
 
     for (const operation of pending) {
+      if (operation.type === 'DEPLOY') continue;
       try {
         await this.lock.withServiceLock(
           operation.clusterId,
@@ -361,6 +362,11 @@ export class MutationService implements OnApplicationBootstrap {
       );
     if (!prior) {
       return;
+    }
+    if (prior.type === 'DEPLOY') {
+      throw new ConflictException(
+        `Service has unresolved deployment ${prior.id} (${prior.status})`,
+      );
     }
 
     const reconciled = await this.reconcileLocked(connection, prior);
