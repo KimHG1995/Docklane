@@ -295,6 +295,7 @@ func toServiceSummary(service swarm.Service) model.ServiceSummary {
 }
 
 func toTaskSummary(task swarm.Task) model.TaskSummary {
+	specHash, _ := taskSpecHash(task.Spec)
 	containerID := ""
 	if task.Status.ContainerStatus != nil {
 		containerID = task.Status.ContainerStatus.ContainerID
@@ -308,6 +309,7 @@ func toTaskSummary(task swarm.Task) model.TaskSummary {
 	return model.TaskSummary{
 		ID:           task.ID,
 		ServiceID:    task.ServiceID,
+		SpecHash:     specHash,
 		Slot:         task.Slot,
 		NodeID:       task.NodeID,
 		DesiredState: string(task.DesiredState),
