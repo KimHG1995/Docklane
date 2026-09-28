@@ -218,6 +218,30 @@ export class DeploymentService
       throw new NotFoundException('Release not found for deployment target');
     }
 
+    const existingDeployment =
+      await this.deployments.findByOperation(input.operationId);
+    if (existingDeployment) {
+      if (
+        existingDeployment.kind !== 'HISTORICAL_REDEPLOY' ||
+        existingDeployment.releaseId !== input.releaseId ||
+        existingDeployment.deploymentTargetId !== targetId ||
+        !existingDeployment.sourceDeploymentId
+      ) {
+        throw new ConflictException(
+          'operationId was already used for a different deployment',
+        );
+      }
+
+      return this.deployRelease(
+        clusterId,
+        targetId,
+        input,
+        principal,
+        'HISTORICAL_REDEPLOY',
+        existingDeployment.sourceDeploymentId,
+      );
+    }
+
     const source = await this.deployments.findLatestSuccessfulForRelease(
       targetId,
       input.releaseId,
