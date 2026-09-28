@@ -218,55 +218,14 @@ export class DeploymentService
       throw new NotFoundException('Release not found for deployment target');
     }
 
-    const existingDeployment =
-      await this.deployments.findByOperation(input.operationId);
-    if (existingDeployment) {
-      const existingOperation = await this.operations.find(
-        input.operationId,
-      );
-      if (
-        existingDeployment.kind !== 'HISTORICAL_REDEPLOY' ||
-        existingDeployment.releaseId !== input.releaseId ||
-        existingDeployment.deploymentTargetId !== targetId ||
-        existingDeployment.createdBy !== principal.actorId ||
-        !existingDeployment.sourceDeploymentId ||
-        !sameHealthConfig(existingDeployment.health, input.health) ||
-        !existingOperation ||
-        existingOperation.type !== 'DEPLOY' ||
-        existingOperation.actorId !== principal.actorId ||
-        existingOperation.clusterId !== clusterId
-      ) {
-        throw new ConflictException(
-          'operationId was already used for a different deployment',
-        );
-      }
-
-      if (
-        existingOperation.status === 'SUCCESS' ||
-        existingOperation.status === 'FAILED'
-      ) {
-        return existingDeployment;
-      }
-
-      return this.deployRelease(
-        clusterId,
-        targetId,
-        input,
-        principal,
-        'HISTORICAL_REDEPLOY',
-        existingDeployment.sourceDeploymentId,
-      );
-    }
-
-    const source = await this.deployments.findLatestSuccessfulForRelease(
+    const terminal = await this.findTerminalDeploymentRetry(
+      clusterId,
       targetId,
-      input.releaseId,
+      input,
+      principal,
+      'HISTORICAL_REDEPLOY',
     );
-    if (!source) {
-      throw new ConflictException(
-        'Historical redeploy requires a previously successful deployment of the release on this target',
-      );
-    }
+    if (terminal) return terminal;
 
     return this.deployRelease(
       clusterId,
@@ -274,8 +233,45 @@ export class DeploymentService
       input,
       principal,
       'HISTORICAL_REDEPLOY',
-      source.id,
+      undefined,
     );
+  }
+
+  private async findTerminalDeploymentRetry(
+    clusterId: string,
+    targetId: string,
+    input: DeployRequest,
+    principal: Principal,
+    kind: DeploymentKind,
+  ): Promise<DeploymentRecord | null> {
+    const operation = await this.operations.find(input.operationId);
+    if (
+      !operation ||
+      (operation.status !== 'SUCCESS' && operation.status !== 'FAILED')
+    ) {
+      return null;
+    }
+
+    const deployment = await this.deployments.findByOperation(
+      input.operationId,
+    );
+    if (
+      !deployment ||
+      operation.type !== 'DEPLOY' ||
+      operation.clusterId !== clusterId ||
+      operation.actorId !== principal.actorId ||
+      deployment.deploymentTargetId !== targetId ||
+      deployment.releaseId !== input.releaseId ||
+      deployment.createdBy !== principal.actorId ||
+      deployment.kind !== kind ||
+      !sameHealthConfig(deployment.health, input.health)
+    ) {
+      throw new ConflictException(
+        'operationId was already used for a different deployment',
+      );
+    }
+
+    return deployment;
   }
 
   async rollback(
@@ -371,6 +367,22 @@ export class DeploymentService
             existing,
             existingDeployment,
           );
+        }
+
+        let selectedSourceDeploymentId = sourceDeploymentId ?? null;
+        if (kind === 'HISTORICAL_REDEPLOY' && sourceDeploymentId === undefined) {
+          const source =
+            await this.deployments.findLatestSuccessfulForReleaseWithConnection(
+              connection,
+              targetId,
+              input.releaseId,
+            );
+          if (!source) {
+            throw new ConflictException(
+              'Historical redeploy requires a previously successful deployment of the release on this target',
+            );
+          }
+          selectedSourceDeploymentId = source.id;
         }
 
         const prior =
@@ -547,6 +559,15 @@ export class DeploymentService
     input: DeployRequest,
     principal: Principal,
   ): Promise<DeploymentRecord> {
+    const terminal = await this.findTerminalDeploymentRetry(
+      clusterId,
+      targetId,
+      input,
+      principal,
+      'DEPLOY',
+    );
+    if (terminal) return terminal;
+
     return this.deployRelease(
       clusterId,
       targetId,
@@ -563,7 +584,7 @@ export class DeploymentService
     input: DeployRequest,
     principal: Principal,
     kind: DeploymentKind,
-    sourceDeploymentId: string | null,
+    sourceDeploymentId: string | null | undefined,
   ): Promise<DeploymentRecord> {
     const target = await this.releases.findDeploymentTarget(targetId);
     if (!target || target.clusterId !== clusterId) {
@@ -573,23 +594,6 @@ export class DeploymentService
     const release = await this.releases.findRelease(input.releaseId);
     if (!release || release.applicationId !== target.applicationId) {
       throw new NotFoundException('Release not found for deployment target');
-    }
-
-    let resolved: ServiceDetailResponse;
-    try {
-      resolved = await this.agentClient.inspectService(
-        target.dockerServiceId,
-      );
-    } catch (error) {
-      throw mapAgentError(error, 'Deployment target lookup failed');
-    }
-    if (
-      resolved.service.id !== target.dockerServiceId ||
-      resolved.service.mode !== 'replicated'
-    ) {
-      throw new ConflictException(
-        'Deployment target no longer resolves to the expected replicated service',
-      );
     }
 
     return this.lock.withServiceLock(
@@ -617,7 +621,8 @@ export class DeploymentService
             deployment.deploymentTargetId !== targetId ||
             deployment.createdBy !== principal.actorId ||
             deployment.kind !== kind ||
-            deployment.sourceDeploymentId !== sourceDeploymentId ||
+            (sourceDeploymentId !== undefined &&
+              deployment.sourceDeploymentId !== sourceDeploymentId) ||
             !sameHealthConfig(deployment.health, input.health)
           ) {
             throw new ConflictException(
@@ -660,6 +665,23 @@ export class DeploymentService
         if (nodeConflict) {
           throw new ConflictException(
             `Service is affected by unresolved node operation ${nodeConflict.id}`,
+          );
+        }
+
+        let resolved: ServiceDetailResponse;
+        try {
+          resolved = await this.agentClient.inspectService(
+            target.dockerServiceId,
+          );
+        } catch (error) {
+          throw mapAgentError(error, 'Deployment target lookup failed');
+        }
+        if (
+          resolved.service.id !== target.dockerServiceId ||
+          resolved.service.mode !== 'replicated'
+        ) {
+          throw new ConflictException(
+            'Deployment target no longer resolves to the expected replicated service',
           );
         }
 
@@ -708,7 +730,7 @@ export class DeploymentService
           targetImage,
           noOp,
           kind,
-          sourceDeploymentId,
+          selectedSourceDeploymentId,
         );
 
         if (noOp) {
@@ -2175,25 +2197,34 @@ export function classifyDeploymentReconciliationSnapshot(
   current: ServiceDetailResponse,
 ): DeploymentReconciliationDecision {
   const updateState = current.service.updateState;
+  const specHash = current.service.specHash;
+  const isTarget = specHash === operation.targetSpecHash;
+  const isBefore = specHash === operation.beforeSpecHash;
+
   if (updateState === 'rollback_started') {
-    return 'ROLLBACK_IN_PROGRESS';
+    return isTarget || isBefore
+      ? 'ROLLBACK_IN_PROGRESS'
+      : 'EXTERNAL_CONFLICT';
   }
   if (updateState === 'rollback_paused') {
-    return 'ROLLBACK_PAUSED';
-  }
-  if (updateState === 'paused' || updateState === 'rollback_completed') {
-    return 'FAILED';
+    return isTarget || isBefore
+      ? 'ROLLBACK_PAUSED'
+      : 'EXTERNAL_CONFLICT';
   }
 
-  if (current.service.specHash === operation.targetSpecHash) {
+  if (isTarget) {
     return 'TARGET_OBSERVED';
+  }
+
+  if (updateState === 'rollback_completed' || updateState === 'paused') {
+    return isBefore ? 'FAILED' : 'EXTERNAL_CONFLICT';
   }
 
   if (
     current.service.version < operation.expectedVersion ||
     (
       current.service.version === operation.expectedVersion &&
-      current.service.specHash === operation.beforeSpecHash
+      isBefore
     )
   ) {
     return 'WAITING_FOR_MUTATION';
@@ -2216,19 +2247,31 @@ export function classifyDeploymentSnapshot(
   noOp: boolean,
 ): DeploymentDecision {
   const updateState = current.service.updateState;
-  if (updateState === 'rollback_started') return 'PENDING';
-  if (updateState === 'rollback_paused') return 'ROLLBACK_PAUSED';
-  if (updateState === 'paused' || updateState === 'rollback_completed') {
-    return 'FAILED';
+  const specHash = current.service.specHash;
+  const isTarget = specHash === plan.targetSpecHash;
+  const isBefore = specHash === plan.beforeSpecHash;
+
+  if (updateState === 'rollback_started') {
+    if (!isTarget && !isBefore) return 'EXTERNAL_CONFLICT';
+    return 'PENDING';
+  }
+  if (updateState === 'rollback_paused') {
+    if (!isTarget && !isBefore) return 'EXTERNAL_CONFLICT';
+    return 'ROLLBACK_PAUSED';
   }
 
-  if (current.service.specHash !== plan.targetSpecHash) {
+  if (!isTarget) {
+    if (updateState === 'rollback_completed' || updateState === 'paused') {
+      return isBefore ? 'FAILED' : 'EXTERNAL_CONFLICT';
+    }
     if (current.service.version > plan.version) return 'EXTERNAL_CONFLICT';
     return 'PENDING';
   }
 
   if (!imageContainsDigest(current.service.image, digest)) return 'PENDING';
 
+  if (updateState === 'paused') return 'FAILED';
+  if (!noOp && updateState === 'rollback_completed') return 'FAILED';
   if (!noOp && updateState !== 'completed') return 'PENDING';
   if (current.service.desiredReplicas !== current.service.runningReplicas) {
     return 'PENDING';
