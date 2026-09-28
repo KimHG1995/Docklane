@@ -23,6 +23,7 @@ import {
   NodeMutationPlanSchema,
   NodeMutationResponseSchema,
   ServiceDetailResponseSchema,
+  ServiceImageMutationPlanSchema,
   ServiceMutationPlanSchema,
   ServiceMutationResponseSchema,
   ServiceSummarySchema,
@@ -34,6 +35,7 @@ import {
   type NodeMutationPlan,
   type NodeMutationResponse,
   type ServiceDetailResponse,
+  type ServiceImageMutationPlan,
   type ServiceMutationPlan,
   type ServiceMutationResponse,
   type ServiceSummary,
@@ -225,11 +227,11 @@ export class HttpAgentClient implements AgentClient {
     serviceId: string,
     expectedVersion: number,
     image: string,
-  ): Promise<ServiceMutationPlan> {
+  ): Promise<ServiceImageMutationPlan> {
     return this.request(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/plan-image-update`,
-      ServiceMutationPlanSchema,
+      ServiceImageMutationPlanSchema,
       { expectedVersion, image },
     );
   }
