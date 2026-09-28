@@ -11,7 +11,10 @@ import {
 } from '@nestjs/common';
 import { RequireRole } from '../auth/auth.decorators.js';
 import type { AuthenticatedRequest, Principal } from '../auth/auth.types.js';
-import { DeployRequestSchema } from './deployment.dto.js';
+import {
+  DeployRequestSchema,
+  RollbackRequestSchema,
+} from './deployment.dto.js';
 import { DeploymentService } from './deployment.service.js';
 import type { DeploymentRecord } from './deployment.types.js';
 
@@ -49,6 +52,29 @@ export class DeploymentController {
     return this.deployments.deploy(
       clusterId,
       targetId,
+      input,
+      principal(request),
+    );
+  }
+
+  @Post('deployments/:deploymentId/rollback')
+  @HttpCode(200)
+  @RequireRole('OPERATOR')
+  rollback(
+    @Param('clusterId') clusterId: string,
+    @Param('deploymentId') deploymentId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<DeploymentRecord> {
+    let input;
+    try {
+      input = RollbackRequestSchema.parse(body);
+    } catch {
+      throw new BadRequestException('Invalid rollback request');
+    }
+    return this.deployments.rollback(
+      clusterId,
+      deploymentId,
       input,
       principal(request),
     );
