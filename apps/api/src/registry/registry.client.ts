@@ -112,17 +112,62 @@ export class RegistryClient {
       }
     }
 
-    return fetch(url, {
+    return this.safeFetch(url, {
       method: 'HEAD',
       headers,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(10_000),
-    }).catch((error: unknown) => {
-      throw new RegistryRequestError(
-        'REGISTRY_UNAVAILABLE',
-        error instanceof Error ? error.message : String(error),
-      );
     });
+  }
+
+  private async safeFetch(
+    input: string,
+    init: { method: string; headers: Headers },
+  ): Promise<Response> {
+    let current = new URL(input);
+    let headers = new Headers(init.headers);
+
+    for (let redirects = 0; redirects <= 5; redirects += 1) {
+      await this.endpointPolicy.assertAllowed(current);
+
+      let response: Response;
+      try {
+        response = await fetch(current, {
+          method: init.method,
+          headers,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(10_000),
+        });
+      } catch (error) {
+        throw new RegistryRequestError(
+          'REGISTRY_UNAVAILABLE',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+
+      if (![301, 302, 303, 307, 308].includes(response.status)) {
+        return response;
+      }
+
+      const location = response.headers.get('location');
+      if (!location) {
+        throw new RegistryRequestError(
+          'REGISTRY_UNAVAILABLE',
+          'Registry redirect did not include a Location header',
+        );
+      }
+
+      const next = new URL(location, current);
+      await this.endpointPolicy.assertAllowed(next);
+      if (next.origin !== current.origin) {
+        headers = new Headers(headers);
+        headers.delete('authorization');
+      }
+      current = next;
+    }
+
+    throw new RegistryRequestError(
+      'REGISTRY_UNAVAILABLE',
+      'Registry exceeded the redirect limit',
+    );
   }
 
   private async fetchBearerToken(
@@ -156,20 +201,10 @@ export class RegistryClient {
       headers.set('Authorization', basicAuthorization(credential));
     }
 
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'GET',
-        headers,
-        redirect: 'follow',
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch (error) {
-      throw new RegistryRequestError(
-        'REGISTRY_UNAVAILABLE',
-        error instanceof Error ? error.message : String(error),
-      );
-    }
+    const response = await this.safeFetch(url.toString(), {
+      method: 'GET',
+      headers,
+    });
 
     if (response.status === 401) {
       throw new RegistryRequestError(
