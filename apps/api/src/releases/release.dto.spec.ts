@@ -1,30 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CreateReleaseRequestSchema } from './release.dto.js';
+import {
+  CreateDeploymentTargetRequestSchema,
+  CreateReleaseRequestSchema,
+} from './release.dto.js';
 
-test('release creation requires immutable sha256 digest', () => {
+test('release creation accepts a tag that will be resolved server-side', () => {
   const valid = CreateReleaseRequestSchema.parse({
     version: '2026.09.28.1',
     imageRepository: 'registry.example.com/team/api',
     imageTag: 'latest',
-    imageDigest: `sha256:${'a'.repeat(64)}`,
   });
 
-  assert.equal(valid.imageDigest, `sha256:${'a'.repeat(64)}`);
+  assert.equal(valid.imageTag, 'latest');
+  assert.equal(valid.imageDigest, undefined);
+});
+
+test('release creation accepts an immutable sha256 digest', () => {
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const valid = CreateReleaseRequestSchema.parse({
+    version: '2026.09.28.1',
+    imageRepository: 'registry.example.com/team/api',
+    imageDigest: digest,
+  });
+
+  assert.equal(valid.imageDigest, digest);
+});
+
+test('release creation rejects missing or malformed image references', () => {
+  assert.throws(() =>
+    CreateReleaseRequestSchema.parse({
+      version: '2026.09.28.1',
+      imageRepository: 'registry.example.com/team/api',
+    }),
+  );
 
   assert.throws(() =>
     CreateReleaseRequestSchema.parse({
       version: '2026.09.28.1',
       imageRepository: 'registry.example.com/team/api',
-      imageTag: 'latest',
       imageDigest: 'latest',
     }),
   );
 });
 
-test('deployment target only accepts ingress routing in MVP', async () => {
-  const { CreateDeploymentTargetRequestSchema } = await import('./release.dto.js');
-
+test('deployment target only accepts ingress routing in MVP', () => {
   assert.equal(
     CreateDeploymentTargetRequestSchema.parse({
       environment: 'production',
