@@ -299,29 +299,41 @@ export class DeploymentService
           throw mapAgentError(error, 'Rollback precondition lookup failed');
         }
 
+        const observingExistingRollback =
+          current.service.updateState === 'rollback_started' ||
+          current.service.updateState === 'rollback_completed';
+
         let plan: ServiceImageMutationPlan;
-        try {
-          plan = await this.agentClient.planRollbackService(
-            target.dockerServiceId,
-            current.service.version,
+        if (observingExistingRollback) {
+          plan = this.buildObservedRollbackPlan(
+            deployment,
+            previousRelease.imageDigest,
+            current,
           );
-        } catch (error) {
-          throw mapAgentError(error, 'Rollback planning failed');
+        } else {
+          try {
+            plan = await this.agentClient.planRollbackService(
+              target.dockerServiceId,
+              current.service.version,
+            );
+          } catch (error) {
+            throw mapAgentError(error, 'Rollback planning failed');
+          }
+
+          this.assertRollbackOwnership(
+            deployment,
+            previousRelease.imageDigest,
+            plan,
+            current,
+          );
+
+          await this.capacity.assertAvailable(target.dockerServiceId, {
+            expectedVersion: plan.version,
+            targetReplicas:
+              plan.targetReplicas ?? current.service.desiredReplicas,
+            includeUpdateOverlap: true,
+          });
         }
-
-        this.assertRollbackOwnership(
-          deployment,
-          previousRelease.imageDigest,
-          plan,
-          current,
-        );
-
-        await this.capacity.assertAvailable(target.dockerServiceId, {
-          expectedVersion: plan.version,
-          targetReplicas:
-            plan.targetReplicas ?? current.service.desiredReplicas,
-          includeUpdateOverlap: true,
-        });
 
         await this.persistRollbackIntent(
           connection,
@@ -334,7 +346,7 @@ export class DeploymentService
         );
 
         if (
-          current.service.updateState === 'rollback_started' ||
+          observingExistingRollback ||
           current.service.specHash === plan.targetSpecHash
         ) {
           const operation = await this.requireOperation(
@@ -1789,6 +1801,37 @@ export class DeploymentService
       throw new Error('Deployment operation disappeared after persistence');
     }
     return operation;
+  }
+
+  private buildObservedRollbackPlan(
+    deployment: DeploymentRecord,
+    previousDigest: string,
+    current: ServiceDetailResponse,
+  ): ServiceImageMutationPlan {
+    const rollbackSpecHash = readSpecHash(deployment.beforeSpec);
+    const failedSpecHash = readSpecHash(deployment.targetSpec);
+    if (
+      !rollbackSpecHash ||
+      !failedSpecHash ||
+      current.service.specHash !== rollbackSpecHash ||
+      digestFromImage(current.service.image ?? '') !== previousDigest.toLowerCase() ||
+      !current.service.taskSpecHash
+    ) {
+      throw new ConflictException(
+        'Observed Swarm rollback target does not match the recorded previous deployment spec',
+      );
+    }
+
+    return {
+      serviceId: current.service.id,
+      version: current.service.version,
+      beforeSpecHash: failedSpecHash,
+      targetSpecHash: rollbackSpecHash,
+      targetForceUpdate: current.service.forceUpdate,
+      targetReplicas: current.service.desiredReplicas,
+      targetImage: current.service.image ?? '',
+      targetTaskSpecHash: current.service.taskSpecHash,
+    };
   }
 
   private assertRollbackOwnership(
