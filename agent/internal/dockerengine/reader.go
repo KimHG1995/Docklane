@@ -250,6 +250,7 @@ func toNodeSummary(node swarm.Node) model.NodeSummary {
 
 func toServiceSummary(service swarm.Service) model.ServiceSummary {
 	specHash, _ := serviceSpecHash(service.Spec)
+	taskSpecHash, _ := taskSpecHash(service.Spec.TaskTemplate)
 	image := ""
 	if service.Spec.TaskTemplate.ContainerSpec != nil {
 		image = service.Spec.TaskTemplate.ContainerSpec.Image
@@ -286,6 +287,7 @@ func toServiceSummary(service swarm.Service) model.ServiceSummary {
 		Version:         service.Version.Index,
 		SpecHash:        specHash,
 		ForceUpdate:     service.Spec.TaskTemplate.ForceUpdate,
+		TaskSpecHash:    taskSpecHash,
 		Image:           image,
 		Mode:            mode,
 		DesiredReplicas: desired,
