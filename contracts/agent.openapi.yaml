@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.8.0
+  version: 0.9.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -286,6 +286,52 @@ paths:
                 $ref: '#/components/schemas/ServiceMutationPlan'
         '409':
           description: Expected service version is stale.
+
+  /v1/services/{serviceId}/plan-image-update:
+    post:
+      operationId: planUpdateServiceImage
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImagePlanRequest'
+      responses:
+        '200':
+          description: Deterministic digest-pinned service image target.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationPlan'
+        '400':
+          description: Image is not digest-pinned or service mode is unsupported.
+        '409':
+          description: Expected service version is stale.
+
+  /v1/services/{serviceId}/image:
+    post:
+      operationId: updateServiceImage
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned digest-pinned image update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationResponse'
+        '400':
+          description: Image is not digest-pinned or service mode is unsupported.
+        '409':
+          description: Version, spec, or target precondition failed.
 
   /v1/services/{serviceId}/scale:
     post:
@@ -627,6 +673,7 @@ components:
       properties:
         expectedVersion: { type: integer, minimum: 0 }
         targetReplicas: { type: integer, minimum: 0 }
+        targetImage: { type: string }
         includeUpdateOverlap: { type: boolean }
 
     CapacityResource:
@@ -679,6 +726,148 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CapacityNode'
+
+    ImagePlanRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, image]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        image:
+          type: string
+          pattern: '@sha256:[A-Fa-f0-9]{64}      type: object
+      additionalProperties: false
+      required: [expectedVersion, replicas]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        replicas: { type: integer, minimum: 0 }
+
+    RestartPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+
+    ScaleMutationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [expectedVersion, expectedSpecHash, targetSpecHash, replicas]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        replicas: { type: integer, minimum: 0 }
+
+    RestartMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedSpecHash, targetSpecHash]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+
+    ServiceMutationPlan:
+      type: object
+      additionalProperties: false
+      required:
+        [serviceId, version, beforeSpecHash, targetSpecHash, targetForceUpdate]
+      properties:
+        serviceId: { type: string }
+        version: { type: integer, minimum: 0 }
+        beforeSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        targetForceUpdate: { type: integer, minimum: 0 }
+        targetReplicas: { type: integer, minimum: 0 }
+
+    ServiceMutationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [serviceId, version, targetSpecHash, targetForceUpdate]
+      properties:
+        serviceId: { type: string }
+        version: { type: integer, minimum: 0 }
+        targetSpecHash: { type: string, minLength: 1 }
+        targetForceUpdate: { type: integer, minimum: 0 }
+        warnings:
+          type: array
+          items: { type: string }
+
+
+    ImageMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedSpecHash, targetSpecHash, image]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        image:
+          type: string
+          pattern: '@sha256:[A-Fa-f0-9]{64}      type: object
+      additionalProperties: false
+      required: [expectedVersion, replicas]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        replicas: { type: integer, minimum: 0 }
+
+    RestartPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+
+    ScaleMutationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [expectedVersion, expectedSpecHash, targetSpecHash, replicas]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        replicas: { type: integer, minimum: 0 }
+
+    RestartMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedSpecHash, targetSpecHash]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        expectedSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+
+    ServiceMutationPlan:
+      type: object
+      additionalProperties: false
+      required:
+        [serviceId, version, beforeSpecHash, targetSpecHash, targetForceUpdate]
+      properties:
+        serviceId: { type: string }
+        version: { type: integer, minimum: 0 }
+        beforeSpecHash: { type: string, minLength: 1 }
+        targetSpecHash: { type: string, minLength: 1 }
+        targetForceUpdate: { type: integer, minimum: 0 }
+        targetReplicas: { type: integer, minimum: 0 }
+
+    ServiceMutationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [serviceId, version, targetSpecHash, targetForceUpdate]
+      properties:
+        serviceId: { type: string }
+        version: { type: integer, minimum: 0 }
+        targetSpecHash: { type: string, minLength: 1 }
+        targetForceUpdate: { type: integer, minimum: 0 }
+        warnings:
+          type: array
+          items: { type: string }
+
 
     ScalePlanRequest:
       type: object
