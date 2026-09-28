@@ -1396,6 +1396,28 @@ export class DeploymentService
     const compatibleOperation =
       await this.hydrateLegacyRuntimeFingerprint(connection, operation);
     if (
+      !compatibleOperation &&
+      operation.type === 'DEPLOY' &&
+      operation.beforeSpecHash &&
+      operation.targetSpecHash &&
+      operation.targetImage &&
+      operation.targetTaskSpecHash &&
+      !operation.targetRuntimeSpecHash
+    ) {
+      await this.markVerificationPending(
+        connection,
+        deployment.id,
+        operation.id,
+        'LEGACY_RUNTIME_FINGERPRINT_PENDING',
+        'Legacy deployment intent runtime fingerprint could not be reconstructed yet; reconciliation will retry',
+      );
+      return this.deployments.requireWithConnection(
+        connection,
+        deployment.id,
+      );
+    }
+
+    if (
       !compatibleOperation ||
       compatibleOperation.type !== 'DEPLOY' ||
       !compatibleOperation.beforeSpecHash ||
@@ -1826,6 +1848,25 @@ export class DeploymentService
   ): Promise<DeploymentRecord> {
     const compatibleOperation =
       await this.hydrateLegacyRuntimeFingerprint(connection, operation);
+    if (
+      !compatibleOperation &&
+      operation.type === 'ROLLBACK' &&
+      operation.beforeSpecHash &&
+      operation.targetSpecHash &&
+      operation.targetImage &&
+      operation.targetTaskSpecHash &&
+      !operation.targetRuntimeSpecHash
+    ) {
+      await this.markRollbackVerificationPending(
+        connection,
+        deployment.id,
+        operation.id,
+        'LEGACY_RUNTIME_FINGERPRINT_PENDING',
+        'Legacy rollback intent runtime fingerprint could not be reconstructed yet; reconciliation will retry',
+      );
+      return this.deployments.requireWithConnection(connection, deployment.id);
+    }
+
     if (
       !compatibleOperation ||
       compatibleOperation.type !== 'ROLLBACK' ||
