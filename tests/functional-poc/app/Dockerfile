@@ -1,9 +1,13 @@
-FROM busybox:1.36
+FROM python:3.13-alpine
 
 ARG VERSION=unknown
+ARG HEALTH_STATUS=200
 
-RUN mkdir -p /www && printf '%s\n' "$VERSION" > /www/index.html
+ENV APP_VERSION=$VERSION
+ENV HEALTH_STATUS=$HEALTH_STATUS
+
+COPY server.py /app/server.py
 
 EXPOSE 8080
 
-CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]
+CMD ["python", "/app/server.py"]
