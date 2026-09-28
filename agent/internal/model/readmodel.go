@@ -84,6 +84,7 @@ type ServiceMutationRequest struct {
 	ExpectedSpecHash string  `json:"expectedSpecHash"`
 	TargetSpecHash   string  `json:"targetSpecHash"`
 	Replicas         *uint64 `json:"replicas,omitempty"`
+	Image            *string `json:"image,omitempty"`
 }
 
 type ServiceMutationPlan struct {
@@ -93,6 +94,7 @@ type ServiceMutationPlan struct {
 	TargetSpecHash    string  `json:"targetSpecHash"`
 	TargetForceUpdate uint64  `json:"targetForceUpdate"`
 	TargetReplicas    *uint64 `json:"targetReplicas,omitempty"`
+	TargetImage       string  `json:"targetImage,omitempty"`
 }
 
 type ServiceMutationResponse struct {
