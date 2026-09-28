@@ -265,3 +265,39 @@ test('deployment target preserves Agent failures instead of returning service no
     /Agent service lookup failed with HTTP 502/,
   );
 });
+
+
+test('deployment target maps Agent service not-found to 404 semantics', async () => {
+  const repository = {
+    findApplication: async () => application,
+  };
+  const agent = {
+    inspectService: async () => {
+      throw new AgentRequestError(404, 'service missing not found');
+    },
+  };
+  const service = new ReleaseService(
+    repository as never,
+    agent as never,
+    {} as never,
+  );
+
+  await assert.rejects(
+    service.createTarget(
+      'default',
+      'app-1',
+      {
+        environment: 'production',
+        dockerServiceId: 'missing',
+        serviceName: 'missing',
+        routingMode: 'INGRESS',
+      },
+      {
+        actorId: 'operator-1',
+        role: 'OPERATOR',
+        clusters: ['default'],
+      },
+    ),
+    /Swarm service not found/,
+  );
+});
