@@ -673,7 +673,6 @@ components:
       properties:
         expectedVersion: { type: integer, minimum: 0 }
         targetReplicas: { type: integer, minimum: 0 }
-        targetImage: { type: string }
         includeUpdateOverlap: { type: boolean }
 
     CapacityResource:
@@ -735,67 +734,7 @@ components:
         expectedVersion: { type: integer, minimum: 0 }
         image:
           type: string
-          pattern: '@sha256:[A-Fa-f0-9]{64}      type: object
-      additionalProperties: false
-      required: [expectedVersion, replicas]
-      properties:
-        expectedVersion: { type: integer, minimum: 0 }
-        replicas: { type: integer, minimum: 0 }
-
-    RestartPlanRequest:
-      type: object
-      additionalProperties: false
-      required: [expectedVersion]
-      properties:
-        expectedVersion: { type: integer, minimum: 0 }
-
-    ScaleMutationRequest:
-      type: object
-      additionalProperties: false
-      required:
-        [expectedVersion, expectedSpecHash, targetSpecHash, replicas]
-      properties:
-        expectedVersion: { type: integer, minimum: 0 }
-        expectedSpecHash: { type: string, minLength: 1 }
-        targetSpecHash: { type: string, minLength: 1 }
-        replicas: { type: integer, minimum: 0 }
-
-    RestartMutationRequest:
-      type: object
-      additionalProperties: false
-      required: [expectedVersion, expectedSpecHash, targetSpecHash]
-      properties:
-        expectedVersion: { type: integer, minimum: 0 }
-        expectedSpecHash: { type: string, minLength: 1 }
-        targetSpecHash: { type: string, minLength: 1 }
-
-    ServiceMutationPlan:
-      type: object
-      additionalProperties: false
-      required:
-        [serviceId, version, beforeSpecHash, targetSpecHash, targetForceUpdate]
-      properties:
-        serviceId: { type: string }
-        version: { type: integer, minimum: 0 }
-        beforeSpecHash: { type: string, minLength: 1 }
-        targetSpecHash: { type: string, minLength: 1 }
-        targetForceUpdate: { type: integer, minimum: 0 }
-        targetReplicas: { type: integer, minimum: 0 }
-
-    ServiceMutationResponse:
-      type: object
-      additionalProperties: false
-      required:
-        [serviceId, version, targetSpecHash, targetForceUpdate]
-      properties:
-        serviceId: { type: string }
-        version: { type: integer, minimum: 0 }
-        targetSpecHash: { type: string, minLength: 1 }
-        targetForceUpdate: { type: integer, minimum: 0 }
-        warnings:
-          type: array
-          items: { type: string }
-
+          pattern: '@sha256:[A-Fa-f0-9]{64}$'
 
     ImageMutationRequest:
       type: object
@@ -807,67 +746,7 @@ components:
         targetSpecHash: { type: string, minLength: 1 }
         image:
           type: string
-          pattern: '@sha256:[A-Fa-f0-9]{64}      type: object
-      additionalProperties: false
-      required: [expectedVersion, replicas]
-      properties:
-        expectedVersion: { type: integer, minimum: 0 }
-        replicas: { type: integer, minimum: 0 }
-
-    RestartPlanRequest:
-      type: object
-      additionalProperties: false
-      required: [expectedVersion]
-      properties:
-        expectedVersion: { type: integer, minimum: 0 }
-
-    ScaleMutationRequest:
-      type: object
-      additionalProperties: false
-      required:
-        [expectedVersion, expectedSpecHash, targetSpecHash, replicas]
-      properties:
-        expectedVersion: { type: integer, minimum: 0 }
-        expectedSpecHash: { type: string, minLength: 1 }
-        targetSpecHash: { type: string, minLength: 1 }
-        replicas: { type: integer, minimum: 0 }
-
-    RestartMutationRequest:
-      type: object
-      additionalProperties: false
-      required: [expectedVersion, expectedSpecHash, targetSpecHash]
-      properties:
-        expectedVersion: { type: integer, minimum: 0 }
-        expectedSpecHash: { type: string, minLength: 1 }
-        targetSpecHash: { type: string, minLength: 1 }
-
-    ServiceMutationPlan:
-      type: object
-      additionalProperties: false
-      required:
-        [serviceId, version, beforeSpecHash, targetSpecHash, targetForceUpdate]
-      properties:
-        serviceId: { type: string }
-        version: { type: integer, minimum: 0 }
-        beforeSpecHash: { type: string, minLength: 1 }
-        targetSpecHash: { type: string, minLength: 1 }
-        targetForceUpdate: { type: integer, minimum: 0 }
-        targetReplicas: { type: integer, minimum: 0 }
-
-    ServiceMutationResponse:
-      type: object
-      additionalProperties: false
-      required:
-        [serviceId, version, targetSpecHash, targetForceUpdate]
-      properties:
-        serviceId: { type: string }
-        version: { type: integer, minimum: 0 }
-        targetSpecHash: { type: string, minLength: 1 }
-        targetForceUpdate: { type: integer, minimum: 0 }
-        warnings:
-          type: array
-          items: { type: string }
-
+          pattern: '@sha256:[A-Fa-f0-9]{64}$'
 
     ScalePlanRequest:
       type: object
@@ -916,6 +795,7 @@ components:
         targetSpecHash: { type: string, minLength: 1 }
         targetForceUpdate: { type: integer, minimum: 0 }
         targetReplicas: { type: integer, minimum: 0 }
+        targetImage: { type: string }
 
     ServiceMutationResponse:
       type: object
