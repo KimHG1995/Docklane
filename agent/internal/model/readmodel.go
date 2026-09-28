@@ -89,14 +89,14 @@ type ServiceMutationRequest struct {
 }
 
 type ServiceMutationPlan struct {
-	ServiceID         string  `json:"serviceId"`
-	Version           uint64  `json:"version"`
-	BeforeSpecHash    string  `json:"beforeSpecHash"`
-	TargetSpecHash    string  `json:"targetSpecHash"`
-	TargetForceUpdate uint64  `json:"targetForceUpdate"`
-	TargetReplicas    *uint64 `json:"targetReplicas,omitempty"`
-	TargetImage       string  `json:"targetImage,omitempty"`
-	TargetTaskSpecHash string `json:"targetTaskSpecHash,omitempty"`
+	ServiceID          string  `json:"serviceId"`
+	Version            uint64  `json:"version"`
+	BeforeSpecHash     string  `json:"beforeSpecHash"`
+	TargetSpecHash     string  `json:"targetSpecHash"`
+	TargetForceUpdate  uint64  `json:"targetForceUpdate"`
+	TargetReplicas     *uint64 `json:"targetReplicas,omitempty"`
+	TargetImage        string  `json:"targetImage,omitempty"`
+	TargetTaskSpecHash string  `json:"targetTaskSpecHash,omitempty"`
 }
 
 type ServiceMutationResponse struct {
