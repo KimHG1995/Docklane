@@ -479,90 +479,193 @@ export class DeploymentService implements OnApplicationBootstrap {
     let lastError: string | null = null;
 
     while (Date.now() < deadline) {
+      let current: ServiceDetailResponse;
       try {
-        const current = await this.agentClient.inspectService(plan.serviceId);
-        const decision = classifyDeploymentSnapshot(
-          current,
-          plan,
-          digest,
-          noOp,
-        );
+        current = await this.agentClient.inspectService(plan.serviceId);
+        lastError = null;
+      } catch (error) {
+        lastError = errorMessage(error);
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
 
-        if (decision === 'SUCCESS') {
+      const decision = classifyDeploymentSnapshot(
+        current,
+        plan,
+        digest,
+        noOp,
+      );
+
+      if (decision === 'FAILED') {
+        await this.fail(
+          connection,
+          deploymentId,
+          operationId,
+          'CONVERGENCE_FAILED',
+          'Swarm update entered a terminal failed or rollback state',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+
+      if (decision === 'EXTERNAL_CONFLICT') {
+        await this.attention(
+          connection,
+          deploymentId,
+          operationId,
+          'EXTERNAL_SERVICE_CONFLICT',
+          'Current service spec diverged from the deployment target',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+
+      if (decision !== 'SUCCESS') {
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+
+      try {
+        await this.health.verify(health, async () => {
+          let guarded: ServiceDetailResponse;
           try {
-            await this.health.verify(health);
+            guarded = await this.agentClient.inspectService(plan.serviceId);
           } catch (error) {
-            await this.fail(
+            throw new DeploymentConvergenceGuardError(
+              'UNAVAILABLE',
+              errorMessage(error),
+            );
+          }
+
+          const guardedDecision = classifyDeploymentSnapshot(
+            guarded,
+            plan,
+            digest,
+            noOp,
+          );
+          if (guardedDecision !== 'SUCCESS') {
+            throw new DeploymentConvergenceGuardError(guardedDecision);
+          }
+        });
+      } catch (error) {
+        if (error instanceof DeploymentConvergenceGuardError) {
+          if (error.decision === 'EXTERNAL_CONFLICT') {
+            await this.attention(
               connection,
               deploymentId,
               operationId,
-              'HEALTH_VERIFICATION_FAILED',
-              errorMessage(error),
+              'EXTERNAL_SERVICE_CONFLICT',
+              'Service changed during the health stability window',
             );
             return this.deployments.requireWithConnection(
               connection,
               deploymentId,
             );
           }
-
-          await connection.beginTransaction();
-          try {
-            await this.operations.markSuccess(
+          if (error.decision === 'FAILED') {
+            await this.fail(
               connection,
+              deploymentId,
               operationId,
-              current.service.version,
+              'CONVERGENCE_FAILED',
+              'Swarm update entered a terminal failed state during health verification',
             );
-            await this.deployments.markSuccess(connection, deploymentId);
-            const operation = await this.operations.findWithConnection(
+            return this.deployments.requireWithConnection(
               connection,
-              operationId,
+              deploymentId,
             );
-            if (!operation) throw new Error('Deployment operation disappeared');
-            await this.operations.audit(connection, {
-              operationId,
-              actorId: operation.actorId,
-              clusterId: operation.clusterId,
-              serviceId: operation.serviceId,
-              action: noOp ? 'DEPLOY_NO_OP_SUCCEEDED' : 'DEPLOY_SUCCEEDED',
-              afterJson: current.service,
-            });
-            await connection.commit();
-          } catch (error) {
-            await connection.rollback();
-            throw error;
           }
-          return this.deployments.requireWithConnection(
-            connection,
-            deploymentId,
-          );
+          if (error.decision === 'UNAVAILABLE') {
+            lastError = error.message;
+          } else {
+            lastError = null;
+          }
+          await sleep(VERIFY_INTERVAL_MS);
+          continue;
         }
 
-        if (decision === 'FAILED') {
-          await this.fail(
-            connection,
-            deploymentId,
-            operationId,
-            'CONVERGENCE_FAILED',
-            'Swarm update entered a failed or rollback state',
-          );
-          return this.deployments.requireWithConnection(connection, deploymentId);
-        }
+        await this.fail(
+          connection,
+          deploymentId,
+          operationId,
+          'HEALTH_VERIFICATION_FAILED',
+          errorMessage(error),
+        );
+        return this.deployments.requireWithConnection(
+          connection,
+          deploymentId,
+        );
+      }
 
-        if (decision === 'EXTERNAL_CONFLICT') {
-          await this.attention(
-            connection,
-            deploymentId,
-            operationId,
-            'EXTERNAL_SERVICE_CONFLICT',
-            'Current service spec diverged from the deployment target',
-          );
-          return this.deployments.requireWithConnection(connection, deploymentId);
-        }
-        lastError = null;
+      let finalCurrent: ServiceDetailResponse;
+      try {
+        finalCurrent = await this.agentClient.inspectService(plan.serviceId);
       } catch (error) {
         lastError = errorMessage(error);
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
       }
-      await sleep(VERIFY_INTERVAL_MS);
+
+      const finalDecision = classifyDeploymentSnapshot(
+        finalCurrent,
+        plan,
+        digest,
+        noOp,
+      );
+      if (finalDecision === 'PENDING') {
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+      if (finalDecision === 'FAILED') {
+        await this.fail(
+          connection,
+          deploymentId,
+          operationId,
+          'CONVERGENCE_FAILED',
+          'Swarm update changed to a terminal failed state before success persistence',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+      if (finalDecision === 'EXTERNAL_CONFLICT') {
+        await this.attention(
+          connection,
+          deploymentId,
+          operationId,
+          'EXTERNAL_SERVICE_CONFLICT',
+          'Service changed before deployment success could be persisted',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+
+      await connection.beginTransaction();
+      try {
+        await this.operations.markSuccess(
+          connection,
+          operationId,
+          finalCurrent.service.version,
+        );
+        await this.deployments.markSuccess(connection, deploymentId);
+        const operation = await this.operations.findWithConnection(
+          connection,
+          operationId,
+        );
+        if (!operation) throw new Error('Deployment operation disappeared');
+        await this.operations.audit(connection, {
+          operationId,
+          actorId: operation.actorId,
+          clusterId: operation.clusterId,
+          serviceId: operation.serviceId,
+          action: noOp ? 'DEPLOY_NO_OP_SUCCEEDED' : 'DEPLOY_SUCCEEDED',
+          afterJson: finalCurrent.service,
+        });
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      }
+
+      return this.deployments.requireWithConnection(
+        connection,
+        deploymentId,
+      );
     }
 
     if (lastError) {
@@ -574,12 +677,12 @@ export class DeploymentService implements OnApplicationBootstrap {
         `Deployment verification timed out after Agent errors: ${lastError}`,
       );
     } else {
-      await this.fail(
+      await this.markVerificationPending(
         connection,
         deploymentId,
         operationId,
-        'DEPLOYMENT_TIMEOUT',
-        'Deployment did not converge before timeout',
+        'DEPLOYMENT_OBSERVATION_TIMEOUT',
+        'Deployment is still converging after the synchronous observation window; mutation protection remains active',
       );
     }
     return this.deployments.requireWithConnection(connection, deploymentId);
@@ -891,6 +994,16 @@ export class DeploymentService implements OnApplicationBootstrap {
         'operationId was already used for a different mutation',
       );
     }
+  }
+}
+
+class DeploymentConvergenceGuardError extends Error {
+  constructor(
+    readonly decision: DeploymentDecision | 'UNAVAILABLE',
+    message = 'Deployment convergence changed during health verification',
+  ) {
+    super(message);
+    this.name = 'DeploymentConvergenceGuardError';
   }
 }
 
