@@ -149,7 +149,7 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 
 	data, err := s.reader.Service(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		writeReadError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
@@ -179,7 +179,7 @@ func (s *Server) node(w http.ResponseWriter, r *http.Request) {
 
 	data, err := s.reader.Node(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		writeReadError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
@@ -485,7 +485,23 @@ func decodeJSON(r *http.Request, target any) error {
 	return nil
 }
 
+func writeReadError(w http.ResponseWriter, err error) {
+	var notFound *dockerengine.NotFoundError
+	if errors.As(err, &notFound) {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeError(w, http.StatusBadGateway, err)
+}
+
 func writeMutationError(w http.ResponseWriter, err error) {
+	var notFound *dockerengine.NotFoundError
+	if errors.As(err, &notFound) {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+
 	var conflict *dockerengine.ConflictError
 	if errors.As(err, &conflict) {
 		writeError(w, http.StatusConflict, err)
