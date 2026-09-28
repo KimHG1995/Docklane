@@ -389,7 +389,6 @@ func TestServicePlacementCheck(t *testing.T) {
 	}
 }
 
-
 func TestPlanImageUpdate(t *testing.T) {
 	s := New(config.Config{InsecureDev: true}, fakeReader{})
 	req := httptest.NewRequest(
