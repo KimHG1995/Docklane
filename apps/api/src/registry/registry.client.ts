@@ -35,11 +35,12 @@ export class RegistryClient {
     const manifestUrl =
       `${repository.baseUrl}/v2/${encodeRepositoryPath(repository.path)}/manifests/${encodeURIComponent(reference)}`;
 
-    let response = await this.requestManifest(
+    let manifest = await this.requestManifest(
       manifestUrl,
       repository.host,
       undefined,
     );
+    let response = manifest.response;
 
     if (response.status === 401) {
       const challenge = parseBearerChallenge(
@@ -54,14 +55,15 @@ export class RegistryClient {
 
       const token = await this.fetchBearerToken(
         challenge,
-        repository.host,
+        manifest.url.host,
         repository.path,
       );
-      response = await this.requestManifest(
-        manifestUrl,
-        repository.host,
+      manifest = await this.requestManifest(
+        manifest.url.toString(),
+        manifest.url.host,
         token,
       );
+      response = manifest.response;
     }
 
     mapManifestFailure(response);
@@ -98,7 +100,7 @@ export class RegistryClient {
     url: string,
     registryHost: string,
     bearerToken: string | undefined,
-  ): Promise<Response> {
+  ): Promise<SafeFetchResult> {
     const headers = new Headers({
       Accept: ACCEPT_MANIFESTS,
     });
@@ -121,7 +123,7 @@ export class RegistryClient {
   private async safeFetch(
     input: string,
     init: { method: string; headers: Headers },
-  ): Promise<Response> {
+  ): Promise<SafeFetchResult> {
     let current = new URL(input);
     let headers = new Headers(init.headers);
 
@@ -144,7 +146,7 @@ export class RegistryClient {
       }
 
       if (![301, 302, 303, 307, 308].includes(response.status)) {
-        return response;
+        return { response, url: current };
       }
 
       const location = response.headers.get('location');
@@ -201,7 +203,7 @@ export class RegistryClient {
       headers.set('Authorization', basicAuthorization(credential));
     }
 
-    const response = await this.safeFetch(url.toString(), {
+    const { response } = await this.safeFetch(url.toString(), {
       method: 'GET',
       headers,
     });
@@ -244,6 +246,11 @@ export class RegistryClient {
     }
     return token;
   }
+}
+
+interface SafeFetchResult {
+  response: Response;
+  url: URL;
 }
 
 interface ParsedRepository {
