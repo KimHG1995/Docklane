@@ -64,6 +64,7 @@ test('drain waits while a non-terminal service task remains on the node', () => 
       id: 'task-1',
       serviceId: 'service-1',
       specHash: 'task-spec',
+      runtimeSpecHash: 'task-runtime-spec',
       slot: 1,
       desiredState: 'shutdown',
       state: 'running',
