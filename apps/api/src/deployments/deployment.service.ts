@@ -132,7 +132,15 @@ export class DeploymentService
                   deployment,
                 );
               } else {
+                if (current.type === 'ROLLBACK') {
+                await this.reconcileRollbackLocked(
+                  connection,
+                  current,
+                  deployment,
+                );
+              } else {
                 await this.reconcileLocked(connection, current, deployment);
+              }
               }
             },
           );
@@ -1254,6 +1262,450 @@ export class DeploymentService
     }
   }
 
+  private async verifyRollbackAndComplete(
+    connection: PoolConnection,
+    deploymentId: string,
+    operationId: string,
+    plan: ServiceMutationPlan,
+    digest: string,
+    health: DeployRequest['health'],
+  ): Promise<DeploymentRecord> {
+    const deadline = Date.now() + VERIFY_TIMEOUT_MS;
+    let lastError: string | null = null;
+
+    while (Date.now() < deadline) {
+      let current: ServiceDetailResponse;
+      try {
+        current = await this.agentClient.inspectService(plan.serviceId);
+        lastError = null;
+      } catch (error) {
+        lastError = errorMessage(error);
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+
+      const decision = classifyRollbackSnapshot(current, plan, digest);
+      if (decision === 'FAILED') {
+        await this.rollbackFailed(
+          connection,
+          deploymentId,
+          operationId,
+          'ROLLBACK_FAILED',
+          'Swarm rollback entered a terminal failed state',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+      if (decision === 'EXTERNAL_CONFLICT') {
+        await this.rollbackAttention(
+          connection,
+          deploymentId,
+          operationId,
+          'ROLLBACK_EXTERNAL_CONFLICT',
+          'Service changed outside the recorded rollback target',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+      if (decision !== 'SUCCESS') {
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+
+      try {
+        await this.health.verify(health, async () => {
+          let guarded: ServiceDetailResponse;
+          try {
+            guarded = await this.agentClient.inspectService(plan.serviceId);
+          } catch (error) {
+            throw new RollbackConvergenceGuardError(
+              'UNAVAILABLE',
+              errorMessage(error),
+            );
+          }
+          const guardedDecision = classifyRollbackSnapshot(
+            guarded,
+            plan,
+            digest,
+          );
+          if (guardedDecision !== 'SUCCESS') {
+            throw new RollbackConvergenceGuardError(guardedDecision);
+          }
+        });
+      } catch (error) {
+        if (error instanceof RollbackConvergenceGuardError) {
+          if (error.decision === 'FAILED') {
+            await this.rollbackFailed(
+              connection,
+              deploymentId,
+              operationId,
+              'ROLLBACK_FAILED',
+              'Rollback became unhealthy during recovery verification',
+            );
+            return this.deployments.requireWithConnection(
+              connection,
+              deploymentId,
+            );
+          }
+          if (error.decision === 'EXTERNAL_CONFLICT') {
+            await this.rollbackAttention(
+              connection,
+              deploymentId,
+              operationId,
+              'ROLLBACK_EXTERNAL_CONFLICT',
+              'Service changed during rollback recovery health verification',
+            );
+            return this.deployments.requireWithConnection(
+              connection,
+              deploymentId,
+            );
+          }
+          lastError =
+            error.decision === 'UNAVAILABLE' ? error.message : null;
+          await sleep(VERIFY_INTERVAL_MS);
+          continue;
+        }
+
+        await this.rollbackFailed(
+          connection,
+          deploymentId,
+          operationId,
+          'ROLLBACK_HEALTH_FAILED',
+          errorMessage(error),
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+
+      let finalCurrent: ServiceDetailResponse;
+      try {
+        finalCurrent = await this.agentClient.inspectService(plan.serviceId);
+      } catch (error) {
+        lastError = errorMessage(error);
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+
+      const finalDecision = classifyRollbackSnapshot(
+        finalCurrent,
+        plan,
+        digest,
+      );
+      if (finalDecision === 'PENDING') {
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+      if (finalDecision === 'FAILED') {
+        await this.rollbackFailed(
+          connection,
+          deploymentId,
+          operationId,
+          'ROLLBACK_FAILED',
+          'Rollback changed to a terminal failed state before persistence',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+      if (finalDecision === 'EXTERNAL_CONFLICT') {
+        await this.rollbackAttention(
+          connection,
+          deploymentId,
+          operationId,
+          'ROLLBACK_EXTERNAL_CONFLICT',
+          'Service changed before rollback success could be persisted',
+        );
+        return this.deployments.requireWithConnection(connection, deploymentId);
+      }
+
+      await connection.beginTransaction();
+      try {
+        await this.operations.markSuccess(
+          connection,
+          operationId,
+          finalCurrent.service.version,
+        );
+        await this.deployments.markRolledBack(connection, deploymentId);
+        const operation = await this.operations.findWithConnection(
+          connection,
+          operationId,
+        );
+        if (!operation) throw new Error('Rollback operation disappeared');
+        await this.operations.audit(connection, {
+          operationId,
+          actorId: operation.actorId,
+          clusterId: operation.clusterId,
+          serviceId: operation.serviceId,
+          action: 'ROLLBACK_SUCCEEDED',
+          afterJson: finalCurrent.service,
+        });
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      }
+
+      return this.deployments.requireWithConnection(connection, deploymentId);
+    }
+
+    if (lastError) {
+      await this.rollbackAttention(
+        connection,
+        deploymentId,
+        operationId,
+        'ROLLBACK_VERIFICATION_UNAVAILABLE',
+        `Rollback verification timed out after Agent errors: ${lastError}`,
+      );
+    } else {
+      await this.markRollbackVerificationPending(
+        connection,
+        deploymentId,
+        operationId,
+        'ROLLBACK_OBSERVATION_TIMEOUT',
+        'Rollback is still converging after the synchronous observation window',
+      );
+    }
+    return this.deployments.requireWithConnection(connection, deploymentId);
+  }
+
+  private async reconcileRollbackLocked(
+    connection: PoolConnection,
+    operation: OperationRecord,
+    deployment: DeploymentRecord,
+    initialError?: string,
+  ): Promise<DeploymentRecord> {
+    if (
+      operation.type !== 'ROLLBACK' ||
+      !operation.beforeSpecHash ||
+      !operation.targetSpecHash ||
+      !operation.targetImage ||
+      !operation.targetTaskSpecHash
+    ) {
+      await this.rollbackAttention(
+        connection,
+        deployment.id,
+        operation.id,
+        'ROLLBACK_MISSING_TARGET',
+        'Rollback intent is missing the persisted target needed for reconciliation',
+      );
+      return this.deployments.requireWithConnection(connection, deployment.id);
+    }
+
+    const digest = digestFromImage(operation.targetImage);
+    if (!digest) {
+      await this.rollbackAttention(
+        connection,
+        deployment.id,
+        operation.id,
+        'ROLLBACK_INVALID_TARGET_IMAGE',
+        'Persisted rollback image is not digest-pinned',
+      );
+      return this.deployments.requireWithConnection(connection, deployment.id);
+    }
+
+    const plan: ServiceMutationPlan = {
+      serviceId: operation.serviceId,
+      version: operation.expectedVersion,
+      beforeSpecHash: operation.beforeSpecHash,
+      targetSpecHash: operation.targetSpecHash,
+      targetForceUpdate: operation.targetForceUpdate,
+      targetReplicas: operation.targetReplicas ?? undefined,
+      targetImage: operation.targetImage,
+      targetTaskSpecHash: operation.targetTaskSpecHash,
+    };
+
+    const deadline = Date.now() + RECONCILE_OBSERVATION_MS;
+    let lastError = initialError ?? null;
+
+    while (Date.now() < deadline) {
+      let current: ServiceDetailResponse;
+      try {
+        current = await this.agentClient.inspectService(operation.serviceId);
+        lastError = null;
+      } catch (error) {
+        lastError = errorMessage(error);
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+
+      const decision = classifyRollbackSnapshot(current, plan, digest);
+      if (decision === 'SUCCESS') {
+        if (
+          operation.status !== 'VERIFYING' ||
+          deployment.status !== 'ROLLBACK_VERIFYING'
+        ) {
+          await this.markRollbackVerifying(
+            connection,
+            deployment.id,
+            operation.id,
+            current.service.version,
+          );
+        }
+        return this.verifyRollbackAndComplete(
+          connection,
+          deployment.id,
+          operation.id,
+          plan,
+          digest,
+          deployment.health,
+        );
+      }
+      if (decision === 'FAILED') {
+        await this.rollbackFailed(
+          connection,
+          deployment.id,
+          operation.id,
+          'ROLLBACK_FAILED',
+          `Swarm rollback entered ${current.service.updateState}`,
+        );
+        return this.deployments.requireWithConnection(connection, deployment.id);
+      }
+      if (decision === 'EXTERNAL_CONFLICT') {
+        await this.rollbackAttention(
+          connection,
+          deployment.id,
+          operation.id,
+          'ROLLBACK_EXTERNAL_CONFLICT',
+          'Service changed outside the recorded rollback target',
+        );
+        return this.deployments.requireWithConnection(connection, deployment.id);
+      }
+
+      await sleep(VERIFY_INTERVAL_MS);
+    }
+
+    if (lastError) {
+      await this.rollbackAttention(
+        connection,
+        deployment.id,
+        operation.id,
+        'ROLLBACK_RECONCILIATION_UNAVAILABLE',
+        `Unable to inspect rollback outcome: ${lastError}`,
+      );
+    } else {
+      await this.markRollbackVerificationPending(
+        connection,
+        deployment.id,
+        operation.id,
+        'ROLLBACK_STILL_IN_PROGRESS',
+        initialError
+          ? `Rollback response was lost and convergence is still in progress: ${initialError}`
+          : 'Rollback is still in progress',
+      );
+    }
+    return this.deployments.requireWithConnection(connection, deployment.id);
+  }
+
+  private async markRollbackVerificationPending(
+    connection: PoolConnection,
+    deploymentId: string,
+    operationId: string,
+    code: string,
+    message: string,
+  ): Promise<void> {
+    await connection.beginTransaction();
+    try {
+      await this.operations.markVerificationPending(
+        connection,
+        operationId,
+        code,
+        message,
+      );
+      await this.deployments.markRollbackVerificationPending(
+        connection,
+        deploymentId,
+        message,
+      );
+      const operation = await this.operations.findWithConnection(
+        connection,
+        operationId,
+      );
+      if (!operation) throw new Error('Rollback operation disappeared');
+      await this.operations.audit(connection, {
+        operationId,
+        actorId: operation.actorId,
+        clusterId: operation.clusterId,
+        serviceId: operation.serviceId,
+        action: 'ROLLBACK_VERIFICATION_PENDING',
+        afterJson: { code, message },
+      });
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
+  }
+
+  private async rollbackFailed(
+    connection: PoolConnection,
+    deploymentId: string,
+    operationId: string,
+    code: string,
+    message: string,
+  ): Promise<void> {
+    await connection.beginTransaction();
+    try {
+      await this.operations.markFailed(connection, operationId, code, message);
+      await this.deployments.markRollbackFailed(
+        connection,
+        deploymentId,
+        message,
+      );
+      const operation = await this.operations.findWithConnection(
+        connection,
+        operationId,
+      );
+      if (!operation) throw new Error('Rollback operation disappeared');
+      await this.operations.audit(connection, {
+        operationId,
+        actorId: operation.actorId,
+        clusterId: operation.clusterId,
+        serviceId: operation.serviceId,
+        action: 'ROLLBACK_FAILED',
+        afterJson: { code, message },
+      });
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
+  }
+
+  private async rollbackAttention(
+    connection: PoolConnection,
+    deploymentId: string,
+    operationId: string,
+    code: string,
+    message: string,
+  ): Promise<void> {
+    await connection.beginTransaction();
+    try {
+      await this.operations.markNeedsAttention(
+        connection,
+        operationId,
+        code,
+        message,
+      );
+      await this.deployments.markNeedsAttention(
+        connection,
+        deploymentId,
+        message,
+      );
+      const operation = await this.operations.findWithConnection(
+        connection,
+        operationId,
+      );
+      if (!operation) throw new Error('Rollback operation disappeared');
+      await this.operations.audit(connection, {
+        operationId,
+        actorId: operation.actorId,
+        clusterId: operation.clusterId,
+        serviceId: operation.serviceId,
+        action: 'ROLLBACK_NEEDS_ATTENTION',
+        afterJson: { code, message },
+      });
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
+  }
+
   private async fail(
     connection: PoolConnection,
     deploymentId: string,
@@ -1490,6 +1942,71 @@ export function classifyDeploymentSnapshot(
     return 'PENDING';
   }
   return 'SUCCESS';
+}
+
+export function classifyRollbackSnapshot(
+  current: ServiceDetailResponse,
+  plan: ServiceMutationPlan,
+  digest: string,
+): DeploymentDecision {
+  if (current.service.specHash !== plan.targetSpecHash) {
+    if (current.service.updateState === 'rollback_started') return 'PENDING';
+    if (current.service.version > plan.version) return 'EXTERNAL_CONFLICT';
+    return 'PENDING';
+  }
+
+  if (!imageContainsDigest(current.service.image, digest)) return 'PENDING';
+  if (current.service.updateState === 'paused') return 'FAILED';
+  if (current.service.updateState === 'rollback_started') return 'PENDING';
+
+  if (!plan.targetTaskSpecHash) return 'PENDING';
+  if (current.service.desiredReplicas !== current.service.runningReplicas) {
+    return 'PENDING';
+  }
+
+  const running = current.tasks.filter(
+    (task) =>
+      task.state === 'running' &&
+      task.desiredState === 'running',
+  );
+  const slots = new Set(running.map((task) => task.slot));
+  if (
+    running.length !== current.service.desiredReplicas ||
+    slots.size !== current.service.desiredReplicas ||
+    !running.every(
+      (task) =>
+        task.slot > 0 &&
+        imageContainsDigest(task.image, digest) &&
+        task.forceUpdate === plan.targetForceUpdate &&
+        task.specHash === plan.targetTaskSpecHash,
+    )
+  ) {
+    return 'PENDING';
+  }
+
+  return 'SUCCESS';
+}
+
+class RollbackConvergenceGuardError extends Error {
+  constructor(
+    readonly decision: DeploymentDecision | 'UNAVAILABLE',
+    message = 'Rollback convergence changed during recovery health verification',
+  ) {
+    super(message);
+    this.name = 'RollbackConvergenceGuardError';
+  }
+}
+
+function readSpecHash(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (
+    'specHash' in value &&
+    typeof value.specHash === 'string' &&
+    value.specHash.length > 0
+  ) {
+    return value.specHash;
+  }
+  return null;
 }
 
 export function dockerImageReference(repository: string, digest: string): string {
