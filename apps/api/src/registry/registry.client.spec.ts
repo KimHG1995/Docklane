@@ -58,9 +58,9 @@ test('registry client resolves tag through bearer challenge', async () => {
     assert.equal(result.digest, digest);
     assert.equal(result.contentLength, 123);
     assert.equal(calls.length, 3);
-    assert.equal(calls[0].method, 'HEAD');
-    assert.match(calls[1].url, /scope=repository%3Ateam%2Fapi%3Apull/);
-    assert.equal(calls[2].authorization, 'Bearer registry-token');
+    assert.equal(calls[0]!.method, 'HEAD');
+    assert.match(calls[1]!.url, /scope=repository%3Ateam%2Fapi%3Apull/);
+    assert.equal(calls[2]!.authorization, 'Bearer registry-token');
   } finally {
     globalThis.fetch = originalFetch;
   }
