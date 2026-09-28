@@ -221,6 +221,19 @@ export class HttpAgentClient implements AgentClient {
     );
   }
 
+  planUpdateServiceImage(
+    serviceId: string,
+    expectedVersion: number,
+    image: string,
+  ): Promise<ServiceMutationPlan> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/plan-image-update`,
+      ServiceMutationPlanSchema,
+      { expectedVersion, image },
+    );
+  }
+
   scaleService(
     serviceId: string,
     input: {
@@ -249,6 +262,23 @@ export class HttpAgentClient implements AgentClient {
     return this.request(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/restart`,
+      ServiceMutationResponseSchema,
+      input,
+    );
+  }
+
+  updateServiceImage(
+    serviceId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+      image: string;
+    },
+  ): Promise<ServiceMutationResponse> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/image`,
       ServiceMutationResponseSchema,
       input,
     );
