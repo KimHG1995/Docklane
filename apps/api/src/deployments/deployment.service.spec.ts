@@ -587,3 +587,231 @@ test('deployment does not persist SUCCESS when service changes during health sta
   assert.equal(attentionCalls, 1);
   assert.equal(result.status, 'NEEDS_ATTENTION');
 });
+
+
+test('manual rollback observes an existing Swarm rollback without replaying it', async () => {
+  const rollbackDigest = `sha256:${'b'.repeat(64)}`;
+  const rollbackImage =
+    `registry.example.com/team/api@${rollbackDigest}`;
+  let planRollbackCalls = 0;
+  let rollbackMutationCalls = 0;
+  let operation: OperationRecord | null = null;
+
+  const deployment: DeploymentRecord = {
+    id: 'deployment-existing-rollback',
+    releaseId: 'failed-release',
+    previousReleaseId: 'previous-release',
+    deploymentTargetId: 'target-1',
+    operationId: 'deploy-op-failed',
+    rollbackOperationId: null,
+    status: 'FAILED',
+    reason: 'health failed',
+    noOp: false,
+    beforeSpec: {
+      specHash: 'previous-spec',
+    },
+    targetSpec: {
+      specHash: 'failed-spec',
+    },
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+
+  const current = snapshot(
+    {
+      id: 'service-1',
+      version: 13,
+      specHash: 'previous-spec',
+      forceUpdate: 0,
+      taskSpecHash: 'previous-task-spec',
+      image: rollbackImage,
+      updateState: 'rollback_completed',
+    },
+    rollbackImage,
+  );
+  for (const task of current.tasks) {
+    task.specHash = 'previous-task-spec';
+  }
+
+  const releases = {
+    findDeploymentTarget: async () => ({
+      id: 'target-1',
+      applicationId: 'app-1',
+      clusterId: 'default',
+      environment: 'production',
+      dockerServiceId: 'service-1',
+      serviceName: 'api',
+      routingMode: 'INGRESS',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }),
+    findRelease: async (id: string) =>
+      id === 'previous-release'
+        ? {
+            id,
+            applicationId: 'app-1',
+            version: '1.0.0',
+            imageRepository: 'registry.example.com/team/api',
+            imageTag: '1.0.0',
+            imageDigest: rollbackDigest,
+            gitCommit: null,
+            buildNumber: null,
+            createdBy: 'operator-1',
+            createdAt: new Date(0).toISOString(),
+          }
+        : null,
+  };
+
+  const deployments = {
+    find: async () => deployment,
+    markRollingBack: async (
+      _connection: unknown,
+      _id: string,
+      rollbackOperationId: string,
+    ) => {
+      deployment.status = 'ROLLING_BACK';
+      deployment.rollbackOperationId = rollbackOperationId;
+    },
+    markRollbackVerifying: async () => {
+      deployment.status = 'ROLLBACK_VERIFYING';
+    },
+    markRolledBack: async () => {
+      deployment.status = 'ROLLED_BACK';
+    },
+    requireWithConnection: async () => deployment,
+    findByRollbackOperationWithConnection: async () => deployment,
+  };
+
+  const agent = {
+    inspectService: async () => current,
+    planRollbackService: async () => {
+      planRollbackCalls += 1;
+      throw new Error('must not plan a second rollback');
+    },
+    rollbackService: async () => {
+      rollbackMutationCalls += 1;
+      throw new Error('must not replay rollback mutation');
+    },
+  };
+
+  const operations = {
+    findWithConnection: async () => operation,
+    findNonTerminalForServiceWithConnection: async () => null,
+    create: async (_connection: unknown, input: {
+      id: string;
+      clusterId: string;
+      serviceId: string;
+      type: 'ROLLBACK';
+      actorId: string;
+      expectedVersion: number;
+      beforeSpecHash: string;
+      targetSpecHash: string;
+      targetForceUpdate: number;
+      targetReplicas?: number;
+      targetImage?: string;
+      targetTaskSpecHash?: string;
+    }) => {
+      operation = {
+        ...input,
+        targetReplicas: input.targetReplicas ?? null,
+        targetImage: input.targetImage ?? null,
+        targetTaskSpecHash: input.targetTaskSpecHash ?? null,
+        status: 'PENDING',
+        resultVersion: null,
+        errorCode: null,
+        errorMessage: null,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      };
+    },
+    markRunning: async () => {
+      if (operation) operation.status = 'RUNNING';
+    },
+    markVerifying: async (
+      _connection: unknown,
+      _id: string,
+      version: number,
+    ) => {
+      if (operation) {
+        operation.status = 'VERIFYING';
+        operation.resultVersion = version;
+      }
+    },
+    markSuccess: async (
+      _connection: unknown,
+      _id: string,
+      version: number,
+    ) => {
+      if (operation) {
+        operation.status = 'SUCCESS';
+        operation.resultVersion = version;
+      }
+    },
+    audit: async () => undefined,
+  };
+
+  const nodeOperations = {
+    findNonTerminalAffectingServiceWithConnection: async () => null,
+  };
+  const connection = {
+    beginTransaction: async () => undefined,
+    commit: async () => undefined,
+    rollback: async () => undefined,
+  };
+  const lock = {
+    withServiceLock: async (
+      _clusterId: string,
+      _serviceId: string,
+      fn: (value: unknown) => Promise<unknown>,
+    ) => fn(connection),
+  };
+
+  const service = new DeploymentService(
+    releases as never,
+    deployments as never,
+    agent as never,
+    operations as never,
+    nodeOperations as never,
+    lock as never,
+    {
+      assertAvailable: async () => {
+        throw new Error('capacity check must not run for existing rollback');
+      },
+    } as never,
+    {
+      verify: async (
+        _config: unknown,
+        assertConverged?: () => Promise<void>,
+      ) => {
+        await assertConverged?.();
+      },
+    } as never,
+  );
+
+  const result = await service.rollback(
+    'default',
+    deployment.id,
+    { operationId: 'rollback-op-1' },
+    {
+      actorId: 'operator-1',
+      role: 'OPERATOR',
+      clusters: ['default'],
+    },
+  );
+
+  assert.equal(planRollbackCalls, 0);
+  assert.equal(rollbackMutationCalls, 0);
+  assert.equal(result.status, 'ROLLED_BACK');
+  assert.equal(operation?.status, 'SUCCESS');
+});
