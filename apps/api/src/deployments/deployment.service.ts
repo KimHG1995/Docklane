@@ -48,6 +48,17 @@ export class DeploymentService {
     @Inject(HealthVerifier) private readonly health: HealthVerifier,
   ) {}
 
+  async history(
+    clusterId: string,
+    targetId: string,
+  ): Promise<DeploymentRecord[]> {
+    const target = await this.releases.findDeploymentTarget(targetId);
+    if (!target || target.clusterId !== clusterId) {
+      throw new NotFoundException('Deployment target not found');
+    }
+    return this.deployments.listForTarget(targetId);
+  }
+
   async deployment(
     clusterId: string,
     id: string,
