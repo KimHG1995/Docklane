@@ -366,6 +366,8 @@ test('deployment bootstrap reconciles target state without replaying mutation', 
 
   const operation: OperationRecord = { ...deploymentOperation };
   const deployment: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
     id: 'deployment-1',
     releaseId: 'release-1',
     previousReleaseId: null,
@@ -478,6 +480,8 @@ test('deployment does not persist SUCCESS when service changes during health sta
     status: 'VERIFYING',
   };
   const deployment: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
     id: 'deployment-health-race',
     releaseId: 'release-1',
     previousReleaseId: null,
@@ -599,6 +603,8 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
   let persistedOperationStatus: OperationRecord['status'] | null = null;
 
   const deployment: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
     id: 'deployment-existing-rollback',
     releaseId: 'failed-release',
     previousReleaseId: 'previous-release',
@@ -816,4 +822,155 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
   assert.equal(rollbackMutationCalls, 0);
   assert.equal(result.status, 'ROLLED_BACK');
   assert.equal(persistedOperationStatus, 'SUCCESS');
+});
+
+
+test('historical redeploy requires a successful deployment of the release on the same target', async () => {
+  const releases = {
+    findDeploymentTarget: async () => ({
+      id: 'target-1',
+      applicationId: 'app-1',
+      clusterId: 'default',
+      environment: 'production',
+      dockerServiceId: 'service-1',
+      serviceName: 'api',
+      routingMode: 'INGRESS',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }),
+    findRelease: async () => ({
+      id: 'release-old',
+      applicationId: 'app-1',
+      version: '0.9.0',
+      imageRepository: 'registry.example.com/team/api',
+      imageTag: '0.9.0',
+      imageDigest: digest,
+      gitCommit: null,
+      buildNumber: null,
+      createdBy: 'operator-1',
+      createdAt: new Date(0).toISOString(),
+    }),
+  };
+  const deployments = {
+    findLatestSuccessfulForRelease: async () => null,
+  };
+
+  const service = new DeploymentService(
+    releases as never,
+    deployments as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+
+  await assert.rejects(
+    service.historicalRedeploy(
+      'default',
+      'target-1',
+      {
+        operationId: 'redeploy-op-1',
+        releaseId: 'release-old',
+        health: {
+          url: 'https://health.example.com/ready',
+          intervalMs: 100,
+          timeoutMs: 1000,
+          retries: 1,
+          stabilityWindowMs: 500,
+          expectedStatus: 200,
+        },
+      },
+      {
+        actorId: 'operator-1',
+        role: 'OPERATOR',
+        clusters: ['default'],
+      },
+    ),
+    /previously successful deployment/,
+  );
+});
+
+test('deployment status view includes deploy and rollback operations', async () => {
+  const deployment: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
+    id: 'deployment-status',
+    releaseId: 'release-1',
+    previousReleaseId: null,
+    deploymentTargetId: 'target-1',
+    operationId: 'deploy-op-1',
+    rollbackOperationId: 'rollback-op-1',
+    status: 'ROLLBACK_VERIFYING',
+    reason: null,
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {},
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: null,
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+  const deployOperation: OperationRecord = {
+    ...deploymentOperation,
+    id: 'deploy-op-1',
+    status: 'FAILED',
+  };
+  const rollbackOperation: OperationRecord = {
+    ...deploymentOperation,
+    id: 'rollback-op-1',
+    type: 'ROLLBACK',
+    status: 'VERIFYING',
+  };
+
+  const releases = {
+    findDeploymentTarget: async () => ({
+      id: 'target-1',
+      applicationId: 'app-1',
+      clusterId: 'default',
+      environment: 'production',
+      dockerServiceId: 'service-1',
+      serviceName: 'api',
+      routingMode: 'INGRESS',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }),
+  };
+  const deployments = {
+    find: async () => deployment,
+  };
+  const operations = {
+    find: async (id: string) =>
+      id === 'deploy-op-1'
+        ? deployOperation
+        : id === 'rollback-op-1'
+          ? rollbackOperation
+          : null,
+  };
+
+  const service = new DeploymentService(
+    releases as never,
+    deployments as never,
+    {} as never,
+    operations as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+
+  const result = await service.status('default', deployment.id);
+  assert.equal(result.operation?.id, 'deploy-op-1');
+  assert.equal(result.rollbackOperation?.id, 'rollback-op-1');
+  assert.equal(result.deployment.status, 'ROLLBACK_VERIFYING');
 });
