@@ -144,7 +144,6 @@ func (r *Reader) PlanUpdateServiceImage(
 	}, nil
 }
 
-
 func (r *Reader) PlanRollbackService(
 	ctx context.Context,
 	serviceID string,
