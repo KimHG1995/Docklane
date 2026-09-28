@@ -132,7 +132,7 @@ export class DeploymentService {
             deployment.releaseId !== input.releaseId ||
             deployment.deploymentTargetId !== targetId ||
             deployment.createdBy !== principal.actorId ||
-            JSON.stringify(deployment.health) !== JSON.stringify(input.health)
+            !sameHealthConfig(deployment.health, input.health)
           ) {
             throw new ConflictException(
               'operationId was already used for a different deployment',
@@ -165,9 +165,14 @@ export class DeploymentService {
           );
         }
 
-        const before = await this.agentClient.inspectService(
-          target.dockerServiceId,
-        );
+        let before: ServiceDetailResponse;
+        try {
+          before = await this.agentClient.inspectService(
+            target.dockerServiceId,
+          );
+        } catch (error) {
+          throw mapAgentError(error, 'Deployment precondition lookup failed');
+        }
         const targetImage = dockerImageReference(
           release.imageRepository,
           release.imageDigest,
@@ -685,4 +690,19 @@ function errorMessage(error: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+
+function sameHealthConfig(
+  left: DeployRequest['health'],
+  right: DeployRequest['health'],
+): boolean {
+  return (
+    left.url === right.url &&
+    left.intervalMs === right.intervalMs &&
+    left.timeoutMs === right.timeoutMs &&
+    left.retries === right.retries &&
+    left.stabilityWindowMs === right.stabilityWindowMs &&
+    left.expectedStatus === right.expectedStatus
+  );
 }
