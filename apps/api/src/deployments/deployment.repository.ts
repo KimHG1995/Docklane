@@ -72,6 +72,10 @@ export class DeploymentRepository implements OnModuleInit {
       'rollback_operation_id',
       'VARCHAR(64) NULL',
     );
+    await this.ensureIndex(
+      'uq_deployments_rollback_operation',
+      'UNIQUE KEY uq_deployments_rollback_operation (rollback_operation_id)',
+    );
   }
 
   async create(
@@ -303,6 +307,30 @@ export class DeploymentRepository implements OnModuleInit {
        SET status = 'NEEDS_ATTENTION', reason = ?, finished_at = CURRENT_TIMESTAMP(6)
        WHERE id = ?`,
       [reason, id],
+    );
+  }
+
+  private async ensureIndex(
+    indexName: string,
+    definition: string,
+  ): Promise<void> {
+    const [rows] = await this.db.pool.query<
+      Array<RowDataPacket & { count: number }>
+    >(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.statistics
+       WHERE table_schema = DATABASE()
+         AND table_name = 'deployments'
+         AND index_name = ?`,
+      [indexName],
+    );
+    if ((rows[0]?.count ?? 0) > 0) return;
+
+    if (!/^[a-z_]+$/.test(indexName)) {
+      throw new Error('Unsafe deployment index name');
+    }
+    await this.db.pool.query(
+      `ALTER TABLE deployments ADD ${definition}`,
     );
   }
 
