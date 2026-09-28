@@ -13,6 +13,7 @@ import {
 } from '../agent/agent-client.js';
 import type {
   ServiceDetailResponse,
+  ServiceImageMutationPlan,
   ServiceMutationPlan,
   ServiceMutationResponse,
 } from '../agent/read-model.js';
@@ -172,7 +173,7 @@ export class DeploymentService {
           release.imageDigest,
         );
 
-        let plan: ServiceMutationPlan;
+        let plan: ServiceImageMutationPlan;
         try {
           plan = await this.agentClient.planUpdateServiceImage(
             target.dockerServiceId,
@@ -182,7 +183,7 @@ export class DeploymentService {
         } catch (error) {
           throw mapAgentError(error, 'Deployment planning failed');
         }
-        assertPlanMatchesCurrent(plan, before);
+        assertPlanMatchesCurrent(plan, before, targetImage);
 
         const noOp = plan.beforeSpecHash === plan.targetSpecHash;
         if (!noOp) {
@@ -662,13 +663,15 @@ function mapAgentError(error: unknown, fallback: string): Error {
 }
 
 function assertPlanMatchesCurrent(
-  plan: ServiceMutationPlan,
+  plan: ServiceImageMutationPlan,
   current: ServiceDetailResponse,
+  targetImage: string,
 ): void {
   if (
     plan.serviceId !== current.service.id ||
     plan.version !== current.service.version ||
-    plan.beforeSpecHash !== current.service.specHash
+    plan.beforeSpecHash !== current.service.specHash ||
+    plan.targetImage !== targetImage
   ) {
     throw new ConflictException(
       'Service changed between deployment inspection and planning',
