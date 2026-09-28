@@ -138,12 +138,12 @@ func (r *Reader) PlanUpdateServiceImage(
 	}
 
 	return model.ServiceMutationPlan{
-		ServiceID:            service.ID,
-		Version:              service.Version.Index,
-		BeforeSpecHash:       beforeHash,
-		TargetSpecHash:       targetHash,
-		TargetForceUpdate:    service.Spec.TaskTemplate.ForceUpdate,
-		TargetImage:          image,
+		ServiceID:             service.ID,
+		Version:               service.Version.Index,
+		BeforeSpecHash:        beforeHash,
+		TargetSpecHash:        targetHash,
+		TargetForceUpdate:     service.Spec.TaskTemplate.ForceUpdate,
+		TargetImage:           image,
 		TargetTaskSpecHash:    targetTaskSpecHash,
 		TargetRuntimeSpecHash: targetRuntimeSpecHash,
 	}, nil
@@ -206,13 +206,13 @@ func (r *Reader) PlanRollbackService(
 	}
 
 	return model.ServiceMutationPlan{
-		ServiceID:            service.ID,
-		Version:              service.Version.Index,
-		BeforeSpecHash:       beforeHash,
-		TargetSpecHash:       targetHash,
-		TargetForceUpdate:    service.PreviousSpec.TaskTemplate.ForceUpdate,
-		TargetReplicas:       targetReplicas,
-		TargetImage:          targetImage,
+		ServiceID:             service.ID,
+		Version:               service.Version.Index,
+		BeforeSpecHash:        beforeHash,
+		TargetSpecHash:        targetHash,
+		TargetForceUpdate:     service.PreviousSpec.TaskTemplate.ForceUpdate,
+		TargetReplicas:        targetReplicas,
+		TargetImage:           targetImage,
 		TargetTaskSpecHash:    targetTaskSpecHash,
 		TargetRuntimeSpecHash: targetRuntimeSpecHash,
 	}, nil
