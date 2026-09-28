@@ -21,6 +21,12 @@ func taskSpecHash(spec swarm.TaskSpec) (string, error) {
 	return specHash("task", spec)
 }
 
+func taskRuntimeSpecHash(spec swarm.TaskSpec) (string, error) {
+	runtimeSpec := spec
+	runtimeSpec.Placement = nil
+	return specHash("task-runtime", runtimeSpec)
+}
+
 func specHash(kind string, spec any) (string, error) {
 	payload, err := json.Marshal(spec)
 	if err != nil {
