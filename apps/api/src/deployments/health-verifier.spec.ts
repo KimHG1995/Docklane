@@ -15,7 +15,9 @@ test('health verifier requires a continuous stable success window', async () => 
   }) as typeof fetch;
 
   try {
-    const verifier = new HealthVerifier();
+    const verifier = new HealthVerifier({
+      assertAllowed: async () => undefined,
+    } as never);
     await verifier.verify({
       url: 'https://health.example.com/ready',
       intervalMs: 2,
@@ -31,7 +33,11 @@ test('health verifier requires a continuous stable success window', async () => 
 });
 
 test('health verifier rejects credential-bearing URLs', async () => {
-  const verifier = new HealthVerifier();
+  const verifier = new HealthVerifier({
+    assertAllowed: async () => {
+      throw new Error('Health URL must not contain credentials');
+    },
+  } as never);
   await assert.rejects(
     verifier.verify({
       url: 'https://user:pass@health.example.com/ready',
