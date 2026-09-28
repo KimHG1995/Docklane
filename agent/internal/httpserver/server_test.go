@@ -228,6 +228,24 @@ func (fakeReader) PlanUpdateServiceImage(
 	}, nil
 }
 
+func (fakeReader) PlanRollbackService(
+	context.Context,
+	string,
+	uint64,
+) (model.ServiceMutationPlan, error) {
+	replicas := uint64(2)
+	return model.ServiceMutationPlan{
+		ServiceID:          "service-1",
+		Version:            2,
+		BeforeSpecHash:     "current",
+		TargetSpecHash:     "previous",
+		TargetForceUpdate:  0,
+		TargetReplicas:     &replicas,
+		TargetImage:        "registry.example.com/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		TargetTaskSpecHash: "previous-task-spec",
+	}, nil
+}
+
 func (fakeReader) ScaleService(
 	context.Context,
 	string,
@@ -263,6 +281,19 @@ func (fakeReader) UpdateServiceImage(
 		ServiceID:         "service-1",
 		Version:           2,
 		TargetSpecHash:    "target-image",
+		TargetForceUpdate: 0,
+	}, nil
+}
+
+func (fakeReader) RollbackService(
+	context.Context,
+	string,
+	model.ServiceMutationRequest,
+) (model.ServiceMutationResponse, error) {
+	return model.ServiceMutationResponse{
+		ServiceID:         "service-1",
+		Version:           3,
+		TargetSpecHash:    "previous",
 		TargetForceUpdate: 0,
 	}, nil
 }
@@ -428,5 +459,38 @@ func TestMissingServiceReturnsNotFound(t *testing.T) {
 
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
+
+func TestPlanRollback(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/services/service-1/plan-rollback",
+		strings.NewReader(`{"expectedVersion":2}`),
+	)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
+func TestRollback(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/services/service-1/rollback",
+		strings.NewReader(`{"expectedVersion":2,"expectedSpecHash":"current","targetSpecHash":"previous"}`),
+	)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
 	}
 }
