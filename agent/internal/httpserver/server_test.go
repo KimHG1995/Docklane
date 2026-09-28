@@ -411,7 +411,6 @@ func TestPlanImageUpdate(t *testing.T) {
 	}
 }
 
-
 func TestMissingServiceReturnsNotFound(t *testing.T) {
 	s := New(
 		config.Config{InsecureDev: true},
