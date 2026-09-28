@@ -66,7 +66,7 @@ export class MutationService implements OnApplicationBootstrap {
     const pending = await this.operations.listNonTerminal();
 
     for (const operation of pending) {
-      if (operation.type === 'DEPLOY') continue;
+      if (operation.type === 'DEPLOY' || operation.type === 'ROLLBACK') continue;
       try {
         await this.lock.withServiceLock(
           operation.clusterId,
@@ -363,9 +363,9 @@ export class MutationService implements OnApplicationBootstrap {
     if (!prior) {
       return;
     }
-    if (prior.type === 'DEPLOY') {
+    if (prior.type === 'DEPLOY' || prior.type === 'ROLLBACK') {
       throw new ConflictException(
-        `Service has unresolved deployment ${prior.id} (${prior.status})`,
+        `Service has unresolved ${prior.type.toLowerCase()} ${prior.id} (${prior.status})`,
       );
     }
 
