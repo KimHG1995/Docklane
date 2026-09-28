@@ -160,7 +160,7 @@ export class DeploymentRepository implements OnModuleInit {
       `SELECT * FROM deployments
        WHERE deployment_target_id = ?
          AND release_id = ?
-         AND status IN ('SUCCESS', 'ROLLED_BACK')
+         AND status = 'SUCCESS'
        ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC
        LIMIT 1`,
       [targetId, releaseId],
