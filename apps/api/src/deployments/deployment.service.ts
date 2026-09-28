@@ -201,6 +201,15 @@ export class DeploymentService
     input: HistoricalRedeployRequest,
     principal: Principal,
   ): Promise<DeploymentRecord> {
+    const target = await this.releases.findDeploymentTarget(targetId);
+    if (!target || target.clusterId !== clusterId) {
+      throw new NotFoundException('Deployment target not found');
+    }
+    const release = await this.releases.findRelease(input.releaseId);
+    if (!release || release.applicationId !== target.applicationId) {
+      throw new NotFoundException('Release not found for deployment target');
+    }
+
     const source = await this.deployments.findLatestSuccessfulForRelease(
       targetId,
       input.releaseId,
@@ -1109,12 +1118,22 @@ export class DeploymentService
           operationId,
         );
         if (!operation) throw new Error('Deployment operation disappeared');
+        const persistedDeployment =
+          await this.deployments.requireWithConnection(
+            connection,
+            deploymentId,
+          );
         await this.operations.audit(connection, {
           operationId,
           actorId: operation.actorId,
           clusterId: operation.clusterId,
           serviceId: operation.serviceId,
-          action: noOp ? 'DEPLOY_NO_OP_SUCCEEDED' : 'DEPLOY_SUCCEEDED',
+          action:
+            persistedDeployment.kind === 'HISTORICAL_REDEPLOY'
+              ? (noOp
+                  ? 'HISTORICAL_REDEPLOY_NO_OP_SUCCEEDED'
+                  : 'HISTORICAL_REDEPLOY_SUCCEEDED')
+              : (noOp ? 'DEPLOY_NO_OP_SUCCEEDED' : 'DEPLOY_SUCCEEDED'),
           afterJson: finalCurrent.service,
         });
         await connection.commit();
