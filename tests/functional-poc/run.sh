@@ -114,8 +114,11 @@ docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg 
 
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v2   -t "$IMAGE_REPO:v2"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v2.log"
 
+docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=vbroken   --build-arg HEALTH_STATUS=503   -t "$IMAGE_REPO:vbroken"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-vbroken.log"
+
 docker push "$IMAGE_REPO:v1" >"$LOG_DIR/docker-push-v1.log"
 docker push "$IMAGE_REPO:v2" >"$LOG_DIR/docker-push-v2.log"
+docker push "$IMAGE_REPO:vbroken" >"$LOG_DIR/docker-push-vbroken.log"
 
 SWARM_ADDR="$(hostname -I | awk '{print $1}')"
 [[ -n "$SWARM_ADDR" ]] || fail "could not determine Swarm advertise address"
