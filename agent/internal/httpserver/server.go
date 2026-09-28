@@ -34,8 +34,10 @@ type DockerReader interface {
 	UpdateNodeLabels(context.Context, string, model.NodeMutationRequest) (model.NodeMutationResponse, error)
 	PlanScaleService(context.Context, string, uint64, uint64) (model.ServiceMutationPlan, error)
 	PlanRestartService(context.Context, string, uint64) (model.ServiceMutationPlan, error)
+	PlanUpdateServiceImage(context.Context, string, uint64, string) (model.ServiceMutationPlan, error)
 	ScaleService(context.Context, string, model.ServiceMutationRequest) (model.ServiceMutationResponse, error)
 	RestartService(context.Context, string, model.ServiceMutationRequest) (model.ServiceMutationResponse, error)
+	UpdateServiceImage(context.Context, string, model.ServiceMutationRequest) (model.ServiceMutationResponse, error)
 }
 
 type Server struct {
@@ -63,8 +65,10 @@ func New(cfg config.Config, reader DockerReader) *Server {
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/labels", s.updateNodeLabels)
 	mux.HandleFunc("POST /v1/services/{serviceId}/plan-scale", s.planScaleService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/plan-restart", s.planRestartService)
+	mux.HandleFunc("POST /v1/services/{serviceId}/plan-image-update", s.planImageUpdate)
 	mux.HandleFunc("POST /v1/services/{serviceId}/scale", s.scaleService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/restart", s.restartService)
+	mux.HandleFunc("POST /v1/services/{serviceId}/image", s.updateServiceImage)
 
 	s.server = &http.Server{
 		Addr:              cfg.Addr,
@@ -366,6 +370,36 @@ func (s *Server) planRestartService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) planImageUpdate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("serviceId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("serviceId is required"))
+		return
+	}
+
+	var input model.ServiceMutationRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if input.Image == nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("image is required"))
+		return
+	}
+
+	result, err := s.reader.PlanUpdateServiceImage(
+		r.Context(),
+		id,
+		input.ExpectedVersion,
+		*input.Image,
+	)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) scaleService(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("serviceId")
 	if id == "" {
@@ -405,6 +439,31 @@ func (s *Server) restartService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.reader.RestartService(r.Context(), id, input)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) updateServiceImage(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("serviceId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("serviceId is required"))
+		return
+	}
+
+	var input model.ServiceMutationRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if input.Image == nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("image is required"))
+		return
+	}
+
+	result, err := s.reader.UpdateServiceImage(r.Context(), id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
