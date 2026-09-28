@@ -20,3 +20,10 @@ export const DeployRequestSchema = z.object({
 });
 
 export type DeployRequest = z.infer<typeof DeployRequestSchema>;
+
+
+export const RollbackRequestSchema = z.object({
+  operationId: z.string().trim().min(1).max(64),
+});
+
+export type RollbackRequest = z.infer<typeof RollbackRequestSchema>;
