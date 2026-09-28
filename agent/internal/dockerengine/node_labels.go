@@ -178,6 +178,25 @@ func (r *Reader) serviceIDsAffectedByNodeLabels(
 		return nil, fmt.Errorf("list swarm services: %w", err)
 	}
 
+	changed := make(map[string]struct{}, len(changedKeys))
+	for _, key := range changedKeys {
+		changed[key] = struct{}{}
+	}
+	for _, service := range result.Items {
+		if !placementReferencesNodeLabels(
+			service.Spec.TaskTemplate.Placement,
+			changed,
+		) {
+			continue
+		}
+		if service.Spec.Mode.Replicated == nil {
+			return nil, &ValidationError{Message: fmt.Sprintf(
+				"node label mutation affects unsupported non-replicated service %q",
+				service.Spec.Name,
+			)}
+		}
+	}
+
 	return affectedServiceIDsForNodeLabels(result.Items, changedKeys), nil
 }
 
