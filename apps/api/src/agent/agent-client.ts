@@ -10,6 +10,7 @@ import type {
   NodeMutationPlan,
   NodeMutationResponse,
   ServiceDetailResponse,
+  ServiceImageMutationPlan,
   ServiceMutationPlan,
   ServiceMutationResponse,
   ServiceSummary,
@@ -84,7 +85,7 @@ export interface AgentClient {
     serviceId: string,
     expectedVersion: number,
     image: string,
-  ): Promise<ServiceMutationPlan>;
+  ): Promise<ServiceImageMutationPlan>;
 
   scaleService(
     serviceId: string,
