@@ -16,7 +16,6 @@ func (e *ValidationError) Error() string {
 	return e.Message
 }
 
-
 type NotFoundError struct {
 	Resource string
 	Ref      string
