@@ -25,6 +25,7 @@ interface OperationRow extends RowDataPacket {
   target_force_update: number;
   target_replicas: number | null;
   target_image: string | null;
+  target_task_spec_hash: string | null;
   result_version: number | null;
   error_code: string | null;
   error_message: string | null;
@@ -59,6 +60,7 @@ export class OperationRepository implements OnModuleInit {
         target_force_update BIGINT UNSIGNED NOT NULL DEFAULT 0,
         target_replicas INT NULL,
         target_image VARCHAR(1024) NULL,
+        target_task_spec_hash VARCHAR(64) NULL,
         result_version BIGINT UNSIGNED NULL,
         error_code VARCHAR(64) NULL,
         error_message TEXT NULL,
@@ -83,6 +85,7 @@ export class OperationRepository implements OnModuleInit {
       'BIGINT UNSIGNED NOT NULL DEFAULT 0',
     );
     await this.ensureColumn('target_image', 'VARCHAR(1024) NULL');
+    await this.ensureColumn('target_task_spec_hash', 'VARCHAR(64) NULL');
 
     await this.db.pool.query(`
       CREATE TABLE IF NOT EXISTS audit_events (
@@ -177,6 +180,7 @@ export class OperationRepository implements OnModuleInit {
       targetForceUpdate: number;
       targetReplicas?: number;
       targetImage?: string;
+      targetTaskSpecHash?: string;
     },
   ): Promise<void> {
     await connection.execute(
@@ -184,9 +188,9 @@ export class OperationRepository implements OnModuleInit {
        (
          id, cluster_id, service_id, type, status, actor_id,
          expected_version, before_spec_hash, target_spec_hash,
-         target_force_update, target_replicas, target_image
+         target_force_update, target_replicas, target_image, target_task_spec_hash
        )
-       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.id,
         input.clusterId,
@@ -199,6 +203,7 @@ export class OperationRepository implements OnModuleInit {
         input.targetForceUpdate,
         input.targetReplicas ?? null,
         input.targetImage ?? null,
+        input.targetTaskSpecHash ?? null,
       ],
     );
   }
@@ -354,6 +359,7 @@ function mapOperation(row: OperationRow): OperationRecord {
     targetForceUpdate: Number(row.target_force_update),
     targetReplicas: row.target_replicas,
     targetImage: row.target_image,
+    targetTaskSpecHash: row.target_task_spec_hash,
     resultVersion: row.result_version === null ? null : Number(row.result_version),
     errorCode: row.error_code,
     errorMessage: row.error_message,
