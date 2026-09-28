@@ -39,17 +39,17 @@ test('deployment target binds canonical Swarm service identity', async () => {
     }),
   };
 
-  const service = new ReleaseService(repository as never, agent as never);
-  await service.createTarget(
-    'default',
-    'app-1',
-    {
-      environment: 'production',
-      dockerServiceId: 'api-prod',
-      serviceName: 'client-supplied-name',
-      routingMode: 'INGRESS',
-    },
+  const service = new ReleaseService(
+    repository as never,
+    agent as never,
+    {} as never,
   );
+  await service.createTarget('default', 'app-1', {
+    environment: 'production',
+    dockerServiceId: 'api-prod',
+    serviceName: 'client-supplied-name',
+    routingMode: 'INGRESS',
+  });
 
   assert.deepEqual(persisted, {
     applicationId: 'app-1',
@@ -63,8 +63,9 @@ test('deployment target binds canonical Swarm service identity', async () => {
   });
 });
 
-test('release creation records actor and preserves digest identity', async () => {
+test('release creation resolves a tag and persists only the immutable digest', async () => {
   let captured: unknown = null;
+  const digest = `sha256:${'b'.repeat(64)}`;
   const repository = {
     findApplication: async () => application,
     createRelease: async (
@@ -82,13 +83,29 @@ test('release creation records actor and preserves digest identity', async () =>
       };
     },
   };
+  const registry = {
+    resolve: async (imageRepository: string, reference: string) => {
+      assert.equal(imageRepository, 'registry.example.com/team/api');
+      assert.equal(reference, '1.0.0');
+      return {
+        repository: imageRepository,
+        reference,
+        digest,
+        mediaType: 'application/vnd.oci.image.manifest.v1+json',
+        contentLength: 123,
+      };
+    },
+  };
 
-  const service = new ReleaseService(repository as never, {} as never);
+  const service = new ReleaseService(
+    repository as never,
+    {} as never,
+    registry as never,
+  );
   const input = {
     version: '1.0.0',
     imageRepository: 'registry.example.com/team/api',
     imageTag: '1.0.0',
-    imageDigest: `sha256:${'b'.repeat(64)}`,
     gitCommit: 'abc123',
     buildNumber: '42',
   };
@@ -101,7 +118,56 @@ test('release creation records actor and preserves digest identity', async () =>
 
   assert.deepEqual(captured, {
     applicationId: 'app-1',
-    input,
+    input: {
+      ...input,
+      imageDigest: digest,
+    },
     createdBy: 'operator-1',
   });
+});
+
+test('release creation verifies an explicitly supplied digest', async () => {
+  const digest = `sha256:${'c'.repeat(64)}`;
+  let persisted = false;
+  const repository = {
+    findApplication: async () => application,
+    createRelease: async () => {
+      persisted = true;
+      throw new Error('must not persist');
+    },
+  };
+  const registry = {
+    resolve: async () => ({
+      repository: 'registry.example.com/team/api',
+      reference: digest,
+      digest: `sha256:${'d'.repeat(64)}`,
+      mediaType: null,
+      contentLength: null,
+    }),
+  };
+
+  const service = new ReleaseService(
+    repository as never,
+    {} as never,
+    registry as never,
+  );
+
+  await assert.rejects(
+    service.createRelease(
+      'app-1',
+      {
+        version: '1.0.0',
+        imageRepository: 'registry.example.com/team/api',
+        imageDigest: digest,
+      },
+      {
+        actorId: 'operator-1',
+        role: 'OPERATOR',
+        clusters: ['default'],
+      },
+    ),
+    /does not match/,
+  );
+
+  assert.equal(persisted, false);
 });
