@@ -517,7 +517,7 @@ type DeploymentDecision =
   | 'FAILED'
   | 'EXTERNAL_CONFLICT';
 
-function classifyDeploymentSnapshot(
+export function classifyDeploymentSnapshot(
   current: ServiceDetailResponse,
   plan: ServiceMutationPlan,
   digest: string,
@@ -554,7 +554,7 @@ function classifyDeploymentSnapshot(
   return 'SUCCESS';
 }
 
-function dockerImageReference(repository: string, digest: string): string {
+export function dockerImageReference(repository: string, digest: string): string {
   const withoutScheme = repository.replace(/^https?:\/\//i, '').replace(/\/$/, '');
   return `${withoutScheme}@${digest.toLowerCase()}`;
 }
