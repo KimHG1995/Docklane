@@ -1407,7 +1407,7 @@ export class DeploymentService
       await this.attention(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'DEPLOYMENT_MISSING_TARGET',
         'Deployment intent is missing the persisted target needed for reconciliation',
       );
@@ -1422,7 +1422,7 @@ export class DeploymentService
       await this.attention(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'DEPLOYMENT_INVALID_TARGET_IMAGE',
         'Persisted deployment target image is not digest-pinned',
       );
@@ -1532,7 +1532,7 @@ export class DeploymentService
       await this.attention(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'EXTERNAL_SERVICE_CONFLICT',
         'Service changed outside the recorded deployment target',
       );
@@ -1546,7 +1546,7 @@ export class DeploymentService
       await this.markVerificationPending(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'SWARM_ROLLBACK_IN_PROGRESS',
         'Swarm rollback is still in progress; mutation protection remains active',
       );
@@ -1554,7 +1554,7 @@ export class DeploymentService
       await this.attention(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'DEPLOYMENT_RECONCILIATION_UNAVAILABLE',
         `Unable to inspect deployment outcome: ${lastError}`,
       );
@@ -1562,7 +1562,7 @@ export class DeploymentService
       await this.attention(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'DEPLOYMENT_MUTATION_NOT_OBSERVED',
         initialError
           ? `Agent response was lost and the deployment target was not observed: ${initialError}`
@@ -1838,7 +1838,7 @@ export class DeploymentService
       await this.rollbackAttention(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'ROLLBACK_MISSING_TARGET',
         'Rollback intent is missing the persisted target needed for reconciliation',
       );
@@ -1850,7 +1850,7 @@ export class DeploymentService
       await this.rollbackAttention(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'ROLLBACK_INVALID_TARGET_IMAGE',
         'Persisted rollback image is not digest-pinned',
       );
@@ -1937,7 +1937,7 @@ export class DeploymentService
       await this.rollbackAttention(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'ROLLBACK_RECONCILIATION_UNAVAILABLE',
         `Unable to inspect rollback outcome: ${lastError}`,
       );
@@ -1945,7 +1945,7 @@ export class DeploymentService
       await this.markRollbackVerificationPending(
         connection,
         deployment.id,
-        compatibleOperation.id,
+        operation.id,
         'ROLLBACK_STILL_IN_PROGRESS',
         initialError
           ? `Rollback response was lost and convergence is still in progress: ${initialError}`
