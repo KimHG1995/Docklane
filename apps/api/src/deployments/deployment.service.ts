@@ -408,22 +408,6 @@ export class DeploymentService
           );
         }
 
-        let selectedSourceDeploymentId = sourceDeploymentId ?? null;
-        if (kind === 'HISTORICAL_REDEPLOY' && sourceDeploymentId === undefined) {
-          const source =
-            await this.deployments.findLatestSuccessfulForReleaseWithConnection(
-              connection,
-              targetId,
-              input.releaseId,
-            );
-          if (!source) {
-            throw new ConflictException(
-              'Historical redeploy requires a previously successful deployment of the release on this target',
-            );
-          }
-          selectedSourceDeploymentId = source.id;
-        }
-
         const prior =
           await this.operations.findNonTerminalForServiceWithConnection(
             connection,
@@ -681,6 +665,22 @@ export class DeploymentService
             existing,
             deployment,
           );
+        }
+
+        let selectedSourceDeploymentId = sourceDeploymentId ?? null;
+        if (kind === 'HISTORICAL_REDEPLOY' && sourceDeploymentId === undefined) {
+          const source =
+            await this.deployments.findLatestSuccessfulForReleaseWithConnection(
+              connection,
+              targetId,
+              input.releaseId,
+            );
+          if (!source) {
+            throw new ConflictException(
+              'Historical redeploy requires a previously successful deployment of the release on this target',
+            );
+          }
+          selectedSourceDeploymentId = source.id;
         }
 
         const prior =
