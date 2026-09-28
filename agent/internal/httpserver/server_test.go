@@ -8,10 +8,13 @@ import (
 	"testing"
 
 	"github.com/KimHG1995/Docklane/agent/internal/config"
+	"github.com/KimHG1995/Docklane/agent/internal/dockerengine"
 	"github.com/KimHG1995/Docklane/agent/internal/model"
 )
 
-type fakeReader struct{}
+type fakeReader struct {
+	serviceErr error
+}
 
 func (fakeReader) Cluster(context.Context) (model.ClusterResponse, error) {
 	return model.ClusterResponse{
@@ -24,7 +27,10 @@ func (fakeReader) Services(context.Context) ([]model.ServiceSummary, error) {
 	return []model.ServiceSummary{{ID: "service-1"}}, nil
 }
 
-func (fakeReader) Service(context.Context, string) (model.ServiceDetailResponse, error) {
+func (f fakeReader) Service(context.Context, string) (model.ServiceDetailResponse, error) {
+	if f.serviceErr != nil {
+		return model.ServiceDetailResponse{}, f.serviceErr
+	}
 	return model.ServiceDetailResponse{
 		Service: model.ServiceSummary{
 			ID:          "service-1",
@@ -402,5 +408,26 @@ func TestPlanImageUpdate(t *testing.T) {
 
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}
+
+
+func TestMissingServiceReturnsNotFound(t *testing.T) {
+	s := New(
+		config.Config{InsecureDev: true},
+		fakeReader{
+			serviceErr: &dockerengine.NotFoundError{
+				Resource: "service",
+				Ref:      "missing",
+			},
+		},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/v1/services/missing", nil)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", res.Code, res.Body.String())
 	}
 }
