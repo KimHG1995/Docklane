@@ -813,6 +813,7 @@ export class DeploymentService
         targetReplicas: plan.targetReplicas,
         targetImage: plan.targetImage,
         targetTaskSpecHash: plan.targetTaskSpecHash,
+        targetRuntimeSpecHash: plan.targetRuntimeSpecHash,
       });
       await this.operations.markRunning(connection, operationId);
       await this.deployments.markRollingBack(
@@ -899,6 +900,7 @@ export class DeploymentService
         targetReplicas: before.service.desiredReplicas,
         targetImage,
         targetTaskSpecHash: plan.targetTaskSpecHash,
+        targetRuntimeSpecHash: plan.targetRuntimeSpecHash,
       });
       await this.operations.markRunning(connection, input.operationId);
 
@@ -917,6 +919,7 @@ export class DeploymentService
           image: targetImage,
           desiredReplicas: before.service.desiredReplicas,
           taskSpecHash: plan.targetTaskSpecHash,
+          runtimeSpecHash: plan.targetRuntimeSpecHash,
         },
         health: input.health,
         expectedServiceVersion: plan.version,
@@ -991,7 +994,7 @@ export class DeploymentService
         continue;
       }
 
-      const decision = classifyDeploymentSnapshot(
+      const decision = await this.classifyDeploymentConvergence(
         current,
         plan,
         digest,
@@ -1048,7 +1051,7 @@ export class DeploymentService
             );
           }
 
-          const guardedDecision = classifyDeploymentSnapshot(
+          const guardedDecision = await this.classifyDeploymentConvergence(
             guarded,
             plan,
             digest,
@@ -1130,7 +1133,7 @@ export class DeploymentService
         continue;
       }
 
-      const finalDecision = classifyDeploymentSnapshot(
+      const finalDecision = await this.classifyDeploymentConvergence(
         finalCurrent,
         plan,
         digest,
@@ -1245,7 +1248,8 @@ export class DeploymentService
       !operation.beforeSpecHash ||
       !operation.targetSpecHash ||
       !operation.targetImage ||
-      !operation.targetTaskSpecHash
+      !operation.targetTaskSpecHash ||
+      !operation.targetRuntimeSpecHash
     ) {
       await this.attention(
         connection,
@@ -1284,6 +1288,7 @@ export class DeploymentService
       targetReplicas: operation.targetReplicas ?? undefined,
       targetImage: operation.targetImage,
       targetTaskSpecHash: operation.targetTaskSpecHash,
+      targetRuntimeSpecHash: operation.targetRuntimeSpecHash,
     };
 
     const deadline = Date.now() + RECONCILE_OBSERVATION_MS;
@@ -1477,7 +1482,11 @@ export class DeploymentService
         continue;
       }
 
-      const decision = classifyRollbackSnapshot(current, plan, digest);
+      const decision = await this.classifyRollbackConvergence(
+        current,
+        plan,
+        digest,
+      );
       if (decision === 'FAILED') {
         await this.rollbackFailed(
           connection,
@@ -1514,7 +1523,7 @@ export class DeploymentService
               errorMessage(error),
             );
           }
-          const guardedDecision = classifyRollbackSnapshot(
+          const guardedDecision = await this.classifyRollbackConvergence(
             guarded,
             plan,
             digest,
@@ -1576,7 +1585,7 @@ export class DeploymentService
         continue;
       }
 
-      const finalDecision = classifyRollbackSnapshot(
+      const finalDecision = await this.classifyRollbackConvergence(
         finalCurrent,
         plan,
         digest,
@@ -1700,6 +1709,7 @@ export class DeploymentService
       targetReplicas: operation.targetReplicas ?? undefined,
       targetImage: operation.targetImage,
       targetTaskSpecHash: operation.targetTaskSpecHash,
+      targetRuntimeSpecHash: operation.targetRuntimeSpecHash,
     };
 
     const deadline = Date.now() + RECONCILE_OBSERVATION_MS;
@@ -1716,7 +1726,11 @@ export class DeploymentService
         continue;
       }
 
-      const decision = classifyRollbackSnapshot(current, plan, digest);
+      const decision = await this.classifyRollbackConvergence(
+        current,
+        plan,
+        digest,
+      );
       if (decision === 'SUCCESS') {
         if (
           operation.status !== 'VERIFYING' ||
@@ -2001,7 +2015,8 @@ export class DeploymentService
       !failedSpecHash ||
       current.service.specHash !== rollbackSpecHash ||
       digestFromImage(current.service.image ?? '') !== previousDigest.toLowerCase() ||
-      !current.service.taskSpecHash
+      !current.service.taskSpecHash ||
+      !current.service.runtimeSpecHash
     ) {
       throw new ConflictException(
         'Observed Swarm rollback target does not match the recorded previous deployment spec',
@@ -2017,6 +2032,7 @@ export class DeploymentService
       targetReplicas: current.service.desiredReplicas,
       targetImage: current.service.image ?? '',
       targetTaskSpecHash: current.service.taskSpecHash,
+      targetRuntimeSpecHash: current.service.runtimeSpecHash,
     };
   }
 
@@ -2035,7 +2051,8 @@ export class DeploymentService
       plan.beforeSpecHash !== failedSpecHash ||
       plan.targetSpecHash !== previousSpecHash ||
       digestFromImage(plan.targetImage) !== previousDigest.toLowerCase() ||
-      !plan.targetTaskSpecHash
+      !plan.targetTaskSpecHash ||
+      !plan.targetRuntimeSpecHash
     ) {
       throw new ConflictException(
         'Swarm rollback ownership does not match the failed deployment transition',
@@ -2074,6 +2091,40 @@ export class DeploymentService
       );
     }
   }
+  private async classifyDeploymentConvergence(
+    current: ServiceDetailResponse,
+    plan: ServiceMutationPlan,
+    digest: string,
+    noOp: boolean,
+  ): Promise<DeploymentDecision> {
+    const decision = classifyDeploymentSnapshot(
+      current,
+      plan,
+      digest,
+      noOp,
+    );
+    if (decision !== 'SUCCESS') return decision;
+
+    const placement = await this.agentClient.checkServicePlacement(
+      plan.serviceId,
+    );
+    return placement.status === 'CONVERGED' ? 'SUCCESS' : 'PENDING';
+  }
+
+  private async classifyRollbackConvergence(
+    current: ServiceDetailResponse,
+    plan: ServiceMutationPlan,
+    digest: string,
+  ): Promise<DeploymentDecision> {
+    const decision = classifyRollbackSnapshot(current, plan, digest);
+    if (decision !== 'SUCCESS') return decision;
+
+    const placement = await this.agentClient.checkServicePlacement(
+      plan.serviceId,
+    );
+    return placement.status === 'CONVERGED' ? 'SUCCESS' : 'PENDING';
+  }
+
 }
 
 class DeploymentConvergenceGuardError extends Error {
@@ -2158,7 +2209,7 @@ export function classifyDeploymentSnapshot(
     return 'PENDING';
   }
 
-  if (!plan.targetTaskSpecHash) return 'PENDING';
+  if (!plan.targetRuntimeSpecHash) return 'PENDING';
 
   const running = current.tasks.filter(
     (task) =>
@@ -2174,7 +2225,7 @@ export function classifyDeploymentSnapshot(
         task.slot > 0 &&
         imageContainsDigest(task.image, digest) &&
         task.forceUpdate === plan.targetForceUpdate &&
-        task.specHash === plan.targetTaskSpecHash,
+        task.runtimeSpecHash === plan.targetRuntimeSpecHash,
     )
   ) {
     return 'PENDING';
@@ -2202,7 +2253,7 @@ export function classifyRollbackSnapshot(
   }
   if (current.service.updateState === 'rollback_started') return 'PENDING';
 
-  if (!plan.targetTaskSpecHash) return 'PENDING';
+  if (!plan.targetRuntimeSpecHash) return 'PENDING';
   if (current.service.desiredReplicas !== current.service.runningReplicas) {
     return 'PENDING';
   }
@@ -2221,7 +2272,7 @@ export function classifyRollbackSnapshot(
         task.slot > 0 &&
         imageContainsDigest(task.image, digest) &&
         task.forceUpdate === plan.targetForceUpdate &&
-        task.specHash === plan.targetTaskSpecHash,
+        task.runtimeSpecHash === plan.targetRuntimeSpecHash,
     )
   ) {
     return 'PENDING';
@@ -2294,7 +2345,8 @@ function assertPlanMatchesCurrent(
     plan.version !== current.service.version ||
     plan.beforeSpecHash !== current.service.specHash ||
     plan.targetImage !== targetImage ||
-    !plan.targetTaskSpecHash
+    !plan.targetTaskSpecHash ||
+    !plan.targetRuntimeSpecHash
   ) {
     throw new ConflictException(
       'Service changed between deployment inspection and planning',
