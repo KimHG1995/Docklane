@@ -132,15 +132,7 @@ export class DeploymentService
                   deployment,
                 );
               } else {
-                if (current.type === 'ROLLBACK') {
-                await this.reconcileRollbackLocked(
-                  connection,
-                  current,
-                  deployment,
-                );
-              } else {
                 await this.reconcileLocked(connection, current, deployment);
-              }
               }
             },
           );
