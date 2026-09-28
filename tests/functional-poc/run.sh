@@ -292,13 +292,14 @@ jq -e --arg digest "$RELEASE_DIGEST"   '.service.image | contains("@" + $digest)
 log "scenario: audit completeness"
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
 
-for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED; do
+for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
   grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
 done
 
 cat >"$LOG_DIR/summary.txt" <<EOF
 normal digest deploy: PASS
 same digest/spec no-op redeploy: PASS
+broken release manual rollback: PASS
 authorization rejection: PASS
 audit completeness: PASS
 release digest: $RELEASE_DIGEST
