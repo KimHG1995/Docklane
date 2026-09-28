@@ -501,7 +501,6 @@ func writeMutationError(w http.ResponseWriter, err error) {
 		return
 	}
 
-
 	var conflict *dockerengine.ConflictError
 	if errors.As(err, &conflict) {
 		writeError(w, http.StatusConflict, err)
