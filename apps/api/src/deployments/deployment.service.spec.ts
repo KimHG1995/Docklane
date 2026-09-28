@@ -42,6 +42,7 @@ function snapshot(
         id: 'task-1',
         serviceId: 'service-1',
         specHash: 'target-task-spec',
+        runtimeSpecHash: 'target-runtime-spec',
         slot: 1,
         nodeId: 'node-1',
         desiredState: 'running',
@@ -54,6 +55,7 @@ function snapshot(
         id: 'task-2',
         serviceId: 'service-1',
         specHash: 'target-task-spec',
+        runtimeSpecHash: 'target-runtime-spec',
         slot: 2,
         nodeId: 'node-2',
         desiredState: 'running',
@@ -74,6 +76,7 @@ const plan: ServiceMutationPlan = {
   targetForceUpdate: 0,
   targetImage: image,
   targetTaskSpecHash: 'target-task-spec',
+  targetRuntimeSpecHash: 'target-runtime-spec',
 };
 
 test('deployment convergence succeeds only when service and tasks use target digest', () => {
@@ -158,6 +161,17 @@ test('no-op deployment ignores running tasks that are desired to shutdown', () =
   );
 });
 
+test('placement-only task spec drift is accepted by runtime fingerprint', () => {
+  const current = snapshot();
+  current.tasks[0]!.specHash = 'placement-old-task-spec';
+  current.tasks[1]!.specHash = 'placement-old-task-spec';
+
+  assert.equal(
+    classifyDeploymentSnapshot(current, plan, digest, false),
+    'SUCCESS',
+  );
+});
+
 test('deployment requires unique running slots and target TaskSpec identity', () => {
   const duplicateSlot = snapshot();
   duplicateSlot.tasks[1]!.slot = 1;
@@ -166,10 +180,10 @@ test('deployment requires unique running slots and target TaskSpec identity', ()
     'PENDING',
   );
 
-  const wrongTaskSpec = snapshot();
-  wrongTaskSpec.tasks[0]!.specHash = 'old-task-spec';
+  const wrongRuntimeSpec = snapshot();
+  wrongRuntimeSpec.tasks[0]!.runtimeSpecHash = 'old-runtime-spec';
   assert.equal(
-    classifyDeploymentSnapshot(wrongTaskSpec, plan, digest, false),
+    classifyDeploymentSnapshot(wrongRuntimeSpec, plan, digest, false),
     'PENDING',
   );
 });
@@ -187,6 +201,7 @@ test('rollback convergence accepts the restored spec and task set', () => {
     targetReplicas: 2,
     targetImage: rollbackImage,
     targetTaskSpecHash: 'previous-task-spec',
+    targetRuntimeSpecHash: 'previous-runtime-spec',
   };
   const current = snapshot(
     {
@@ -199,6 +214,7 @@ test('rollback convergence accepts the restored spec and task set', () => {
   );
   for (const task of current.tasks) {
     task.specHash = 'previous-task-spec';
+    task.runtimeSpecHash = 'previous-runtime-spec';
   }
 
   assert.equal(
@@ -224,6 +240,7 @@ test('rollback convergence remains pending while rollback is running', () => {
     targetReplicas: 2,
     targetImage: rollbackImage,
     targetTaskSpecHash: 'previous-task-spec',
+    targetRuntimeSpecHash: 'previous-runtime-spec',
   };
 
   assert.equal(
@@ -254,6 +271,7 @@ test('rollback convergence rejects desired-shutdown restored tasks', () => {
     targetReplicas: 2,
     targetImage: rollbackImage,
     targetTaskSpecHash: 'previous-task-spec',
+    targetRuntimeSpecHash: 'previous-runtime-spec',
   };
   const current = snapshot(
     {
@@ -266,6 +284,7 @@ test('rollback convergence rejects desired-shutdown restored tasks', () => {
   );
   for (const task of current.tasks) {
     task.specHash = 'previous-task-spec';
+    task.runtimeSpecHash = 'previous-runtime-spec';
   }
   current.tasks[0]!.desiredState = 'shutdown';
 
@@ -301,6 +320,7 @@ const deploymentOperation: OperationRecord = {
   targetReplicas: 2,
   targetImage: image,
   targetTaskSpecHash: 'target-task-spec',
+  targetRuntimeSpecHash: 'target-runtime-spec',
   resultVersion: null,
   errorCode: null,
   errorMessage: null,
@@ -345,6 +365,47 @@ test('deployment reconciliation keeps rollback in progress non-terminal', () => 
       snapshot({ updateState: 'rollback_started' }),
     ),
     'ROLLBACK_IN_PROGRESS',
+  );
+});
+test('automatic rollback restored spec stays in rollback observation instead of external conflict', () => {
+  assert.equal(
+    classifyDeploymentReconciliationSnapshot(
+      deploymentOperation,
+      snapshot({
+        version: 12,
+        specHash: 'before-spec',
+        updateState: 'rollback_started',
+      }),
+    ),
+    'ROLLBACK_IN_PROGRESS',
+  );
+});
+
+test('rollback_paused is an explicit protected rollback state', () => {
+  assert.equal(
+    classifyDeploymentReconciliationSnapshot(
+      deploymentOperation,
+      snapshot({
+        version: 12,
+        specHash: 'before-spec',
+        updateState: 'rollback_paused',
+      }),
+    ),
+    'ROLLBACK_PAUSED',
+  );
+
+  assert.equal(
+    classifyDeploymentSnapshot(
+      snapshot({
+        version: 12,
+        specHash: 'before-spec',
+        updateState: 'rollback_paused',
+      }),
+      plan,
+      digest,
+      false,
+    ),
+    'ROLLBACK_PAUSED',
   );
 });
 
@@ -649,6 +710,7 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
   );
   for (const task of current.tasks) {
     task.specHash = 'previous-task-spec';
+    task.runtimeSpecHash = 'previous-runtime-spec';
   }
 
   const releases = {
@@ -973,4 +1035,263 @@ test('deployment status view includes deploy and rollback operations', async () 
   assert.equal(result.operation?.id, 'deploy-op-1');
   assert.equal(result.rollbackOperation?.id, 'rollback-op-1');
   assert.equal(result.deployment.status, 'ROLLBACK_VERIFYING');
+});
+
+
+test('manual rollback rejects a service that no longer matches the failed deployment target', async () => {
+  let rollbackMutationCalls = 0;
+  const previousDigest = `sha256:${'b'.repeat(64)}`;
+  const previousImage = `registry.example.com/team/api@${previousDigest}`;
+
+  const deployment: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
+    id: 'deployment-foreign-current',
+    releaseId: 'release-b',
+    previousReleaseId: 'release-a',
+    deploymentTargetId: 'target-1',
+    operationId: 'deploy-b',
+    rollbackOperationId: null,
+    status: 'FAILED',
+    reason: 'cas conflict',
+    noOp: false,
+    beforeSpec: { specHash: 'spec-a' },
+    targetSpec: { specHash: 'spec-b' },
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+
+  const releases = {
+    findDeploymentTarget: async () => ({
+      id: 'target-1',
+      applicationId: 'app-1',
+      clusterId: 'default',
+      environment: 'production',
+      dockerServiceId: 'service-1',
+      serviceName: 'api',
+      routingMode: 'INGRESS',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }),
+    findRelease: async () => ({
+      id: 'release-a',
+      applicationId: 'app-1',
+      version: '1.0.0',
+      imageRepository: 'registry.example.com/team/api',
+      imageTag: '1.0.0',
+      imageDigest: previousDigest,
+      gitCommit: null,
+      buildNumber: null,
+      createdBy: 'operator-1',
+      createdAt: new Date(0).toISOString(),
+    }),
+  };
+
+  const deployments = {
+    find: async () => deployment,
+  };
+
+  const current = snapshot({
+    id: 'service-1',
+    version: 20,
+    specHash: 'spec-c',
+    image: `registry.example.com/team/api@sha256:${'c'.repeat(64)}`,
+    updateState: undefined,
+  });
+
+  const agent = {
+    inspectService: async () => current,
+    planRollbackService: async () => ({
+      serviceId: 'service-1',
+      version: 20,
+      beforeSpecHash: 'spec-c',
+      targetSpecHash: 'spec-a',
+      targetForceUpdate: 0,
+      targetReplicas: 2,
+      targetImage: previousImage,
+      targetTaskSpecHash: 'previous-task-spec',
+      targetRuntimeSpecHash: 'previous-runtime-spec',
+    }),
+    rollbackService: async () => {
+      rollbackMutationCalls += 1;
+      throw new Error('must not rollback unrelated current service');
+    },
+  };
+
+  const operations = {
+    findWithConnection: async () => null,
+    findNonTerminalForServiceWithConnection: async () => null,
+  };
+  const nodeOperations = {
+    findNonTerminalAffectingServiceWithConnection: async () => null,
+  };
+  const connection = {
+    beginTransaction: async () => undefined,
+    commit: async () => undefined,
+    rollback: async () => undefined,
+  };
+  const lock = {
+    withServiceLock: async (
+      _clusterId: string,
+      _serviceId: string,
+      fn: (value: unknown) => Promise<unknown>,
+    ) => fn(connection),
+  };
+
+  const service = new DeploymentService(
+    releases as never,
+    deployments as never,
+    agent as never,
+    operations as never,
+    nodeOperations as never,
+    lock as never,
+    { assertAvailable: async () => undefined } as never,
+    {} as never,
+  );
+
+  await assert.rejects(
+    service.rollback(
+      'default',
+      deployment.id,
+      { operationId: 'rollback-b' },
+      {
+        actorId: 'operator-1',
+        role: 'OPERATOR',
+        clusters: ['default'],
+      },
+    ),
+    /rollback ownership/,
+  );
+  assert.equal(rollbackMutationCalls, 0);
+});
+
+test('historical redeploy retry reuses stored source provenance', async () => {
+  const stored: DeploymentRecord = {
+    kind: 'HISTORICAL_REDEPLOY',
+    sourceDeploymentId: 'source-original',
+    id: 'redeploy-result',
+    releaseId: 'release-old',
+    previousReleaseId: 'release-new',
+    deploymentTargetId: 'target-1',
+    operationId: 'redeploy-op',
+    rollbackOperationId: null,
+    status: 'SUCCESS',
+    reason: null,
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {},
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+  let latestSourceLookups = 0;
+
+  const releases = {
+    findDeploymentTarget: async () => ({
+      id: 'target-1',
+      applicationId: 'app-1',
+      clusterId: 'default',
+      environment: 'production',
+      dockerServiceId: 'service-1',
+      serviceName: 'api',
+      routingMode: 'INGRESS',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }),
+    findRelease: async () => ({
+      id: 'release-old',
+      applicationId: 'app-1',
+      version: '0.9.0',
+      imageRepository: 'registry.example.com/team/api',
+      imageTag: '0.9.0',
+      imageDigest: digest,
+      gitCommit: null,
+      buildNumber: null,
+      createdBy: 'operator-1',
+      createdAt: new Date(0).toISOString(),
+    }),
+  };
+
+  const deployments = {
+    findByOperation: async () => stored,
+    findLatestSuccessfulForRelease: async () => {
+      latestSourceLookups += 1;
+      return {
+        ...stored,
+        id: 'redeploy-result',
+      };
+    },
+    findByOperationWithConnection: async () => stored,
+  };
+
+  const operation: OperationRecord = {
+    ...deploymentOperation,
+    id: 'redeploy-op',
+    status: 'SUCCESS',
+  };
+  const operations = {
+    findWithConnection: async () => operation,
+  };
+  const agent = {
+    inspectService: async () => snapshot(),
+  };
+  const connection = {};
+  const lock = {
+    withServiceLock: async (
+      _clusterId: string,
+      _serviceId: string,
+      fn: (value: unknown) => Promise<unknown>,
+    ) => fn(connection),
+  };
+
+  const service = new DeploymentService(
+    releases as never,
+    deployments as never,
+    agent as never,
+    operations as never,
+    {} as never,
+    lock as never,
+    {} as never,
+    {} as never,
+  );
+
+  const result = await service.historicalRedeploy(
+    'default',
+    'target-1',
+    {
+      operationId: 'redeploy-op',
+      releaseId: 'release-old',
+      health: stored.health,
+    },
+    {
+      actorId: 'operator-1',
+      role: 'OPERATOR',
+      clusters: ['default'],
+    },
+  );
+
+  assert.equal(result.id, stored.id);
+  assert.equal(result.sourceDeploymentId, 'source-original');
+  assert.equal(latestSourceLookups, 0);
 });
