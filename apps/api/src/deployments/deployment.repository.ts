@@ -202,6 +202,21 @@ export class DeploymentRepository implements OnModuleInit {
     );
   }
 
+  async markRollbackVerificationPending(
+    connection: PoolConnection,
+    id: string,
+    reason: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE deployments
+       SET status = 'ROLLBACK_VERIFYING',
+           reason = ?,
+           finished_at = NULL
+       WHERE id = ?`,
+      [reason, id],
+    );
+  }
+
   async markRolledBack(
     connection: PoolConnection,
     id: string,
