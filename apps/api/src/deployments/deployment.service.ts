@@ -311,6 +311,12 @@ export class DeploymentService {
   ): Promise<DeploymentRecord> {
     await connection.beginTransaction();
     try {
+      const previousReleaseId =
+        await this.deployments.latestSuccessfulReleaseId(
+          connection,
+          targetId,
+        );
+
       await this.operations.create(connection, {
         id: input.operationId,
         clusterId,
@@ -328,6 +334,7 @@ export class DeploymentService {
 
       const deployment = await this.deployments.create(connection, {
         releaseId,
+        previousReleaseId,
         deploymentTargetId: targetId,
         operationId: input.operationId,
         status: noOp ? 'VERIFYING' : 'DEPLOYING',
@@ -504,6 +511,19 @@ export class DeploymentService {
     try {
       await this.operations.markFailed(connection, operationId, code, message);
       await this.deployments.markFailed(connection, deploymentId, message);
+      const operation = await this.operations.findWithConnection(
+        connection,
+        operationId,
+      );
+      if (!operation) throw new Error('Deployment operation disappeared');
+      await this.operations.audit(connection, {
+        operationId,
+        actorId: operation.actorId,
+        clusterId: operation.clusterId,
+        serviceId: operation.serviceId,
+        action: 'DEPLOY_FAILED',
+        afterJson: { code, message },
+      });
       await connection.commit();
     } catch (error) {
       await connection.rollback();
@@ -530,6 +550,19 @@ export class DeploymentService {
         deploymentId,
         message,
       );
+      const operation = await this.operations.findWithConnection(
+        connection,
+        operationId,
+      );
+      if (!operation) throw new Error('Deployment operation disappeared');
+      await this.operations.audit(connection, {
+        operationId,
+        actorId: operation.actorId,
+        clusterId: operation.clusterId,
+        serviceId: operation.serviceId,
+        action: 'DEPLOY_NEEDS_ATTENTION',
+        afterJson: { message },
+      });
       await connection.commit();
     } catch (error) {
       await connection.rollback();
