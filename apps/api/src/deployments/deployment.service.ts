@@ -1676,7 +1676,8 @@ export class DeploymentService
       !operation.beforeSpecHash ||
       !operation.targetSpecHash ||
       !operation.targetImage ||
-      !operation.targetTaskSpecHash
+      !operation.targetTaskSpecHash ||
+      !operation.targetRuntimeSpecHash
     ) {
       await this.rollbackAttention(
         connection,
@@ -2105,10 +2106,14 @@ export class DeploymentService
     );
     if (decision !== 'SUCCESS') return decision;
 
-    const placement = await this.agentClient.checkServicePlacement(
-      plan.serviceId,
-    );
-    return placement.status === 'CONVERGED' ? 'SUCCESS' : 'PENDING';
+    try {
+      const placement = await this.agentClient.checkServicePlacement(
+        plan.serviceId,
+      );
+      return placement.status === 'CONVERGED' ? 'SUCCESS' : 'PENDING';
+    } catch {
+      return 'PENDING';
+    }
   }
 
   private async classifyRollbackConvergence(
@@ -2119,10 +2124,14 @@ export class DeploymentService
     const decision = classifyRollbackSnapshot(current, plan, digest);
     if (decision !== 'SUCCESS') return decision;
 
-    const placement = await this.agentClient.checkServicePlacement(
-      plan.serviceId,
-    );
-    return placement.status === 'CONVERGED' ? 'SUCCESS' : 'PENDING';
+    try {
+      const placement = await this.agentClient.checkServicePlacement(
+        plan.serviceId,
+      );
+      return placement.status === 'CONVERGED' ? 'SUCCESS' : 'PENDING';
+    } catch {
+      return 'PENDING';
+    }
   }
 
 }
