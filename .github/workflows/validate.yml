@@ -21,6 +21,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       agent: ${{ steps.filter.outputs.agent }}
       docs: ${{ steps.filter.outputs.docs }}
+      poc: ${{ steps.filter.outputs.poc }}
       any_runtime: ${{ steps.filter.outputs.any_runtime }}
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +52,7 @@ jobs:
           web=false
           agent=false
           docs=false
+          poc=false
           unknown=false
 
           while IFS= read -r file; do
@@ -79,6 +81,9 @@ jobs:
                 web=true
                 agent=true
                 ;;
+              tests/functional-poc/*)
+                poc=true
+                ;;
               docs/*|README.md|CONTRIBUTING.md|SECURITY.md|LICENSE)
                 docs=true
                 ;;
@@ -105,6 +110,7 @@ jobs:
             echo "web=$web"
             echo "agent=$agent"
             echo "docs=$docs"
+            echo "poc=$poc"
             echo "any_runtime=$any_runtime"
           } >> "$GITHUB_OUTPUT"
 
@@ -162,6 +168,18 @@ jobs:
       - run: go test ./...
       - run: go build -o bin/docklane-agent ./cmd/docklane-agent
 
+  functional-poc-lint:
+    needs: changes
+    if: needs.changes.outputs.poc == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Functional PoC shell syntax
+        run: |
+          bash -n tests/functional-poc/run.sh
+          bash -n tests/functional-poc/cleanup.sh
+
   docs-only:
     needs: changes
     if: needs.changes.outputs.any_runtime != 'true' && needs.changes.outputs.docs == 'true'
@@ -172,7 +190,7 @@ jobs:
 
   validation-gate:
     if: always()
-    needs: [changes, api, web, go-agent, docs-only]
+    needs: [changes, api, web, go-agent, functional-poc-lint, docs-only]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -186,7 +204,7 @@ jobs:
             exit 1
           fi
 
-          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.docs-only.result }}"; do
+          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.docs-only.result }}"; do
             if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
               echo "A required validation job failed or was cancelled"
               exit 1
