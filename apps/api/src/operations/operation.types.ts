@@ -1,4 +1,4 @@
-export type OperationType = 'SCALE' | 'RESTART';
+export type OperationType = 'SCALE' | 'RESTART' | 'DEPLOY';
 export type OperationStatus =
   | 'PENDING'
   | 'RUNNING'
@@ -19,6 +19,7 @@ export interface OperationRecord {
   targetSpecHash: string;
   targetForceUpdate: number;
   targetReplicas: number | null;
+  targetImage: string | null;
   resultVersion: number | null;
   errorCode: string | null;
   errorMessage: string | null;
