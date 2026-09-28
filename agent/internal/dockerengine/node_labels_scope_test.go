@@ -95,7 +95,7 @@ func TestValidateAffectedServiceModesRejectsGlobalService(t *testing.T) {
 			ID: "global-service",
 			Spec: swarm.ServiceSpec{
 				Annotations: swarm.Annotations{Name: "global-service"},
-				Mode: swarm.ServiceMode{Global: &swarm.GlobalService{}},
+				Mode:        swarm.ServiceMode{Global: &swarm.GlobalService{}},
 				TaskTemplate: swarm.TaskSpec{
 					Placement: &swarm.Placement{
 						Constraints: []string{"node.labels.zone==a"},
@@ -120,7 +120,7 @@ func TestValidateAffectedServiceModesIgnoresUnrelatedGlobalService(t *testing.T)
 			ID: "global-service",
 			Spec: swarm.ServiceSpec{
 				Annotations: swarm.Annotations{Name: "global-service"},
-				Mode: swarm.ServiceMode{Global: &swarm.GlobalService{}},
+				Mode:        swarm.ServiceMode{Global: &swarm.GlobalService{}},
 				TaskTemplate: swarm.TaskSpec{
 					Placement: &swarm.Placement{
 						Constraints: []string{"node.labels.region==kr"},
