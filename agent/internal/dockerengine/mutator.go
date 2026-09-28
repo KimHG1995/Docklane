@@ -202,7 +202,6 @@ func (r *Reader) UpdateServiceImage(
 	}, nil
 }
 
-
 func (r *Reader) RollbackService(
 	ctx context.Context,
 	serviceID string,
