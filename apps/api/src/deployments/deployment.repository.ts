@@ -165,6 +165,19 @@ export class DeploymentRepository implements OnModuleInit {
     );
   }
 
+  async markVerificationPending(
+    connection: PoolConnection,
+    id: string,
+    reason: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE deployments
+       SET status = 'VERIFYING', reason = ?, finished_at = NULL
+       WHERE id = ?`,
+      [reason, id],
+    );
+  }
+
   async markSuccess(connection: PoolConnection, id: string): Promise<void> {
     await connection.execute(
       `UPDATE deployments
