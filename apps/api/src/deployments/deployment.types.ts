@@ -9,6 +9,8 @@ export type DeploymentStatus =
   | 'ROLLBACK_FAILED'
   | 'NEEDS_ATTENTION';
 
+export type DeploymentKind = 'DEPLOY' | 'HISTORICAL_REDEPLOY';
+
 export interface HealthCheckConfig {
   url: string;
   intervalMs: number;
@@ -20,6 +22,8 @@ export interface HealthCheckConfig {
 
 export interface DeploymentRecord {
   id: string;
+  kind: DeploymentKind;
+  sourceDeploymentId: string | null;
   releaseId: string;
   previousReleaseId: string | null;
   deploymentTargetId: string;
@@ -36,4 +40,11 @@ export interface DeploymentRecord {
   finishedAt: string | null;
   createdBy: string;
   createdAt: string;
+}
+
+
+export interface DeploymentStatusView {
+  deployment: DeploymentRecord;
+  operation: import('../operations/operation.types.js').OperationRecord | null;
+  rollbackOperation: import('../operations/operation.types.js').OperationRecord | null;
 }
