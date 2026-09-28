@@ -50,6 +50,7 @@ export const ServiceSummarySchema = z.object({
   version: z.number().int().nonnegative(),
   specHash: z.string().min(1),
   forceUpdate: z.number().int().nonnegative(),
+  taskSpecHash: z.string().min(1).optional(),
   image: z.string().optional(),
   mode: z.string(),
   desiredReplicas: z.number().int().nonnegative(),
