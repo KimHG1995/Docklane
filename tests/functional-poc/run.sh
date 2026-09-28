@@ -252,6 +252,31 @@ NOOP_JSON="$(api_post   "/v1/clusters/default/targets/$TARGET_ID/deploy"   "$(jq
 printf '%s\n' "$NOOP_JSON" >"$LOG_DIR/noop-deploy.json"
 jq -e '.status == "SUCCESS" and .noOp == true' <<<"$NOOP_JSON" >/dev/null   || fail "same digest/spec redeploy was not verified as no-op SUCCESS"
 
+log "scenario: broken release deployment"
+BROKEN_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
+    "version":"vbroken",
+    "imageRepository":"http://127.0.0.1:5000/docklane-poc",
+    "imageTag":"vbroken",
+    "gitCommit":"functional-poc-broken",
+    "buildNumber":"manual-smoke-broken"
+  }')"
+printf '%s\n' "$BROKEN_RELEASE_JSON" >"$LOG_DIR/broken-release.json"
+BROKEN_RELEASE_ID="$(jq -er '.id' <<<"$BROKEN_RELEASE_JSON")"
+BROKEN_DIGEST="$(jq -er '.imageDigest' <<<"$BROKEN_RELEASE_JSON")"
+
+BROKEN_DEPLOY_JSON="$(api_post   "/v1/clusters/default/targets/$TARGET_ID/deploy"   "$(jq -cn     --arg releaseId "$BROKEN_RELEASE_ID"     --argjson health "$HEALTH_JSON"     '{
+      operationId: "functional-poc-deploy-broken",
+      releaseId: $releaseId,
+      health: $health
+    }')")"
+printf '%s\n' "$BROKEN_DEPLOY_JSON" >"$LOG_DIR/broken-deploy.json"
+BROKEN_DEPLOYMENT_ID="$(jq -er '.id' <<<"$BROKEN_DEPLOY_JSON")"
+jq -e '.status == "FAILED"' <<<"$BROKEN_DEPLOY_JSON" >/dev/null   || fail "broken release did not finish FAILED"
+
+BROKEN_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
+printf '%s\n' "$BROKEN_SERVICE_JSON" >"$LOG_DIR/service-after-broken-deploy.json"
+jq -e --arg digest "$BROKEN_DIGEST"   '.service.image | contains("@" + $digest)'   <<<"$BROKEN_SERVICE_JSON" >/dev/null   || fail "broken service was not updated to the broken release digest"
+
 log "scenario: audit completeness"
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
 
