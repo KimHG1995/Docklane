@@ -1295,3 +1295,65 @@ test('historical redeploy retry reuses stored source provenance', async () => {
   assert.equal(result.sourceDeploymentId, 'source-original');
   assert.equal(latestSourceLookups, 0);
 });
+
+
+test('deployment convergence requires placement after runtime fingerprint matches', async () => {
+  let placementStatus: 'CONVERGED' | 'PENDING' = 'PENDING';
+  const agent = {
+    checkServicePlacement: async () => ({
+      serviceId: 'service-1',
+      status: placementStatus,
+      desiredReplicas: 2,
+      runningReplicas: 2,
+      reasons:
+        placementStatus === 'CONVERGED'
+          ? []
+          : ['PLACEMENT_CONVERGENCE_PENDING'],
+      unsupportedConstraints: [],
+      violations: [],
+    }),
+  };
+  const service = new DeploymentService(
+    {} as never,
+    {} as never,
+    agent as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+  const classifier = service as unknown as {
+    classifyDeploymentConvergence(
+      current: ServiceDetailResponse,
+      plan: ServiceMutationPlan,
+      digest: string,
+      noOp: boolean,
+    ): Promise<'PENDING' | 'SUCCESS' | 'ROLLBACK_PAUSED' | 'FAILED' | 'EXTERNAL_CONFLICT'>;
+  };
+
+  const current = snapshot();
+  current.tasks[0]!.specHash = 'old-placement-spec';
+  current.tasks[1]!.specHash = 'old-placement-spec';
+
+  assert.equal(
+    await classifier.classifyDeploymentConvergence(
+      current,
+      plan,
+      digest,
+      false,
+    ),
+    'PENDING',
+  );
+
+  placementStatus = 'CONVERGED';
+  assert.equal(
+    await classifier.classifyDeploymentConvergence(
+      current,
+      plan,
+      digest,
+      false,
+    ),
+    'SUCCESS',
+  );
+});
