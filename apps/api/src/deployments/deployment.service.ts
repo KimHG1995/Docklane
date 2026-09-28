@@ -403,6 +403,7 @@ export class DeploymentService implements OnApplicationBootstrap {
         targetForceUpdate: plan.targetForceUpdate,
         targetReplicas: before.service.desiredReplicas,
         targetImage,
+        targetTaskSpecHash: plan.targetTaskSpecHash,
       });
       await this.operations.markRunning(connection, input.operationId);
 
@@ -418,6 +419,7 @@ export class DeploymentService implements OnApplicationBootstrap {
           specHash: plan.targetSpecHash,
           image: targetImage,
           desiredReplicas: before.service.desiredReplicas,
+          taskSpecHash: plan.targetTaskSpecHash,
         },
         health: input.health,
         expectedServiceVersion: plan.version,
@@ -593,7 +595,8 @@ export class DeploymentService implements OnApplicationBootstrap {
       operation.type !== 'DEPLOY' ||
       !operation.beforeSpecHash ||
       !operation.targetSpecHash ||
-      !operation.targetImage
+      !operation.targetImage ||
+      !operation.targetTaskSpecHash
     ) {
       await this.attention(
         connection,
@@ -631,11 +634,13 @@ export class DeploymentService implements OnApplicationBootstrap {
       targetForceUpdate: operation.targetForceUpdate,
       targetReplicas: operation.targetReplicas ?? undefined,
       targetImage: operation.targetImage,
+      targetTaskSpecHash: operation.targetTaskSpecHash,
     };
 
     const deadline = Date.now() + RECONCILE_OBSERVATION_MS;
     let lastError = initialError ?? null;
     let observedService = false;
+    let rollbackInProgress = false;
 
     while (Date.now() < deadline) {
       let current: ServiceDetailResponse;
@@ -653,6 +658,12 @@ export class DeploymentService implements OnApplicationBootstrap {
         operation,
         current,
       );
+
+      if (snapshot === 'ROLLBACK_IN_PROGRESS') {
+        rollbackInProgress = true;
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
 
       if (snapshot === 'FAILED') {
         await this.fail(
@@ -710,7 +721,15 @@ export class DeploymentService implements OnApplicationBootstrap {
       );
     }
 
-    if (!observedService && lastError) {
+    if (rollbackInProgress) {
+      await this.markVerificationPending(
+        connection,
+        deployment.id,
+        operation.id,
+        'SWARM_ROLLBACK_IN_PROGRESS',
+        'Swarm rollback is still in progress; mutation protection remains active',
+      );
+    } else if (!observedService && lastError) {
       await this.attention(
         connection,
         deployment.id,
@@ -731,6 +750,46 @@ export class DeploymentService implements OnApplicationBootstrap {
     }
 
     return this.deployments.requireWithConnection(connection, deployment.id);
+  }
+
+  private async markVerificationPending(
+    connection: PoolConnection,
+    deploymentId: string,
+    operationId: string,
+    code: string,
+    message: string,
+  ): Promise<void> {
+    await connection.beginTransaction();
+    try {
+      await this.operations.markVerificationPending(
+        connection,
+        operationId,
+        code,
+        message,
+      );
+      await this.deployments.markVerificationPending(
+        connection,
+        deploymentId,
+        message,
+      );
+      const operation = await this.operations.findWithConnection(
+        connection,
+        operationId,
+      );
+      if (!operation) throw new Error('Deployment operation disappeared');
+      await this.operations.audit(connection, {
+        operationId,
+        actorId: operation.actorId,
+        clusterId: operation.clusterId,
+        serviceId: operation.serviceId,
+        action: 'DEPLOY_VERIFICATION_PENDING',
+        afterJson: { code, message },
+      });
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
   }
 
   private async fail(
@@ -838,6 +897,7 @@ export class DeploymentService implements OnApplicationBootstrap {
 export type DeploymentReconciliationDecision =
   | 'TARGET_OBSERVED'
   | 'WAITING_FOR_MUTATION'
+  | 'ROLLBACK_IN_PROGRESS'
   | 'FAILED'
   | 'EXTERNAL_CONFLICT';
 
@@ -846,11 +906,10 @@ export function classifyDeploymentReconciliationSnapshot(
   current: ServiceDetailResponse,
 ): DeploymentReconciliationDecision {
   const updateState = current.service.updateState;
-  if (
-    updateState === 'paused' ||
-    updateState === 'rollback_started' ||
-    updateState === 'rollback_completed'
-  ) {
+  if (updateState === 'rollback_started') {
+    return 'ROLLBACK_IN_PROGRESS';
+  }
+  if (updateState === 'paused' || updateState === 'rollback_completed') {
     return 'FAILED';
   }
 
@@ -891,11 +950,8 @@ export function classifyDeploymentSnapshot(
   if (!imageContainsDigest(current.service.image, digest)) return 'PENDING';
 
   const updateState = current.service.updateState;
-  if (
-    updateState === 'paused' ||
-    updateState === 'rollback_started' ||
-    updateState === 'rollback_completed'
-  ) {
+  if (updateState === 'rollback_started') return 'PENDING';
+  if (updateState === 'paused' || updateState === 'rollback_completed') {
     return 'FAILED';
   }
 
@@ -904,13 +960,23 @@ export function classifyDeploymentSnapshot(
     return 'PENDING';
   }
 
-  const running = current.tasks.filter((task) => task.state === 'running');
+  if (!plan.targetTaskSpecHash) return 'PENDING';
+
+  const running = current.tasks.filter(
+    (task) =>
+      task.state === 'running' &&
+      task.desiredState === 'running',
+  );
+  const slots = new Set(running.map((task) => task.slot));
   if (
     running.length !== current.service.desiredReplicas ||
+    slots.size !== current.service.desiredReplicas ||
     !running.every(
       (task) =>
+        task.slot > 0 &&
         imageContainsDigest(task.image, digest) &&
-        task.forceUpdate === plan.targetForceUpdate,
+        task.forceUpdate === plan.targetForceUpdate &&
+        task.specHash === plan.targetTaskSpecHash,
     )
   ) {
     return 'PENDING';
@@ -959,7 +1025,8 @@ function assertPlanMatchesCurrent(
     plan.serviceId !== current.service.id ||
     plan.version !== current.service.version ||
     plan.beforeSpecHash !== current.service.specHash ||
-    plan.targetImage !== targetImage
+    plan.targetImage !== targetImage ||
+    !plan.targetTaskSpecHash
   ) {
     throw new ConflictException(
       'Service changed between deployment inspection and planning',
