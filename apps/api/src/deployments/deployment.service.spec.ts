@@ -596,6 +596,7 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
   let planRollbackCalls = 0;
   let rollbackMutationCalls = 0;
   let operation: OperationRecord | null = null;
+  let persistedOperationStatus: OperationRecord['status'] | null = null;
 
   const deployment: DeploymentRecord = {
     id: 'deployment-existing-rollback',
@@ -756,6 +757,7 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
       if (operation) {
         operation.status = 'SUCCESS';
         operation.resultVersion = version;
+        persistedOperationStatus = 'SUCCESS';
       }
     },
     audit: async () => undefined,
@@ -813,5 +815,5 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
   assert.equal(planRollbackCalls, 0);
   assert.equal(rollbackMutationCalls, 0);
   assert.equal(result.status, 'ROLLED_BACK');
-  assert.equal(operation?.status, 'SUCCESS');
+  assert.equal(persistedOperationStatus, 'SUCCESS');
 });
