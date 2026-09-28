@@ -201,3 +201,74 @@ func (r *Reader) UpdateServiceImage(
 		Warnings:          update.Warnings,
 	}, nil
 }
+
+
+func (r *Reader) RollbackService(
+	ctx context.Context,
+	serviceID string,
+	input model.ServiceMutationRequest,
+) (model.ServiceMutationResponse, error) {
+	result, err := r.client.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
+	if err != nil {
+		return model.ServiceMutationResponse{}, fmt.Errorf("inspect service %q: %w", serviceID, err)
+	}
+	service := result.Service
+	if err := validateMutationPrecondition(service, input); err != nil {
+		return model.ServiceMutationResponse{}, err
+	}
+	if service.PreviousSpec == nil {
+		return model.ServiceMutationResponse{}, &ValidationError{
+			Message: fmt.Sprintf("service %q does not have a previous spec", serviceID),
+		}
+	}
+	if service.PreviousSpec.Mode.Replicated == nil ||
+		service.PreviousSpec.TaskTemplate.ContainerSpec == nil {
+		return model.ServiceMutationResponse{}, &ValidationError{
+			Message: fmt.Sprintf(
+				"service %q previous spec is not a supported replicated container service",
+				serviceID,
+			),
+		}
+	}
+
+	targetHash, err := serviceSpecHash(*service.PreviousSpec)
+	if err != nil {
+		return model.ServiceMutationResponse{}, err
+	}
+	if targetHash != input.TargetSpecHash {
+		return model.ServiceMutationResponse{}, &ConflictError{
+			Message: "previous service spec changed after rollback planning",
+		}
+	}
+
+	update, err := r.client.ServiceUpdate(ctx, service.ID, client.ServiceUpdateOptions{
+		Version:          swarm.Version{Index: input.ExpectedVersion},
+		Spec:             service.Spec,
+		RegistryAuthFrom: swarm.RegistryAuthFromPreviousSpec,
+		Rollback:         "previous",
+	})
+	if err != nil {
+		return model.ServiceMutationResponse{}, mapServiceUpdateError(
+			"rollback",
+			serviceID,
+			err,
+		)
+	}
+
+	after, err := r.client.ServiceInspect(ctx, service.ID, client.ServiceInspectOptions{})
+	if err != nil {
+		return model.ServiceMutationResponse{}, fmt.Errorf(
+			"inspect rolled back service %q: %w",
+			serviceID,
+			err,
+		)
+	}
+
+	return model.ServiceMutationResponse{
+		ServiceID:         service.ID,
+		Version:           after.Service.Version.Index,
+		TargetSpecHash:    targetHash,
+		TargetForceUpdate: service.PreviousSpec.TaskTemplate.ForceUpdate,
+		Warnings:          update.Warnings,
+	}, nil
+}
