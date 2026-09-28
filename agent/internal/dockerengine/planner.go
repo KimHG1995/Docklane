@@ -132,6 +132,10 @@ func (r *Reader) PlanUpdateServiceImage(
 	if err != nil {
 		return model.ServiceMutationPlan{}, err
 	}
+	targetRuntimeSpecHash, err := taskRuntimeSpecHash(service.Spec.TaskTemplate)
+	if err != nil {
+		return model.ServiceMutationPlan{}, err
+	}
 
 	return model.ServiceMutationPlan{
 		ServiceID:          service.ID,
@@ -140,7 +144,8 @@ func (r *Reader) PlanUpdateServiceImage(
 		TargetSpecHash:     targetHash,
 		TargetForceUpdate:  service.Spec.TaskTemplate.ForceUpdate,
 		TargetImage:        image,
-		TargetTaskSpecHash: targetTaskSpecHash,
+		TargetTaskSpecHash:    targetTaskSpecHash,
+		TargetRuntimeSpecHash: targetRuntimeSpecHash,
 	}, nil
 }
 
@@ -188,6 +193,10 @@ func (r *Reader) PlanRollbackService(
 	if err != nil {
 		return model.ServiceMutationPlan{}, err
 	}
+	targetRuntimeSpecHash, err := taskRuntimeSpecHash(service.PreviousSpec.TaskTemplate)
+	if err != nil {
+		return model.ServiceMutationPlan{}, err
+	}
 
 	targetImage := service.PreviousSpec.TaskTemplate.ContainerSpec.Image
 	var targetReplicas *uint64
@@ -204,6 +213,7 @@ func (r *Reader) PlanRollbackService(
 		TargetForceUpdate:  service.PreviousSpec.TaskTemplate.ForceUpdate,
 		TargetReplicas:     targetReplicas,
 		TargetImage:        targetImage,
-		TargetTaskSpecHash: targetTaskSpecHash,
+		TargetTaskSpecHash:    targetTaskSpecHash,
+		TargetRuntimeSpecHash: targetRuntimeSpecHash,
 	}, nil
 }
