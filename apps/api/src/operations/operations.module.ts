@@ -20,5 +20,6 @@ import { NodeOperationRepository } from './node-operation.repository.js';
     MutationService,
     NodeMutationService,
   ],
+  exports: [OperationRepository, NodeOperationRepository, OperationLock],
 })
 export class OperationsModule {}
