@@ -3,6 +3,10 @@ export type DeploymentStatus =
   | 'VERIFYING'
   | 'SUCCESS'
   | 'FAILED'
+  | 'ROLLING_BACK'
+  | 'ROLLBACK_VERIFYING'
+  | 'ROLLED_BACK'
+  | 'ROLLBACK_FAILED'
   | 'NEEDS_ATTENTION';
 
 export interface HealthCheckConfig {
@@ -20,6 +24,7 @@ export interface DeploymentRecord {
   previousReleaseId: string | null;
   deploymentTargetId: string;
   operationId: string;
+  rollbackOperationId: string | null;
   status: DeploymentStatus;
   reason: string | null;
   noOp: boolean;
