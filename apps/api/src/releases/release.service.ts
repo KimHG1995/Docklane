@@ -6,7 +6,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AGENT_CLIENT, type AgentClient } from '../agent/agent-client.js';
+import {
+  AGENT_CLIENT,
+  AgentRequestError,
+  type AgentClient,
+} from '../agent/agent-client.js';
 import type { Principal } from '../auth/auth.types.js';
 import { RegistryClient } from '../registry/registry.client.js';
 import { RegistryRequestError } from '../registry/registry.errors.js';
@@ -39,9 +43,10 @@ export class ReleaseService {
 
   async createApplication(
     input: CreateApplicationRequest,
+    principal: Principal,
   ): Promise<ApplicationRecord> {
     try {
-      return await this.repository.createApplication(input);
+      return await this.repository.createApplication(input, principal.actorId);
     } catch (error) {
       throw mapDuplicate(error, 'Application name already exists');
     }
@@ -60,6 +65,7 @@ export class ReleaseService {
     clusterId: string,
     applicationId: string,
     input: CreateDeploymentTargetRequest,
+    principal: Principal,
   ): Promise<DeploymentTargetRecord> {
     this.assertCluster(clusterId);
     await this.requireApplication(applicationId);
@@ -67,8 +73,14 @@ export class ReleaseService {
     let service;
     try {
       service = await this.agentClient.inspectService(input.dockerServiceId);
-    } catch {
-      throw new NotFoundException('Swarm service not found');
+    } catch (error) {
+      throw mapAgentLookupError(error);
+    }
+
+    if (service.service.mode !== 'replicated') {
+      throw new BadRequestException(
+        `DeploymentTarget only supports replicated services; got ${service.service.mode}`,
+      );
     }
 
     try {
@@ -81,6 +93,7 @@ export class ReleaseService {
           serviceName: service.service.name,
           routingMode: 'INGRESS',
         },
+        principal.actorId,
       );
     } catch (error) {
       throw mapDuplicate(
@@ -183,4 +196,16 @@ function mapRegistryError(error: unknown): Error {
   }
 
   return new BadGatewayException(error.message);
+}
+
+function mapAgentLookupError(error: unknown): Error {
+  if (error instanceof AgentRequestError) {
+    if (error.statusCode === 404) {
+      return new NotFoundException('Swarm service not found');
+    }
+    return new BadGatewayException(
+      `Agent service lookup failed with HTTP ${error.statusCode}`,
+    );
+  }
+  return new BadGatewayException('Agent service lookup failed');
 }
