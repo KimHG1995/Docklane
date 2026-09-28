@@ -17,6 +17,7 @@ export interface HealthCheckConfig {
 export interface DeploymentRecord {
   id: string;
   releaseId: string;
+  previousReleaseId: string | null;
   deploymentTargetId: string;
   operationId: string;
   status: DeploymentStatus;
