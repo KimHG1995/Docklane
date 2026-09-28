@@ -15,3 +15,13 @@ type ValidationError struct {
 func (e *ValidationError) Error() string {
 	return e.Message
 }
+
+
+type NotFoundError struct {
+	Resource string
+	Ref      string
+}
+
+func (e *NotFoundError) Error() string {
+	return e.Resource + " " + e.Ref + " not found"
+}
