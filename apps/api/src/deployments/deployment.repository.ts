@@ -10,6 +10,8 @@ import type {
 
 interface DeploymentRow extends RowDataPacket {
   id: string;
+  kind: 'DEPLOY' | 'HISTORICAL_REDEPLOY';
+  source_deployment_id: string | null;
   release_id: string;
   previous_release_id: string | null;
   deployment_target_id: string;
@@ -36,6 +38,8 @@ export class DeploymentRepository implements OnModuleInit {
     await this.db.pool.query(`
       CREATE TABLE IF NOT EXISTS deployments (
         id VARCHAR(64) PRIMARY KEY,
+        kind VARCHAR(32) NOT NULL DEFAULT 'DEPLOY',
+        source_deployment_id VARCHAR(64) NULL,
         release_id VARCHAR(64) NOT NULL,
         previous_release_id VARCHAR(64) NULL,
         deployment_target_id VARCHAR(64) NOT NULL,
@@ -72,6 +76,14 @@ export class DeploymentRepository implements OnModuleInit {
       'rollback_operation_id',
       'VARCHAR(64) NULL',
     );
+    await this.ensureColumn(
+      'kind',
+      "VARCHAR(32) NOT NULL DEFAULT 'DEPLOY'",
+    );
+    await this.ensureColumn(
+      'source_deployment_id',
+      'VARCHAR(64) NULL',
+    );
     await this.ensureIndex(
       'uq_deployments_rollback_operation',
       'UNIQUE KEY uq_deployments_rollback_operation (rollback_operation_id)',
@@ -81,6 +93,8 @@ export class DeploymentRepository implements OnModuleInit {
   async create(
     connection: PoolConnection,
     input: {
+      kind: 'DEPLOY' | 'HISTORICAL_REDEPLOY';
+      sourceDeploymentId: string | null;
       releaseId: string;
       previousReleaseId: string | null;
       deploymentTargetId: string;
@@ -98,13 +112,15 @@ export class DeploymentRepository implements OnModuleInit {
     await connection.execute(
       `INSERT INTO deployments
        (
-         id, release_id, previous_release_id, deployment_target_id, operation_id, status,
+         id, kind, source_deployment_id, release_id, previous_release_id, deployment_target_id, operation_id, status,
          no_op, before_spec, target_spec, health_json,
          expected_service_version, created_by
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
+        input.kind,
+        input.sourceDeploymentId,
         input.releaseId,
         input.previousReleaseId,
         input.deploymentTargetId,
@@ -134,6 +150,22 @@ export class DeploymentRepository implements OnModuleInit {
       [targetId],
     );
     return rows[0]?.release_id ?? null;
+  }
+
+  async findLatestSuccessfulForRelease(
+    targetId: string,
+    releaseId: string,
+  ): Promise<DeploymentRecord | null> {
+    const [rows] = await this.db.pool.query<DeploymentRow[]>(
+      `SELECT * FROM deployments
+       WHERE deployment_target_id = ?
+         AND release_id = ?
+         AND status IN ('SUCCESS', 'ROLLED_BACK')
+       ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC
+       LIMIT 1`,
+      [targetId, releaseId],
+    );
+    return rows[0] ? mapDeployment(rows[0]) : null;
   }
 
   async listForTarget(targetId: string): Promise<DeploymentRecord[]> {
@@ -374,6 +406,8 @@ export class DeploymentRepository implements OnModuleInit {
 function mapDeployment(row: DeploymentRow): DeploymentRecord {
   return {
     id: row.id,
+    kind: row.kind,
+    sourceDeploymentId: row.source_deployment_id,
     releaseId: row.release_id,
     previousReleaseId: row.previous_release_id,
     deploymentTargetId: row.deployment_target_id,
