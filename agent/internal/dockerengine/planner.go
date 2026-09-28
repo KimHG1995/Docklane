@@ -3,6 +3,7 @@ package dockerengine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/KimHG1995/Docklane/agent/internal/model"
 	"github.com/moby/moby/client"
@@ -86,5 +87,56 @@ func (r *Reader) PlanRestartService(
 		BeforeSpecHash:    beforeHash,
 		TargetSpecHash:    targetHash,
 		TargetForceUpdate: service.Spec.TaskTemplate.ForceUpdate,
+	}, nil
+}
+
+
+func (r *Reader) PlanUpdateServiceImage(
+	ctx context.Context,
+	serviceID string,
+	expectedVersion uint64,
+	image string,
+) (model.ServiceMutationPlan, error) {
+	if !strings.Contains(image, "@sha256:") {
+		return model.ServiceMutationPlan{}, &ValidationError{
+			Message: "deployment image must be pinned by sha256 digest",
+		}
+	}
+
+	result, err := r.client.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
+	if err != nil {
+		return model.ServiceMutationPlan{}, fmt.Errorf("inspect service %q: %w", serviceID, err)
+	}
+	service := result.Service
+	if service.Version.Index != expectedVersion {
+		return model.ServiceMutationPlan{}, &ConflictError{Message: fmt.Sprintf(
+			"service version conflict: expected %d, got %d",
+			expectedVersion,
+			service.Version.Index,
+		)}
+	}
+	if service.Spec.Mode.Replicated == nil || service.Spec.TaskTemplate.ContainerSpec == nil {
+		return model.ServiceMutationPlan{}, &ValidationError{
+			Message: fmt.Sprintf("service %q is not a supported replicated container service", serviceID),
+		}
+	}
+
+	beforeHash, err := serviceSpecHash(service.Spec)
+	if err != nil {
+		return model.ServiceMutationPlan{}, err
+	}
+	service.Spec.TaskTemplate.ContainerSpec.Image = image
+	targetHash, err := serviceSpecHash(service.Spec)
+	if err != nil {
+		return model.ServiceMutationPlan{}, err
+	}
+
+	return model.ServiceMutationPlan{
+		ServiceID:         service.ID,
+		Version:           service.Version.Index,
+		BeforeSpecHash:    beforeHash,
+		TargetSpecHash:    targetHash,
+		TargetForceUpdate: service.Spec.TaskTemplate.ForceUpdate,
+		TargetImage:       image,
 	}, nil
 }
