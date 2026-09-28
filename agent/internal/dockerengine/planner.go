@@ -128,6 +128,10 @@ func (r *Reader) PlanUpdateServiceImage(
 	if err != nil {
 		return model.ServiceMutationPlan{}, err
 	}
+	targetTaskSpecHash, err := taskSpecHash(service.Spec.TaskTemplate)
+	if err != nil {
+		return model.ServiceMutationPlan{}, err
+	}
 
 	return model.ServiceMutationPlan{
 		ServiceID:         service.ID,
@@ -135,6 +139,7 @@ func (r *Reader) PlanUpdateServiceImage(
 		BeforeSpecHash:    beforeHash,
 		TargetSpecHash:    targetHash,
 		TargetForceUpdate: service.Spec.TaskTemplate.ForceUpdate,
-		TargetImage:       image,
+		TargetImage:        image,
+		TargetTaskSpecHash: targetTaskSpecHash,
 	}, nil
 }
