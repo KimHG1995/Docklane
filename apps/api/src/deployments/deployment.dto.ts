@@ -27,3 +27,7 @@ export const RollbackRequestSchema = z.object({
 });
 
 export type RollbackRequest = z.infer<typeof RollbackRequestSchema>;
+
+
+export const HistoricalRedeployRequestSchema = DeployRequestSchema;
+export type HistoricalRedeployRequest = DeployRequest;
