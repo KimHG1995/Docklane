@@ -143,3 +143,68 @@ func (r *Reader) PlanUpdateServiceImage(
 		TargetTaskSpecHash: targetTaskSpecHash,
 	}, nil
 }
+
+
+func (r *Reader) PlanRollbackService(
+	ctx context.Context,
+	serviceID string,
+	expectedVersion uint64,
+) (model.ServiceMutationPlan, error) {
+	result, err := r.client.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
+	if err != nil {
+		return model.ServiceMutationPlan{}, fmt.Errorf("inspect service %q: %w", serviceID, err)
+	}
+	service := result.Service
+	if service.Version.Index != expectedVersion {
+		return model.ServiceMutationPlan{}, &ConflictError{Message: fmt.Sprintf(
+			"service version conflict: expected %d, got %d",
+			expectedVersion,
+			service.Version.Index,
+		)}
+	}
+	if service.PreviousSpec == nil {
+		return model.ServiceMutationPlan{}, &ValidationError{
+			Message: fmt.Sprintf("service %q does not have a previous spec", serviceID),
+		}
+	}
+	if service.PreviousSpec.Mode.Replicated == nil ||
+		service.PreviousSpec.TaskTemplate.ContainerSpec == nil {
+		return model.ServiceMutationPlan{}, &ValidationError{
+			Message: fmt.Sprintf(
+				"service %q previous spec is not a supported replicated container service",
+				serviceID,
+			),
+		}
+	}
+
+	beforeHash, err := serviceSpecHash(service.Spec)
+	if err != nil {
+		return model.ServiceMutationPlan{}, err
+	}
+	targetHash, err := serviceSpecHash(*service.PreviousSpec)
+	if err != nil {
+		return model.ServiceMutationPlan{}, err
+	}
+	targetTaskSpecHash, err := taskSpecHash(service.PreviousSpec.TaskTemplate)
+	if err != nil {
+		return model.ServiceMutationPlan{}, err
+	}
+
+	targetImage := service.PreviousSpec.TaskTemplate.ContainerSpec.Image
+	var targetReplicas *uint64
+	if service.PreviousSpec.Mode.Replicated.Replicas != nil {
+		replicas := *service.PreviousSpec.Mode.Replicated.Replicas
+		targetReplicas = &replicas
+	}
+
+	return model.ServiceMutationPlan{
+		ServiceID:          service.ID,
+		Version:            service.Version.Index,
+		BeforeSpecHash:     beforeHash,
+		TargetSpecHash:     targetHash,
+		TargetForceUpdate:  service.PreviousSpec.TaskTemplate.ForceUpdate,
+		TargetReplicas:     targetReplicas,
+		TargetImage:        targetImage,
+		TargetTaskSpecHash: targetTaskSpecHash,
+	}, nil
+}
