@@ -214,6 +214,19 @@ export class OperationRepository implements OnModuleInit {
     );
   }
 
+  async backfillTargetRuntimeSpecHash(
+    connection: PoolConnection,
+    id: string,
+    targetRuntimeSpecHash: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE operations
+       SET target_runtime_spec_hash = ?
+       WHERE id = ? AND target_runtime_spec_hash IS NULL`,
+      [targetRuntimeSpecHash, id],
+    );
+  }
+
   async markRunning(connection: PoolConnection, id: string): Promise<void> {
     await connection.execute(
       "UPDATE operations SET status = 'RUNNING' WHERE id = ?",
