@@ -66,16 +66,16 @@ type TaskSummary struct {
 	ServiceID       string    `json:"serviceId"`
 	SpecHash        string    `json:"specHash"`
 	RuntimeSpecHash string    `json:"runtimeSpecHash"`
-	Slot         int       `json:"slot"`
-	NodeID       string    `json:"nodeId,omitempty"`
-	DesiredState string    `json:"desiredState"`
-	State        string    `json:"state"`
-	ForceUpdate  uint64    `json:"forceUpdate"`
-	Message      string    `json:"message,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	ContainerID  string    `json:"containerId,omitempty"`
-	Image        string    `json:"image,omitempty"`
-	Timestamp    time.Time `json:"timestamp"`
+	Slot            int       `json:"slot"`
+	NodeID          string    `json:"nodeId,omitempty"`
+	DesiredState    string    `json:"desiredState"`
+	State           string    `json:"state"`
+	ForceUpdate     uint64    `json:"forceUpdate"`
+	Message         string    `json:"message,omitempty"`
+	Error           string    `json:"error,omitempty"`
+	ContainerID     string    `json:"containerId,omitempty"`
+	Image           string    `json:"image,omitempty"`
+	Timestamp       time.Time `json:"timestamp"`
 }
 
 type ServiceDetailResponse struct {
@@ -92,15 +92,15 @@ type ServiceMutationRequest struct {
 }
 
 type ServiceMutationPlan struct {
-	ServiceID          string  `json:"serviceId"`
-	Version            uint64  `json:"version"`
-	BeforeSpecHash     string  `json:"beforeSpecHash"`
-	TargetSpecHash     string  `json:"targetSpecHash"`
-	TargetForceUpdate  uint64  `json:"targetForceUpdate"`
-	TargetReplicas     *uint64 `json:"targetReplicas,omitempty"`
-	TargetImage        string  `json:"targetImage,omitempty"`
-	TargetTaskSpecHash    string `json:"targetTaskSpecHash,omitempty"`
-	TargetRuntimeSpecHash string `json:"targetRuntimeSpecHash,omitempty"`
+	ServiceID             string  `json:"serviceId"`
+	Version               uint64  `json:"version"`
+	BeforeSpecHash        string  `json:"beforeSpecHash"`
+	TargetSpecHash        string  `json:"targetSpecHash"`
+	TargetForceUpdate     uint64  `json:"targetForceUpdate"`
+	TargetReplicas        *uint64 `json:"targetReplicas,omitempty"`
+	TargetImage           string  `json:"targetImage,omitempty"`
+	TargetTaskSpecHash    string  `json:"targetTaskSpecHash,omitempty"`
+	TargetRuntimeSpecHash string  `json:"targetRuntimeSpecHash,omitempty"`
 }
 
 type ServiceMutationResponse struct {
