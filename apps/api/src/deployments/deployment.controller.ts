@@ -22,6 +22,15 @@ export class DeploymentController {
     private readonly deployments: DeploymentService,
   ) {}
 
+  @Get('targets/:targetId/deployments')
+  @RequireRole('VIEWER')
+  history(
+    @Param('clusterId') clusterId: string,
+    @Param('targetId') targetId: string,
+  ): Promise<DeploymentRecord[]> {
+    return this.deployments.history(clusterId, targetId);
+  }
+
   @Post('targets/:targetId/deploy')
   @HttpCode(200)
   @RequireRole('OPERATOR')
