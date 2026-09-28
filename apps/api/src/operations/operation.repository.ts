@@ -229,6 +229,20 @@ export class OperationRepository implements OnModuleInit {
     );
   }
 
+  async markVerificationPending(
+    connection: PoolConnection,
+    id: string,
+    code: string,
+    message: string,
+  ): Promise<void> {
+    await connection.execute(
+      `UPDATE operations
+       SET status = 'VERIFYING', error_code = ?, error_message = ?
+       WHERE id = ?`,
+      [code, message, id],
+    );
+  }
+
   async markSuccess(
     connection: PoolConnection,
     id: string,
