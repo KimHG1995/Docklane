@@ -229,6 +229,15 @@ export class DeploymentService
       throw mapAgentError(error, 'Rollback target lookup failed');
     }
 
+    if (
+      resolved.service.id !== target.dockerServiceId ||
+      resolved.service.mode !== 'replicated'
+    ) {
+      throw new ConflictException(
+        'Rollback target no longer resolves to the expected replicated service',
+      );
+    }
+
     return this.lock.withServiceLock(
       clusterId,
       target.dockerServiceId,
