@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   type OnApplicationBootstrap,
+  type OnApplicationShutdown,
 } from '@nestjs/common';
 import type { PoolConnection } from 'mysql2/promise';
 import {
@@ -34,10 +35,15 @@ import { HealthVerifier } from './health-verifier.js';
 const VERIFY_TIMEOUT_MS = 30_000;
 const VERIFY_INTERVAL_MS = 500;
 const RECONCILE_OBSERVATION_MS = 10_000;
+const RECONCILE_INTERVAL_MS = 5_000;
 
 @Injectable()
-export class DeploymentService implements OnApplicationBootstrap {
+export class DeploymentService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
   private readonly logger = new Logger(DeploymentService.name);
+  private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
+  private reconciliationRunning = false;
   constructor(
     @Inject(ReleaseRepository)
     private readonly releases: ReleaseRepository,
@@ -54,53 +60,75 @@ export class DeploymentService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    const pending = (await this.operations.listNonTerminal()).filter(
-      (operation) =>
-        operation.type === 'DEPLOY' &&
-        operation.status !== 'NEEDS_ATTENTION',
-    );
+    await this.reconcilePendingDeployments();
+    this.reconciliationTimer = setInterval(() => {
+      void this.reconcilePendingDeployments();
+    }, RECONCILE_INTERVAL_MS);
+    this.reconciliationTimer.unref?.();
+  }
 
-    for (const operation of pending) {
-      try {
-        await this.lock.withServiceLock(
-          operation.clusterId,
-          operation.serviceId,
-          async (connection) => {
-            const current = await this.operations.findWithConnection(
-              connection,
-              operation.id,
-            );
-            if (
-              !current ||
-              current.type !== 'DEPLOY' ||
-              current.status === 'SUCCESS' ||
-              current.status === 'FAILED' ||
-              current.status === 'NEEDS_ATTENTION'
-            ) {
-              return;
-            }
+  onApplicationShutdown(): void {
+    if (this.reconciliationTimer) {
+      clearInterval(this.reconciliationTimer);
+      this.reconciliationTimer = null;
+    }
+  }
 
-            const deployment =
-              await this.deployments.findByOperationWithConnection(
+  private async reconcilePendingDeployments(): Promise<void> {
+    if (this.reconciliationRunning) return;
+    this.reconciliationRunning = true;
+
+    try {
+      const pending = (await this.operations.listNonTerminal()).filter(
+        (operation) =>
+          operation.type === 'DEPLOY' &&
+          operation.status !== 'NEEDS_ATTENTION',
+      );
+
+      for (const operation of pending) {
+        try {
+          await this.lock.withServiceLock(
+            operation.clusterId,
+            operation.serviceId,
+            async (connection) => {
+              const current = await this.operations.findWithConnection(
                 connection,
-                current.id,
+                operation.id,
               );
-            if (!deployment) {
-              this.logger.error(
-                `Deployment operation ${current.id} has no deployment record`,
-              );
-              return;
-            }
+              if (
+                !current ||
+                current.type !== 'DEPLOY' ||
+                current.status === 'SUCCESS' ||
+                current.status === 'FAILED' ||
+                current.status === 'NEEDS_ATTENTION'
+              ) {
+                return;
+              }
 
-            await this.reconcileLocked(connection, current, deployment);
-          },
-        );
-      } catch (error) {
-        this.logger.error(
-          `Failed to reconcile deployment operation ${operation.id}`,
-          error instanceof Error ? error.stack : String(error),
-        );
+              const deployment =
+                await this.deployments.findByOperationWithConnection(
+                  connection,
+                  current.id,
+                );
+              if (!deployment) {
+                this.logger.error(
+                  `Deployment operation ${current.id} has no deployment record`,
+                );
+                return;
+              }
+
+              await this.reconcileLocked(connection, current, deployment);
+            },
+          );
+        } catch (error) {
+          this.logger.error(
+            `Failed to reconcile deployment operation ${operation.id}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
       }
+    } finally {
+      this.reconciliationRunning = false;
     }
   }
 
