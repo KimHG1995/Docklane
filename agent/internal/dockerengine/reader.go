@@ -251,6 +251,7 @@ func toNodeSummary(node swarm.Node) model.NodeSummary {
 func toServiceSummary(service swarm.Service) model.ServiceSummary {
 	specHash, _ := serviceSpecHash(service.Spec)
 	taskSpecHash, _ := taskSpecHash(service.Spec.TaskTemplate)
+	runtimeSpecHash, _ := taskRuntimeSpecHash(service.Spec.TaskTemplate)
 	image := ""
 	if service.Spec.TaskTemplate.ContainerSpec != nil {
 		image = service.Spec.TaskTemplate.ContainerSpec.Image
@@ -288,6 +289,7 @@ func toServiceSummary(service swarm.Service) model.ServiceSummary {
 		SpecHash:        specHash,
 		ForceUpdate:     service.Spec.TaskTemplate.ForceUpdate,
 		TaskSpecHash:    taskSpecHash,
+		RuntimeSpecHash: runtimeSpecHash,
 		Image:           image,
 		Mode:            mode,
 		DesiredReplicas: desired,
@@ -301,6 +303,7 @@ func toServiceSummary(service swarm.Service) model.ServiceSummary {
 
 func toTaskSummary(task swarm.Task) model.TaskSummary {
 	specHash, _ := taskSpecHash(task.Spec)
+	runtimeSpecHash, _ := taskRuntimeSpecHash(task.Spec)
 	containerID := ""
 	if task.Status.ContainerStatus != nil {
 		containerID = task.Status.ContainerStatus.ContainerID
@@ -314,7 +317,8 @@ func toTaskSummary(task swarm.Task) model.TaskSummary {
 	return model.TaskSummary{
 		ID:           task.ID,
 		ServiceID:    task.ServiceID,
-		SpecHash:     specHash,
+		SpecHash:        specHash,
+		RuntimeSpecHash: runtimeSpecHash,
 		Slot:         task.Slot,
 		NodeID:       task.NodeID,
 		DesiredState: string(task.DesiredState),
