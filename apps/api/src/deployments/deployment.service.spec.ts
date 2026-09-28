@@ -490,6 +490,15 @@ test('deployment bootstrap reconciles target state without replaying mutation', 
 
   const agent = {
     inspectService: async () => snapshot(),
+    checkServicePlacement: async () => ({
+      serviceId: 'service-1',
+      status: 'CONVERGED',
+      desiredReplicas: 2,
+      runningReplicas: 2,
+      reasons: [],
+      unsupportedConstraints: [],
+      violations: [],
+    }),
     updateServiceImage: async () => {
       mutationCalls += 1;
       throw new Error('must not replay deployment mutation');
@@ -764,6 +773,15 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
 
   const agent = {
     inspectService: async () => current,
+    checkServicePlacement: async () => ({
+      serviceId: 'service-1',
+      status: 'CONVERGED',
+      desiredReplicas: 2,
+      runningReplicas: 2,
+      reasons: [],
+      unsupportedConstraints: [],
+      violations: [],
+    }),
     planRollbackService: async () => {
       planRollbackCalls += 1;
       throw new Error('must not plan a second rollback');
@@ -914,6 +932,7 @@ test('historical redeploy requires a successful deployment of the release on the
     }),
   };
   const deployments = {
+    findByOperation: async () => null,
     findLatestSuccessfulForRelease: async () => null,
   };
 
@@ -1206,6 +1225,7 @@ test('historical redeploy retry reuses stored source provenance', async () => {
     createdAt: new Date(0).toISOString(),
   };
   let latestSourceLookups = 0;
+  let agentInspectCalls = 0;
 
   const releases = {
     findDeploymentTarget: async () => ({
@@ -1251,10 +1271,14 @@ test('historical redeploy retry reuses stored source provenance', async () => {
     status: 'SUCCESS',
   };
   const operations = {
+    find: async () => operation,
     findWithConnection: async () => operation,
   };
   const agent = {
-    inspectService: async () => snapshot(),
+    inspectService: async () => {
+      agentInspectCalls += 1;
+      return snapshot();
+    },
   };
   const connection = {};
   const lock = {
@@ -1294,6 +1318,7 @@ test('historical redeploy retry reuses stored source provenance', async () => {
   assert.equal(result.id, stored.id);
   assert.equal(result.sourceDeploymentId, 'source-original');
   assert.equal(latestSourceLookups, 0);
+  assert.equal(agentInspectCalls, 0);
 });
 
 
