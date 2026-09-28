@@ -29,10 +29,15 @@ import type { OperationRecord } from '../operations/operation.types.js';
 import { ReleaseRepository } from '../releases/release.repository.js';
 import type {
   DeployRequest,
+  HistoricalRedeployRequest,
   RollbackRequest,
 } from './deployment.dto.js';
 import { DeploymentRepository } from './deployment.repository.js';
-import type { DeploymentRecord } from './deployment.types.js';
+import type {
+  DeploymentKind,
+  DeploymentRecord,
+  DeploymentStatusView,
+} from './deployment.types.js';
 import { HealthVerifier } from './health-verifier.js';
 
 const VERIFY_TIMEOUT_MS = 30_000;
@@ -172,6 +177,48 @@ export class DeploymentService
       throw new NotFoundException('Deployment not found');
     }
     return deployment;
+  }
+
+  async status(
+    clusterId: string,
+    id: string,
+  ): Promise<DeploymentStatusView> {
+    const deployment = await this.deployment(clusterId, id);
+    const operation = await this.operations.find(deployment.operationId);
+    const rollbackOperation = deployment.rollbackOperationId
+      ? await this.operations.find(deployment.rollbackOperationId)
+      : null;
+    return {
+      deployment,
+      operation,
+      rollbackOperation,
+    };
+  }
+
+  async historicalRedeploy(
+    clusterId: string,
+    targetId: string,
+    input: HistoricalRedeployRequest,
+    principal: Principal,
+  ): Promise<DeploymentRecord> {
+    const source = await this.deployments.findLatestSuccessfulForRelease(
+      targetId,
+      input.releaseId,
+    );
+    if (!source) {
+      throw new ConflictException(
+        'Historical redeploy requires a previously successful deployment of the release on this target',
+      );
+    }
+
+    return this.deployRelease(
+      clusterId,
+      targetId,
+      input,
+      principal,
+      'HISTORICAL_REDEPLOY',
+      source.id,
+    );
   }
 
   async rollback(
@@ -443,6 +490,24 @@ export class DeploymentService
     input: DeployRequest,
     principal: Principal,
   ): Promise<DeploymentRecord> {
+    return this.deployRelease(
+      clusterId,
+      targetId,
+      input,
+      principal,
+      'DEPLOY',
+      null,
+    );
+  }
+
+  private async deployRelease(
+    clusterId: string,
+    targetId: string,
+    input: DeployRequest,
+    principal: Principal,
+    kind: DeploymentKind,
+    sourceDeploymentId: string | null,
+  ): Promise<DeploymentRecord> {
     const target = await this.releases.findDeploymentTarget(targetId);
     if (!target || target.clusterId !== clusterId) {
       throw new NotFoundException('Deployment target not found');
@@ -494,6 +559,8 @@ export class DeploymentService
             deployment.releaseId !== input.releaseId ||
             deployment.deploymentTargetId !== targetId ||
             deployment.createdBy !== principal.actorId ||
+            deployment.kind !== kind ||
+            deployment.sourceDeploymentId !== sourceDeploymentId ||
             !sameHealthConfig(deployment.health, input.health)
           ) {
             throw new ConflictException(
@@ -583,6 +650,8 @@ export class DeploymentService
           before,
           targetImage,
           noOp,
+          kind,
+          sourceDeploymentId,
         );
 
         if (noOp) {
@@ -676,6 +745,7 @@ export class DeploymentService
         );
       },
     );
+
   }
 
   private async persistRollbackIntent(
@@ -764,6 +834,8 @@ export class DeploymentService
     before: ServiceDetailResponse,
     targetImage: string,
     noOp: boolean,
+    kind: DeploymentKind = 'DEPLOY',
+    sourceDeploymentId: string | null = null,
   ): Promise<DeploymentRecord> {
     await connection.beginTransaction();
     try {
@@ -790,6 +862,8 @@ export class DeploymentService
       await this.operations.markRunning(connection, input.operationId);
 
       const deployment = await this.deployments.create(connection, {
+        kind,
+        sourceDeploymentId,
         releaseId,
         previousReleaseId,
         deploymentTargetId: targetId,
@@ -815,7 +889,12 @@ export class DeploymentService
         serviceId: plan.serviceId,
         resourceType: 'service',
         resourceId: plan.serviceId,
-        action: noOp ? 'DEPLOY_NO_OP_STARTED' : 'DEPLOY_STARTED',
+        action:
+          kind === 'HISTORICAL_REDEPLOY'
+            ? (noOp
+                ? 'HISTORICAL_REDEPLOY_NO_OP_STARTED'
+                : 'HISTORICAL_REDEPLOY_STARTED')
+            : (noOp ? 'DEPLOY_NO_OP_STARTED' : 'DEPLOY_STARTED'),
         beforeJson: before.service,
         afterJson: deployment.targetSpec,
       });
