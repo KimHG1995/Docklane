@@ -274,6 +274,36 @@ export class DeploymentService
     return deployment;
   }
 
+  private async findTerminalRollbackRetry(
+    clusterId: string,
+    deployment: DeploymentRecord,
+    input: RollbackRequest,
+    principal: Principal,
+    serviceId: string,
+  ): Promise<DeploymentRecord | null> {
+    const operation = await this.operations.find(input.operationId);
+    if (
+      !operation ||
+      (operation.status !== 'SUCCESS' && operation.status !== 'FAILED')
+    ) {
+      return null;
+    }
+
+    if (
+      operation.type !== 'ROLLBACK' ||
+      operation.clusterId !== clusterId ||
+      operation.actorId !== principal.actorId ||
+      operation.serviceId !== serviceId ||
+      deployment.rollbackOperationId !== input.operationId
+    ) {
+      throw new ConflictException(
+        'operationId was already used for a different rollback',
+      );
+    }
+
+    return deployment;
+  }
+
   async rollback(
     clusterId: string,
     deploymentId: string,
@@ -313,6 +343,15 @@ export class DeploymentService
         'Previous release is not valid for the deployment target',
       );
     }
+
+    const terminalRollback = await this.findTerminalRollbackRetry(
+      clusterId,
+      deployment,
+      input,
+      principal,
+      target.dockerServiceId,
+    );
+    if (terminalRollback) return terminalRollback;
 
     let resolved: ServiceDetailResponse;
     try {
@@ -1275,24 +1314,100 @@ export class DeploymentService
     return this.deployments.requireWithConnection(connection, deploymentId);
   }
 
+  private async hydrateLegacyRuntimeFingerprint(
+    connection: PoolConnection,
+    operation: OperationRecord,
+  ): Promise<OperationRecord | null> {
+    if (operation.targetRuntimeSpecHash) return operation;
+    if (
+      !operation.targetSpecHash ||
+      !operation.targetTaskSpecHash ||
+      !operation.targetImage
+    ) {
+      return null;
+    }
+
+    let current: ServiceDetailResponse;
+    try {
+      current = await this.agentClient.inspectService(operation.serviceId);
+    } catch {
+      return null;
+    }
+
+    let runtimeSpecHash: string | undefined;
+
+    if (
+      current.service.specHash === operation.targetSpecHash &&
+      current.service.runtimeSpecHash
+    ) {
+      runtimeSpecHash = current.service.runtimeSpecHash;
+    } else if (operation.type === 'DEPLOY') {
+      try {
+        const plan = await this.agentClient.planUpdateServiceImage(
+          operation.serviceId,
+          current.service.version,
+          operation.targetImage,
+        );
+        if (
+          plan.targetSpecHash === operation.targetSpecHash &&
+          plan.targetTaskSpecHash === operation.targetTaskSpecHash
+        ) {
+          runtimeSpecHash = plan.targetRuntimeSpecHash;
+        }
+      } catch {
+        return null;
+      }
+    } else if (operation.type === 'ROLLBACK') {
+      try {
+        const plan = await this.agentClient.planRollbackService(
+          operation.serviceId,
+          current.service.version,
+        );
+        if (
+          plan.targetSpecHash === operation.targetSpecHash &&
+          plan.targetTaskSpecHash === operation.targetTaskSpecHash
+        ) {
+          runtimeSpecHash = plan.targetRuntimeSpecHash;
+        }
+      } catch {
+        return null;
+      }
+    }
+
+    if (!runtimeSpecHash) return null;
+
+    await this.operations.backfillTargetRuntimeSpecHash(
+      connection,
+      operation.id,
+      runtimeSpecHash,
+    );
+    return {
+      ...operation,
+      targetRuntimeSpecHash: runtimeSpecHash,
+    };
+  }
+
   private async reconcileLocked(
     connection: PoolConnection,
     operation: OperationRecord,
     deployment: DeploymentRecord,
     initialError?: string,
   ): Promise<DeploymentRecord> {
+    const compatibleOperation =
+      await this.hydrateLegacyRuntimeFingerprint(connection, operation);
     if (
-      operation.type !== 'DEPLOY' ||
-      !operation.beforeSpecHash ||
-      !operation.targetSpecHash ||
-      !operation.targetImage ||
-      !operation.targetTaskSpecHash ||
-      !operation.targetRuntimeSpecHash
+      !compatibleOperation ||
+      compatibleOperation.type !== 'DEPLOY' ||
+      !compatibleOperation.beforeSpecHash ||
+      !compatibleOperation.targetSpecHash ||
+      !compatibleOperation.targetImage ||
+      !compatibleOperation.targetTaskSpecHash ||
+      !compatibleOperation.targetRuntimeSpecHash
     ) {
       await this.attention(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'DEPLOYMENT_MISSING_TARGET',
         'Deployment intent is missing the persisted target needed for reconciliation',
       );
@@ -1302,12 +1417,12 @@ export class DeploymentService
       );
     }
 
-    const digest = digestFromImage(operation.targetImage);
+    const digest = digestFromImage(compatibleOperation.targetImage);
     if (!digest) {
       await this.attention(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'DEPLOYMENT_INVALID_TARGET_IMAGE',
         'Persisted deployment target image is not digest-pinned',
       );
@@ -1318,15 +1433,15 @@ export class DeploymentService
     }
 
     const plan: ServiceMutationPlan = {
-      serviceId: operation.serviceId,
-      version: operation.expectedVersion,
-      beforeSpecHash: operation.beforeSpecHash,
-      targetSpecHash: operation.targetSpecHash,
-      targetForceUpdate: operation.targetForceUpdate,
-      targetReplicas: operation.targetReplicas ?? undefined,
-      targetImage: operation.targetImage,
-      targetTaskSpecHash: operation.targetTaskSpecHash,
-      targetRuntimeSpecHash: operation.targetRuntimeSpecHash,
+      serviceId: compatibleOperation.serviceId,
+      version: compatibleOperation.expectedVersion,
+      beforeSpecHash: compatibleOperation.beforeSpecHash,
+      targetSpecHash: compatibleOperation.targetSpecHash,
+      targetForceUpdate: compatibleOperation.targetForceUpdate,
+      targetReplicas: compatibleOperation.targetReplicas ?? undefined,
+      targetImage: compatibleOperation.targetImage,
+      targetTaskSpecHash: compatibleOperation.targetTaskSpecHash,
+      targetRuntimeSpecHash: compatibleOperation.targetRuntimeSpecHash,
     };
 
     const deadline = Date.now() + RECONCILE_OBSERVATION_MS;
@@ -1337,7 +1452,7 @@ export class DeploymentService
     while (Date.now() < deadline) {
       let current: ServiceDetailResponse;
       try {
-        current = await this.agentClient.inspectService(operation.serviceId);
+        current = await this.agentClient.inspectService(compatibleOperation.serviceId);
         observedService = true;
         lastError = null;
       } catch (error) {
@@ -1361,7 +1476,7 @@ export class DeploymentService
         await this.attention(
           connection,
           deployment.id,
-          operation.id,
+          compatibleOperation.id,
           'SWARM_ROLLBACK_PAUSED',
           'Swarm automatic rollback is paused and requires operator attention',
         );
@@ -1375,7 +1490,7 @@ export class DeploymentService
         await this.fail(
           connection,
           deployment.id,
-          operation.id,
+          compatibleOperation.id,
           'CONVERGENCE_FAILED',
           `Swarm update entered ${current.service.updateState}`,
         );
@@ -1387,13 +1502,13 @@ export class DeploymentService
 
       if (snapshot === 'TARGET_OBSERVED') {
         if (
-          operation.status !== 'VERIFYING' ||
+          compatibleOperation.status !== 'VERIFYING' ||
           deployment.status !== 'VERIFYING'
         ) {
           await this.markVerifying(
             connection,
             deployment.id,
-            operation.id,
+            compatibleOperation.id,
             current.service.version,
           );
         }
@@ -1401,7 +1516,7 @@ export class DeploymentService
         return this.verifyAndComplete(
           connection,
           deployment.id,
-          operation.id,
+          compatibleOperation.id,
           plan,
           digest,
           deployment.noOp,
@@ -1417,7 +1532,7 @@ export class DeploymentService
       await this.attention(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'EXTERNAL_SERVICE_CONFLICT',
         'Service changed outside the recorded deployment target',
       );
@@ -1431,7 +1546,7 @@ export class DeploymentService
       await this.markVerificationPending(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'SWARM_ROLLBACK_IN_PROGRESS',
         'Swarm rollback is still in progress; mutation protection remains active',
       );
@@ -1439,7 +1554,7 @@ export class DeploymentService
       await this.attention(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'DEPLOYMENT_RECONCILIATION_UNAVAILABLE',
         `Unable to inspect deployment outcome: ${lastError}`,
       );
@@ -1447,7 +1562,7 @@ export class DeploymentService
       await this.attention(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'DEPLOYMENT_MUTATION_NOT_OBSERVED',
         initialError
           ? `Agent response was lost and the deployment target was not observed: ${initialError}`
@@ -1709,30 +1824,33 @@ export class DeploymentService
     deployment: DeploymentRecord,
     initialError?: string,
   ): Promise<DeploymentRecord> {
+    const compatibleOperation =
+      await this.hydrateLegacyRuntimeFingerprint(connection, operation);
     if (
-      operation.type !== 'ROLLBACK' ||
-      !operation.beforeSpecHash ||
-      !operation.targetSpecHash ||
-      !operation.targetImage ||
-      !operation.targetTaskSpecHash ||
-      !operation.targetRuntimeSpecHash
+      !compatibleOperation ||
+      compatibleOperation.type !== 'ROLLBACK' ||
+      !compatibleOperation.beforeSpecHash ||
+      !compatibleOperation.targetSpecHash ||
+      !compatibleOperation.targetImage ||
+      !compatibleOperation.targetTaskSpecHash ||
+      !compatibleOperation.targetRuntimeSpecHash
     ) {
       await this.rollbackAttention(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'ROLLBACK_MISSING_TARGET',
         'Rollback intent is missing the persisted target needed for reconciliation',
       );
       return this.deployments.requireWithConnection(connection, deployment.id);
     }
 
-    const digest = digestFromImage(operation.targetImage);
+    const digest = digestFromImage(compatibleOperation.targetImage);
     if (!digest) {
       await this.rollbackAttention(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'ROLLBACK_INVALID_TARGET_IMAGE',
         'Persisted rollback image is not digest-pinned',
       );
@@ -1740,15 +1858,15 @@ export class DeploymentService
     }
 
     const plan: ServiceMutationPlan = {
-      serviceId: operation.serviceId,
-      version: operation.expectedVersion,
-      beforeSpecHash: operation.beforeSpecHash,
-      targetSpecHash: operation.targetSpecHash,
-      targetForceUpdate: operation.targetForceUpdate,
-      targetReplicas: operation.targetReplicas ?? undefined,
-      targetImage: operation.targetImage,
-      targetTaskSpecHash: operation.targetTaskSpecHash,
-      targetRuntimeSpecHash: operation.targetRuntimeSpecHash,
+      serviceId: compatibleOperation.serviceId,
+      version: compatibleOperation.expectedVersion,
+      beforeSpecHash: compatibleOperation.beforeSpecHash,
+      targetSpecHash: compatibleOperation.targetSpecHash,
+      targetForceUpdate: compatibleOperation.targetForceUpdate,
+      targetReplicas: compatibleOperation.targetReplicas ?? undefined,
+      targetImage: compatibleOperation.targetImage,
+      targetTaskSpecHash: compatibleOperation.targetTaskSpecHash,
+      targetRuntimeSpecHash: compatibleOperation.targetRuntimeSpecHash,
     };
 
     const deadline = Date.now() + RECONCILE_OBSERVATION_MS;
@@ -1757,7 +1875,7 @@ export class DeploymentService
     while (Date.now() < deadline) {
       let current: ServiceDetailResponse;
       try {
-        current = await this.agentClient.inspectService(operation.serviceId);
+        current = await this.agentClient.inspectService(compatibleOperation.serviceId);
         lastError = null;
       } catch (error) {
         lastError = errorMessage(error);
@@ -1772,20 +1890,20 @@ export class DeploymentService
       );
       if (decision === 'SUCCESS') {
         if (
-          operation.status !== 'VERIFYING' ||
+          compatibleOperation.status !== 'VERIFYING' ||
           deployment.status !== 'ROLLBACK_VERIFYING'
         ) {
           await this.markRollbackVerifying(
             connection,
             deployment.id,
-            operation.id,
+            compatibleOperation.id,
             current.service.version,
           );
         }
         return this.verifyRollbackAndComplete(
           connection,
           deployment.id,
-          operation.id,
+          compatibleOperation.id,
           plan,
           digest,
           deployment.health,
@@ -1795,7 +1913,7 @@ export class DeploymentService
         await this.rollbackFailed(
           connection,
           deployment.id,
-          operation.id,
+          compatibleOperation.id,
           'ROLLBACK_FAILED',
           `Swarm rollback entered ${current.service.updateState}`,
         );
@@ -1805,7 +1923,7 @@ export class DeploymentService
         await this.rollbackAttention(
           connection,
           deployment.id,
-          operation.id,
+          compatibleOperation.id,
           'ROLLBACK_EXTERNAL_CONFLICT',
           'Service changed outside the recorded rollback target',
         );
@@ -1819,7 +1937,7 @@ export class DeploymentService
       await this.rollbackAttention(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'ROLLBACK_RECONCILIATION_UNAVAILABLE',
         `Unable to inspect rollback outcome: ${lastError}`,
       );
@@ -1827,7 +1945,7 @@ export class DeploymentService
       await this.markRollbackVerificationPending(
         connection,
         deployment.id,
-        operation.id,
+        compatibleOperation.id,
         'ROLLBACK_STILL_IN_PROGRESS',
         initialError
           ? `Rollback response was lost and convergence is still in progress: ${initialError}`
