@@ -221,15 +221,31 @@ export class DeploymentService
     const existingDeployment =
       await this.deployments.findByOperation(input.operationId);
     if (existingDeployment) {
+      const existingOperation = await this.operations.find(
+        input.operationId,
+      );
       if (
         existingDeployment.kind !== 'HISTORICAL_REDEPLOY' ||
         existingDeployment.releaseId !== input.releaseId ||
         existingDeployment.deploymentTargetId !== targetId ||
-        !existingDeployment.sourceDeploymentId
+        existingDeployment.createdBy !== principal.actorId ||
+        !existingDeployment.sourceDeploymentId ||
+        !sameHealthConfig(existingDeployment.health, input.health) ||
+        !existingOperation ||
+        existingOperation.type !== 'DEPLOY' ||
+        existingOperation.actorId !== principal.actorId ||
+        existingOperation.clusterId !== clusterId
       ) {
         throw new ConflictException(
           'operationId was already used for a different deployment',
         );
+      }
+
+      if (
+        existingOperation.status === 'SUCCESS' ||
+        existingOperation.status === 'FAILED'
+      ) {
+        return existingDeployment;
       }
 
       return this.deployRelease(
