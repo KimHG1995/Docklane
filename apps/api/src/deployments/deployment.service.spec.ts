@@ -1796,3 +1796,99 @@ test('terminal rollback retry returns persisted result before Agent lookup', asy
   assert.equal(result.id, stored.id);
   assert.equal(agentCalls, 0);
 });
+
+
+test('legacy runtime hydration failure keeps deployment protected for retry', async () => {
+  const operation: OperationRecord = {
+    ...deploymentOperation,
+    id: 'legacy-unavailable',
+    status: 'VERIFYING',
+    targetRuntimeSpecHash: null,
+  };
+  const deployment: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
+    id: 'legacy-unavailable-deployment',
+    releaseId: 'release-1',
+    previousReleaseId: null,
+    deploymentTargetId: 'target-1',
+    operationId: operation.id,
+    rollbackOperationId: null,
+    status: 'VERIFYING',
+    reason: null,
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {},
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: null,
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+
+  let pendingCalls = 0;
+  let attentionCalls = 0;
+  const connection = {
+    beginTransaction: async () => undefined,
+    commit: async () => undefined,
+    rollback: async () => undefined,
+  };
+  const operations = {
+    backfillTargetRuntimeSpecHash: async () => undefined,
+    markVerificationPending: async () => {
+      pendingCalls += 1;
+    },
+    markNeedsAttention: async () => {
+      attentionCalls += 1;
+    },
+    findWithConnection: async () => operation,
+    audit: async () => undefined,
+  };
+  const deployments = {
+    markVerificationPending: async () => {
+      deployment.status = 'VERIFYING';
+    },
+    requireWithConnection: async () => deployment,
+  };
+  const agent = {
+    inspectService: async () => {
+      throw new Error('Agent unavailable');
+    },
+  };
+
+  const service = new DeploymentService(
+    {} as never,
+    deployments as never,
+    agent as never,
+    operations as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+  const reconciler = service as unknown as {
+    reconcileLocked(
+      connection: unknown,
+      operation: OperationRecord,
+      deployment: DeploymentRecord,
+    ): Promise<DeploymentRecord>;
+  };
+
+  const result = await reconciler.reconcileLocked(
+    connection,
+    operation,
+    deployment,
+  );
+
+  assert.equal(result.status, 'VERIFYING');
+  assert.equal(pendingCalls, 1);
+  assert.equal(attentionCalls, 0);
+});
