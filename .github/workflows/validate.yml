@@ -175,10 +175,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Verify Functional PoC shell syntax
+      - name: Verify Functional PoC syntax
         run: |
           bash -n tests/functional-poc/run.sh
           bash -n tests/functional-poc/cleanup.sh
+          python3 -m py_compile tests/functional-poc/app/server.py
 
   docs-only:
     needs: changes
