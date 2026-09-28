@@ -44,6 +44,7 @@ function snapshot(overrides?: Partial<ServiceDetailResponse['service']>): Servic
       {
         id: 'task-1',
         serviceId: 'service-1',
+        specHash: 'task-spec',
         slot: 1,
         desiredState: 'running',
         state: 'running',
@@ -53,6 +54,7 @@ function snapshot(overrides?: Partial<ServiceDetailResponse['service']>): Servic
       {
         id: 'task-2',
         serviceId: 'service-1',
+        specHash: 'task-spec',
         slot: 2,
         desiredState: 'running',
         state: 'running',
