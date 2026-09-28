@@ -109,7 +109,7 @@ Release
 - [ ] Agent response-loss reconciliation
 - [ ] idempotent operationId
 - [ ] external CLI conflict detection
-- [ ] historical image redeploy
+- [x] historical image redeploy
 
 Exit criteria:
 
