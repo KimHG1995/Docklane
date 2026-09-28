@@ -19,6 +19,7 @@ Docklane은 변경 파일의 영향 범위에 따라 필요한 검증과 배포�
 | `contracts/**` | yes | no | yes | affected runtime components |
 | root Node workspace/config | yes | yes | no | affected runtime components |
 | `.github/workflows/**` | yes | yes | yes | no automatic runtime deploy |
+| `tests/functional-poc/**` | no | no | no | none; shell syntax validation only |
 | `docs/**`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` | no | no | no | none |
 | unclassified path | yes | yes | yes | none until classified |
 
@@ -86,3 +87,13 @@ Recommended CD policy:
 - documentation-only change: never runtime deployment
 
 Validation and deployment workflows should remain separate files. CI answers whether the change is valid; CD answers whether an affected runtime component should be released.
+
+
+## Functional PoC
+
+Destructive Docker/Swarm integration tests are intentionally separate from normal validation.
+
+- normal PR/push validation: only syntax-checks `tests/functional-poc/*.sh`
+- `functional-poc.yml`: manual `workflow_dispatch` only
+- Functional PoC must run on a disposable Docker host
+- a docs-only or application-only change must never implicitly start the Functional PoC
