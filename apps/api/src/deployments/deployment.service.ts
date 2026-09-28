@@ -2175,25 +2175,37 @@ export function classifyDeploymentReconciliationSnapshot(
   current: ServiceDetailResponse,
 ): DeploymentReconciliationDecision {
   const updateState = current.service.updateState;
+  const specHash = current.service.specHash;
+  const isTarget = specHash === operation.targetSpecHash;
+  const isBefore = specHash === operation.beforeSpecHash;
+
   if (updateState === 'rollback_started') {
-    return 'ROLLBACK_IN_PROGRESS';
+    return isTarget || isBefore
+      ? 'ROLLBACK_IN_PROGRESS'
+      : 'EXTERNAL_CONFLICT';
   }
   if (updateState === 'rollback_paused') {
-    return 'ROLLBACK_PAUSED';
-  }
-  if (updateState === 'paused' || updateState === 'rollback_completed') {
-    return 'FAILED';
+    return isTarget || isBefore
+      ? 'ROLLBACK_PAUSED'
+      : 'EXTERNAL_CONFLICT';
   }
 
-  if (current.service.specHash === operation.targetSpecHash) {
+  if (isTarget) {
     return 'TARGET_OBSERVED';
+  }
+
+  if (updateState === 'rollback_completed') {
+    return isBefore ? 'FAILED' : 'EXTERNAL_CONFLICT';
+  }
+  if (updateState === 'paused') {
+    return isBefore ? 'FAILED' : 'EXTERNAL_CONFLICT';
   }
 
   if (
     current.service.version < operation.expectedVersion ||
     (
       current.service.version === operation.expectedVersion &&
-      current.service.specHash === operation.beforeSpecHash
+      isBefore
     )
   ) {
     return 'WAITING_FOR_MUTATION';
@@ -2216,19 +2228,31 @@ export function classifyDeploymentSnapshot(
   noOp: boolean,
 ): DeploymentDecision {
   const updateState = current.service.updateState;
-  if (updateState === 'rollback_started') return 'PENDING';
-  if (updateState === 'rollback_paused') return 'ROLLBACK_PAUSED';
-  if (updateState === 'paused' || updateState === 'rollback_completed') {
-    return 'FAILED';
+  const specHash = current.service.specHash;
+  const isTarget = specHash === plan.targetSpecHash;
+  const isBefore = specHash === plan.beforeSpecHash;
+
+  if (updateState === 'rollback_started') {
+    if (!isTarget && !isBefore) return 'EXTERNAL_CONFLICT';
+    return 'PENDING';
+  }
+  if (updateState === 'rollback_paused') {
+    if (!isTarget && !isBefore) return 'EXTERNAL_CONFLICT';
+    return 'ROLLBACK_PAUSED';
   }
 
-  if (current.service.specHash !== plan.targetSpecHash) {
+  if (!isTarget) {
+    if (updateState === 'rollback_completed' || updateState === 'paused') {
+      return isBefore ? 'FAILED' : 'EXTERNAL_CONFLICT';
+    }
     if (current.service.version > plan.version) return 'EXTERNAL_CONFLICT';
     return 'PENDING';
   }
 
   if (!imageContainsDigest(current.service.image, digest)) return 'PENDING';
 
+  if (updateState === 'paused') return 'FAILED';
+  if (!noOp && updateState === 'rollback_completed') return 'FAILED';
   if (!noOp && updateState !== 'completed') return 'PENDING';
   if (current.service.desiredReplicas !== current.service.runningReplicas) {
     return 'PENDING';
