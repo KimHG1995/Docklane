@@ -236,6 +236,18 @@ export class HttpAgentClient implements AgentClient {
     );
   }
 
+  planRollbackService(
+    serviceId: string,
+    expectedVersion: number,
+  ): Promise<ServiceImageMutationPlan> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/plan-rollback`,
+      ServiceImageMutationPlanSchema,
+      { expectedVersion },
+    );
+  }
+
   scaleService(
     serviceId: string,
     input: {
@@ -281,6 +293,22 @@ export class HttpAgentClient implements AgentClient {
     return this.request(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/image`,
+      ServiceMutationResponseSchema,
+      input,
+    );
+  }
+
+  rollbackService(
+    serviceId: string,
+    input: {
+      expectedVersion: number;
+      expectedSpecHash: string;
+      targetSpecHash: string;
+    },
+  ): Promise<ServiceMutationResponse> {
+    return this.request(
+      'POST',
+      `/v1/services/${encodeURIComponent(serviceId)}/rollback`,
       ServiceMutationResponseSchema,
       input,
     );
