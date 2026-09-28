@@ -40,6 +40,7 @@ function snapshot(
       {
         id: 'task-1',
         serviceId: 'service-1',
+        specHash: 'target-task-spec',
         slot: 1,
         nodeId: 'node-1',
         desiredState: 'running',
@@ -51,6 +52,7 @@ function snapshot(
       {
         id: 'task-2',
         serviceId: 'service-1',
+        specHash: 'target-task-spec',
         slot: 2,
         nodeId: 'node-2',
         desiredState: 'running',
@@ -70,6 +72,7 @@ const plan: ServiceMutationPlan = {
   targetSpecHash: 'target-spec',
   targetForceUpdate: 0,
   targetImage: image,
+  targetTaskSpecHash: 'target-task-spec',
 };
 
 test('deployment convergence succeeds only when service and tasks use target digest', () => {
@@ -103,10 +106,22 @@ test('no-op deployment does not require a new completed update state', () => {
   );
 });
 
-test('deployment fails when Swarm enters rollback state', () => {
+test('deployment keeps protection while Swarm rollback is in progress', () => {
   assert.equal(
     classifyDeploymentSnapshot(
       snapshot({ updateState: 'rollback_started' }),
+      plan,
+      digest,
+      false,
+    ),
+    'PENDING',
+  );
+});
+
+test('deployment fails after Swarm rollback reaches a terminal state', () => {
+  assert.equal(
+    classifyDeploymentSnapshot(
+      snapshot({ updateState: 'rollback_completed' }),
       plan,
       digest,
       false,
@@ -124,6 +139,37 @@ test('deployment detects an externally changed service spec', () => {
       false,
     ),
     'EXTERNAL_CONFLICT',
+  );
+});
+
+test('no-op deployment ignores running tasks that are desired to shutdown', () => {
+  const current = snapshot({ updateState: undefined });
+  current.tasks[0]!.desiredState = 'shutdown';
+
+  assert.equal(
+    classifyDeploymentSnapshot(
+      current,
+      { ...plan, beforeSpecHash: 'target-spec' },
+      digest,
+      true,
+    ),
+    'PENDING',
+  );
+});
+
+test('deployment requires unique running slots and target TaskSpec identity', () => {
+  const duplicateSlot = snapshot();
+  duplicateSlot.tasks[1]!.slot = 1;
+  assert.equal(
+    classifyDeploymentSnapshot(duplicateSlot, plan, digest, false),
+    'PENDING',
+  );
+
+  const wrongTaskSpec = snapshot();
+  wrongTaskSpec.tasks[0]!.specHash = 'old-task-spec';
+  assert.equal(
+    classifyDeploymentSnapshot(wrongTaskSpec, plan, digest, false),
+    'PENDING',
   );
 });
 
@@ -148,6 +194,7 @@ const deploymentOperation: OperationRecord = {
   targetForceUpdate: 0,
   targetReplicas: 2,
   targetImage: image,
+  targetTaskSpecHash: 'target-task-spec',
   resultVersion: null,
   errorCode: null,
   errorMessage: null,
@@ -185,11 +232,21 @@ test('deployment reconciliation detects external service changes', () => {
   );
 });
 
-test('deployment reconciliation detects Swarm rollback state', () => {
+test('deployment reconciliation keeps rollback in progress non-terminal', () => {
   assert.equal(
     classifyDeploymentReconciliationSnapshot(
       deploymentOperation,
       snapshot({ updateState: 'rollback_started' }),
+    ),
+    'ROLLBACK_IN_PROGRESS',
+  );
+});
+
+test('deployment reconciliation treats completed rollback as terminal failure', () => {
+  assert.equal(
+    classifyDeploymentReconciliationSnapshot(
+      deploymentOperation,
+      snapshot({ updateState: 'rollback_completed' }),
     ),
     'FAILED',
   );
@@ -301,4 +358,124 @@ test('deployment bootstrap reconciles target state without replaying mutation', 
   assert.equal(successCalls, 1);
   assert.equal(auditCalls, 1);
   assert.equal(deployment.status, 'SUCCESS');
+});
+
+
+test('deployment does not persist SUCCESS when service changes during health stability', async () => {
+  let inspectCalls = 0;
+  let successCalls = 0;
+  let attentionCalls = 0;
+
+  const operation: OperationRecord = {
+    ...deploymentOperation,
+    status: 'VERIFYING',
+  };
+  const deployment: DeploymentRecord = {
+    id: 'deployment-health-race',
+    releaseId: 'release-1',
+    previousReleaseId: null,
+    deploymentTargetId: 'target-1',
+    operationId: operation.id,
+    status: 'VERIFYING',
+    reason: null,
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {
+      specHash: operation.targetSpecHash,
+      image,
+      desiredReplicas: 2,
+      taskSpecHash: operation.targetTaskSpecHash,
+    },
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: null,
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+
+  const operations = {
+    markSuccess: async () => {
+      successCalls += 1;
+    },
+    markNeedsAttention: async () => {
+      attentionCalls += 1;
+      operation.status = 'NEEDS_ATTENTION';
+    },
+    findWithConnection: async () => operation,
+    audit: async () => undefined,
+  };
+  const deployments = {
+    markSuccess: async () => {
+      deployment.status = 'SUCCESS';
+    },
+    markNeedsAttention: async () => {
+      deployment.status = 'NEEDS_ATTENTION';
+    },
+    requireWithConnection: async () => deployment,
+  };
+  const agent = {
+    inspectService: async () => {
+      inspectCalls += 1;
+      if (inspectCalls === 1) return snapshot();
+      return snapshot({ version: 12, specHash: 'external-spec' });
+    },
+  };
+  const connection = {
+    beginTransaction: async () => undefined,
+    commit: async () => undefined,
+    rollback: async () => undefined,
+  };
+  const healthVerifier = {
+    verify: async (
+      _config: unknown,
+      assertConverged?: () => Promise<void>,
+    ) => {
+      await assertConverged?.();
+    },
+  };
+
+  const service = new DeploymentService(
+    {} as never,
+    deployments as never,
+    agent as never,
+    operations as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    healthVerifier as never,
+  );
+
+  const verifier = service as unknown as {
+    verifyAndComplete(
+      connection: unknown,
+      deploymentId: string,
+      operationId: string,
+      plan: ServiceMutationPlan,
+      digest: string,
+      noOp: boolean,
+      health: DeploymentRecord['health'],
+    ): Promise<DeploymentRecord>;
+  };
+
+  const result = await verifier.verifyAndComplete(
+    connection,
+    deployment.id,
+    operation.id,
+    plan,
+    digest,
+    false,
+    deployment.health,
+  );
+
+  assert.equal(successCalls, 0);
+  assert.equal(attentionCalls, 1);
+  assert.equal(result.status, 'NEEDS_ATTENTION');
 });
