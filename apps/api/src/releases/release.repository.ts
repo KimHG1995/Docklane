@@ -1,17 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
-import type { RowDataPacket } from 'mysql2/promise';
+import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
+import { AuditRepository } from '../audit/audit.repository.js';
 import { Database } from '../db/database.js';
-import type {
-  ApplicationRecord,
-  DeploymentTargetRecord,
-  ReleaseRecord,
-} from './release.types.js';
 import type {
   CreateApplicationRequest,
   CreateDeploymentTargetRequest,
   ResolvedReleaseRequest,
 } from './release.dto.js';
+import type {
+  ApplicationRecord,
+  DeploymentTargetRecord,
+  ReleaseRecord,
+} from './release.types.js';
 
 interface ApplicationRow extends RowDataPacket {
   id: string;
@@ -48,7 +49,10 @@ interface ReleaseRow extends RowDataPacket {
 
 @Injectable()
 export class ReleaseRepository implements OnModuleInit {
-  constructor(@Inject(Database) private readonly db: Database) {}
+  constructor(
+    @Inject(Database) private readonly db: Database,
+    @Inject(AuditRepository) private readonly audit: AuditRepository,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     await this.db.pool.query(`
@@ -107,13 +111,26 @@ export class ReleaseRepository implements OnModuleInit {
 
   async createApplication(
     input: CreateApplicationRequest,
+    actorId: string,
   ): Promise<ApplicationRecord> {
     const id = randomUUID();
-    await this.db.pool.execute(
-      'INSERT INTO applications (id, name, description) VALUES (?, ?, ?)',
-      [id, input.name, input.description ?? null],
-    );
-    return this.requireApplication(id);
+    return this.inTransaction(async (connection) => {
+      await connection.execute(
+        'INSERT INTO applications (id, name, description) VALUES (?, ?, ?)',
+        [id, input.name, input.description ?? null],
+      );
+      const created = await this.requireApplicationWithConnection(connection, id);
+      await this.audit.record(connection, {
+        eventId: randomUUID(),
+        actorId,
+        clusterId: 'global',
+        resourceType: 'application',
+        resourceId: id,
+        action: 'APPLICATION_CREATED',
+        afterJson: created,
+      });
+      return created;
+    });
   }
 
   async listApplications(): Promise<ApplicationRecord[]> {
@@ -135,23 +152,39 @@ export class ReleaseRepository implements OnModuleInit {
     applicationId: string,
     clusterId: string,
     input: CreateDeploymentTargetRequest,
+    actorId: string,
   ): Promise<DeploymentTargetRecord> {
     const id = randomUUID();
-    await this.db.pool.execute(
-      `INSERT INTO deployment_targets
-       (id, application_id, cluster_id, environment, docker_service_id, service_name, routing_mode)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
+    return this.inTransaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO deployment_targets
+         (id, application_id, cluster_id, environment, docker_service_id, service_name, routing_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          applicationId,
+          clusterId,
+          input.environment,
+          input.dockerServiceId,
+          input.serviceName,
+          input.routingMode,
+        ],
+      );
+      const created = await this.requireDeploymentTargetWithConnection(
+        connection,
         id,
-        applicationId,
+      );
+      await this.audit.record(connection, {
+        eventId: randomUUID(),
+        actorId,
         clusterId,
-        input.environment,
-        input.dockerServiceId,
-        input.serviceName,
-        input.routingMode,
-      ],
-    );
-    return this.requireDeploymentTarget(id);
+        resourceType: 'deployment_target',
+        resourceId: id,
+        action: 'DEPLOYMENT_TARGET_CREATED',
+        afterJson: created,
+      });
+      return created;
+    });
   }
 
   async listDeploymentTargets(
@@ -173,23 +206,35 @@ export class ReleaseRepository implements OnModuleInit {
     createdBy: string,
   ): Promise<ReleaseRecord> {
     const id = randomUUID();
-    await this.db.pool.execute(
-      `INSERT INTO releases
-       (id, application_id, version, image_repository, image_tag, image_digest, git_commit, build_number, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        applicationId,
-        input.version,
-        input.imageRepository,
-        input.imageTag ?? null,
-        input.imageDigest.toLowerCase(),
-        input.gitCommit ?? null,
-        input.buildNumber ?? null,
-        createdBy,
-      ],
-    );
-    return this.requireRelease(id);
+    return this.inTransaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO releases
+         (id, application_id, version, image_repository, image_tag, image_digest, git_commit, build_number, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          applicationId,
+          input.version,
+          input.imageRepository,
+          input.imageTag ?? null,
+          input.imageDigest.toLowerCase(),
+          input.gitCommit ?? null,
+          input.buildNumber ?? null,
+          createdBy,
+        ],
+      );
+      const created = await this.requireReleaseWithConnection(connection, id);
+      await this.audit.record(connection, {
+        eventId: randomUUID(),
+        actorId: createdBy,
+        clusterId: 'global',
+        resourceType: 'release',
+        resourceId: id,
+        action: 'RELEASE_CREATED',
+        afterJson: created,
+      });
+      return created;
+    });
   }
 
   async listReleases(applicationId: string): Promise<ReleaseRecord[]> {
@@ -202,16 +247,40 @@ export class ReleaseRepository implements OnModuleInit {
     return rows.map(mapRelease);
   }
 
-  private async requireApplication(id: string): Promise<ApplicationRecord> {
-    const found = await this.findApplication(id);
-    if (!found) throw new Error('Application disappeared after insert');
-    return found;
+  private async inTransaction<T>(
+    work: (connection: PoolConnection) => Promise<T>,
+  ): Promise<T> {
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await work(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
 
-  private async requireDeploymentTarget(
+  private async requireApplicationWithConnection(
+    connection: PoolConnection,
+    id: string,
+  ): Promise<ApplicationRecord> {
+    const [rows] = await connection.query<ApplicationRow[]>(
+      'SELECT * FROM applications WHERE id = ? LIMIT 1',
+      [id],
+    );
+    if (!rows[0]) throw new Error('Application disappeared after insert');
+    return mapApplication(rows[0]);
+  }
+
+  private async requireDeploymentTargetWithConnection(
+    connection: PoolConnection,
     id: string,
   ): Promise<DeploymentTargetRecord> {
-    const [rows] = await this.db.pool.query<DeploymentTargetRow[]>(
+    const [rows] = await connection.query<DeploymentTargetRow[]>(
       'SELECT * FROM deployment_targets WHERE id = ? LIMIT 1',
       [id],
     );
@@ -219,8 +288,11 @@ export class ReleaseRepository implements OnModuleInit {
     return mapDeploymentTarget(rows[0]);
   }
 
-  private async requireRelease(id: string): Promise<ReleaseRecord> {
-    const [rows] = await this.db.pool.query<ReleaseRow[]>(
+  private async requireReleaseWithConnection(
+    connection: PoolConnection,
+    id: string,
+  ): Promise<ReleaseRecord> {
+    const [rows] = await connection.query<ReleaseRow[]>(
       'SELECT * FROM releases WHERE id = ? LIMIT 1',
       [id],
     );
