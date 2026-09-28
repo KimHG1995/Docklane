@@ -27,7 +27,10 @@ import { OperationLock } from '../operations/operation-lock.js';
 import { OperationRepository } from '../operations/operation.repository.js';
 import type { OperationRecord } from '../operations/operation.types.js';
 import { ReleaseRepository } from '../releases/release.repository.js';
-import type { DeployRequest } from './deployment.dto.js';
+import type {
+  DeployRequest,
+  RollbackRequest,
+} from './deployment.dto.js';
 import { DeploymentRepository } from './deployment.repository.js';
 import type { DeploymentRecord } from './deployment.types.js';
 import { HealthVerifier } from './health-verifier.js';
@@ -81,7 +84,7 @@ export class DeploymentService
     try {
       const pending = (await this.operations.listNonTerminal()).filter(
         (operation) =>
-          operation.type === 'DEPLOY' &&
+          (operation.type === 'DEPLOY' || operation.type === 'ROLLBACK') &&
           operation.status !== 'NEEDS_ATTENTION',
       );
 
@@ -97,7 +100,7 @@ export class DeploymentService
               );
               if (
                 !current ||
-                current.type !== 'DEPLOY' ||
+                (current.type !== 'DEPLOY' && current.type !== 'ROLLBACK') ||
                 current.status === 'SUCCESS' ||
                 current.status === 'FAILED' ||
                 current.status === 'NEEDS_ATTENTION'
@@ -106,10 +109,15 @@ export class DeploymentService
               }
 
               const deployment =
-                await this.deployments.findByOperationWithConnection(
-                  connection,
-                  current.id,
-                );
+                current.type === 'ROLLBACK'
+                  ? await this.deployments.findByRollbackOperationWithConnection(
+                      connection,
+                      current.id,
+                    )
+                  : await this.deployments.findByOperationWithConnection(
+                      connection,
+                      current.id,
+                    );
               if (!deployment) {
                 this.logger.error(
                   `Deployment operation ${current.id} has no deployment record`,
@@ -117,7 +125,15 @@ export class DeploymentService
                 return;
               }
 
-              await this.reconcileLocked(connection, current, deployment);
+              if (current.type === 'ROLLBACK') {
+                await this.reconcileRollbackLocked(
+                  connection,
+                  current,
+                  deployment,
+                );
+              } else {
+                await this.reconcileLocked(connection, current, deployment);
+              }
             },
           );
         } catch (error) {
@@ -156,6 +172,246 @@ export class DeploymentService
       throw new NotFoundException('Deployment not found');
     }
     return deployment;
+  }
+
+  async rollback(
+    clusterId: string,
+    deploymentId: string,
+    input: RollbackRequest,
+    principal: Principal,
+  ): Promise<DeploymentRecord> {
+    const deployment = await this.deployments.find(deploymentId);
+    if (!deployment) throw new NotFoundException('Deployment not found');
+
+    const target = await this.releases.findDeploymentTarget(
+      deployment.deploymentTargetId,
+    );
+    if (!target || target.clusterId !== clusterId) {
+      throw new NotFoundException('Deployment not found');
+    }
+    if (deployment.status !== 'FAILED') {
+      throw new ConflictException(
+        'Only FAILED deployments can be rolled back manually',
+      );
+    }
+    if (!deployment.previousReleaseId) {
+      throw new ConflictException(
+        'Deployment does not have a previous release to roll back to',
+      );
+    }
+
+    const previousRelease = await this.releases.findRelease(
+      deployment.previousReleaseId,
+    );
+    if (
+      !previousRelease ||
+      previousRelease.applicationId !== target.applicationId
+    ) {
+      throw new ConflictException(
+        'Previous release is not valid for the deployment target',
+      );
+    }
+
+    let resolved: ServiceDetailResponse;
+    try {
+      resolved = await this.agentClient.inspectService(
+        target.dockerServiceId,
+      );
+    } catch (error) {
+      throw mapAgentError(error, 'Rollback target lookup failed');
+    }
+
+    return this.lock.withServiceLock(
+      clusterId,
+      target.dockerServiceId,
+      async (connection) => {
+        const existing = await this.operations.findWithConnection(
+          connection,
+          input.operationId,
+        );
+        if (existing) {
+          this.assertRollbackIdempotent(
+            existing,
+            principal.actorId,
+            target.dockerServiceId,
+          );
+          const existingDeployment =
+            await this.deployments.findByRollbackOperationWithConnection(
+              connection,
+              input.operationId,
+            );
+          if (!existingDeployment || existingDeployment.id !== deployment.id) {
+            throw new ConflictException(
+              'operationId was already used for a different rollback',
+            );
+          }
+          if (
+            existing.status === 'SUCCESS' ||
+            existing.status === 'FAILED'
+          ) {
+            return existingDeployment;
+          }
+          return this.reconcileRollbackLocked(
+            connection,
+            existing,
+            existingDeployment,
+          );
+        }
+
+        const prior =
+          await this.operations.findNonTerminalForServiceWithConnection(
+            connection,
+            clusterId,
+            target.dockerServiceId,
+          );
+        if (prior) {
+          throw new ConflictException(
+            `Service has unresolved operation ${prior.id} (${prior.status})`,
+          );
+        }
+
+        const nodeConflict =
+          await this.nodeOperations.findNonTerminalAffectingServiceWithConnection(
+            connection,
+            clusterId,
+            target.dockerServiceId,
+          );
+        if (nodeConflict) {
+          throw new ConflictException(
+            `Service is affected by unresolved node operation ${nodeConflict.id}`,
+          );
+        }
+
+        let current: ServiceDetailResponse;
+        try {
+          current = await this.agentClient.inspectService(
+            target.dockerServiceId,
+          );
+        } catch (error) {
+          throw mapAgentError(error, 'Rollback precondition lookup failed');
+        }
+
+        let plan: ServiceImageMutationPlan;
+        try {
+          plan = await this.agentClient.planRollbackService(
+            target.dockerServiceId,
+            current.service.version,
+          );
+        } catch (error) {
+          throw mapAgentError(error, 'Rollback planning failed');
+        }
+
+        this.assertRollbackOwnership(
+          deployment,
+          previousRelease.imageDigest,
+          plan,
+          current,
+        );
+
+        await this.capacity.assertAvailable(target.dockerServiceId, {
+          expectedVersion: plan.version,
+          targetReplicas:
+            plan.targetReplicas ?? current.service.desiredReplicas,
+          includeUpdateOverlap: true,
+        });
+
+        await this.persistRollbackIntent(
+          connection,
+          clusterId,
+          deployment,
+          principal,
+          input.operationId,
+          plan,
+          current,
+        );
+
+        if (
+          current.service.updateState === 'rollback_started' ||
+          current.service.specHash === plan.targetSpecHash
+        ) {
+          const operation = await this.requireOperation(
+            connection,
+            input.operationId,
+          );
+          return this.reconcileRollbackLocked(
+            connection,
+            operation,
+            deployment,
+          );
+        }
+
+        let accepted: ServiceMutationResponse;
+        try {
+          accepted = await this.agentClient.rollbackService(
+            target.dockerServiceId,
+            {
+              expectedVersion: plan.version,
+              expectedSpecHash: plan.beforeSpecHash,
+              targetSpecHash: plan.targetSpecHash,
+            },
+          );
+        } catch (error) {
+          if (
+            error instanceof AgentRequestError &&
+            (error.statusCode === 400 || error.statusCode === 409)
+          ) {
+            await this.rollbackFailed(
+              connection,
+              deployment.id,
+              input.operationId,
+              'ROLLBACK_REJECTED',
+              error.responseBody,
+            );
+            throw mapAgentError(error, 'Rollback mutation failed');
+          }
+
+          const operation = await this.requireOperation(
+            connection,
+            input.operationId,
+          );
+          return this.reconcileRollbackLocked(
+            connection,
+            operation,
+            deployment,
+            errorMessage(error),
+          );
+        }
+
+        if (
+          accepted.serviceId !== plan.serviceId ||
+          accepted.targetSpecHash !== plan.targetSpecHash ||
+          accepted.targetForceUpdate !== plan.targetForceUpdate
+        ) {
+          await this.rollbackAttention(
+            connection,
+            deployment.id,
+            input.operationId,
+            'ROLLBACK_AGENT_RESPONSE_MISMATCH',
+            'Agent rollback response did not match the recorded rollback target',
+          );
+          return this.deployments.requireWithConnection(
+            connection,
+            deployment.id,
+          );
+        }
+
+        await this.markRollbackVerifying(
+          connection,
+          deployment.id,
+          input.operationId,
+          accepted.version,
+        );
+
+        return this.verifyRollbackAndComplete(
+          connection,
+          deployment.id,
+          input.operationId,
+          plan,
+          previousRelease.imageDigest,
+          deployment.health,
+        );
+      },
+    );
   }
 
   async deploy(
@@ -397,6 +653,81 @@ export class DeploymentService
         );
       },
     );
+  }
+
+  private async persistRollbackIntent(
+    connection: PoolConnection,
+    clusterId: string,
+    deployment: DeploymentRecord,
+    principal: Principal,
+    operationId: string,
+    plan: ServiceImageMutationPlan,
+    before: ServiceDetailResponse,
+  ): Promise<void> {
+    await connection.beginTransaction();
+    try {
+      await this.operations.create(connection, {
+        id: operationId,
+        clusterId,
+        serviceId: plan.serviceId,
+        type: 'ROLLBACK',
+        actorId: principal.actorId,
+        expectedVersion: plan.version,
+        beforeSpecHash: plan.beforeSpecHash,
+        targetSpecHash: plan.targetSpecHash,
+        targetForceUpdate: plan.targetForceUpdate,
+        targetReplicas: plan.targetReplicas,
+        targetImage: plan.targetImage,
+        targetTaskSpecHash: plan.targetTaskSpecHash,
+      });
+      await this.operations.markRunning(connection, operationId);
+      await this.deployments.markRollingBack(
+        connection,
+        deployment.id,
+        operationId,
+      );
+      await this.operations.audit(connection, {
+        operationId,
+        actorId: principal.actorId,
+        clusterId,
+        serviceId: plan.serviceId,
+        action: 'ROLLBACK_STARTED',
+        beforeJson: before.service,
+        afterJson: {
+          targetSpecHash: plan.targetSpecHash,
+          targetImage: plan.targetImage,
+          targetTaskSpecHash: plan.targetTaskSpecHash,
+        },
+      });
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
+  }
+
+  private async markRollbackVerifying(
+    connection: PoolConnection,
+    deploymentId: string,
+    operationId: string,
+    resultVersion: number,
+  ): Promise<void> {
+    await connection.beginTransaction();
+    try {
+      await this.operations.markVerifying(
+        connection,
+        operationId,
+        resultVersion,
+      );
+      await this.deployments.markRollbackVerifying(
+        connection,
+        deploymentId,
+      );
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
   }
 
   private async persistIntent(
@@ -1006,6 +1337,42 @@ export class DeploymentService
       throw new Error('Deployment operation disappeared after persistence');
     }
     return operation;
+  }
+
+  private assertRollbackOwnership(
+    deployment: DeploymentRecord,
+    previousDigest: string,
+    plan: ServiceImageMutationPlan,
+    current: ServiceDetailResponse,
+  ): void {
+    const previousSpecHash = readSpecHash(deployment.beforeSpec);
+    if (
+      !previousSpecHash ||
+      plan.targetSpecHash !== previousSpecHash ||
+      plan.beforeSpecHash !== current.service.specHash ||
+      digestFromImage(plan.targetImage) !== previousDigest.toLowerCase() ||
+      !plan.targetTaskSpecHash
+    ) {
+      throw new ConflictException(
+        'Swarm previous spec does not match the recorded deployment rollback target',
+      );
+    }
+  }
+
+  private assertRollbackIdempotent(
+    operation: OperationRecord,
+    actorId: string,
+    serviceId: string,
+  ): void {
+    if (
+      operation.type !== 'ROLLBACK' ||
+      operation.actorId !== actorId ||
+      operation.serviceId !== serviceId
+    ) {
+      throw new ConflictException(
+        'operationId was already used for a different mutation',
+      );
+    }
   }
 
   private assertIdempotent(
