@@ -66,7 +66,7 @@ GitHub runner
 6. application bootstrap reconciliation이 기존 operation을 읽어 배포 검증을 재개한다.
 7. status API polling으로 `SUCCESS`를 확인한다.
 8. live response가 `v3`, `/health`가 HTTP 200인지 확인한다.
-9. Docker service spec version이 정확히 한 번만 증가했는지 확인한다.
+9. Agent proxy의 mutation log에서 v3 target digest에 대한 `POST /image` 전달이 정확히 한 번인지 확인한다.
 10. 해당 operation의 audit에 `DEPLOY_STARTED`와 `DEPLOY_SUCCEEDED`가 각각 정확히 한 번만 존재하고 실패/attention 이벤트가 없는지 확인한다.
 
 이 시나리오는 API 재기동 후 Docker image mutation을 blind retry하지 않고 persisted intent 기반으로 검증만 재개하는지 확인한다.
@@ -79,7 +79,7 @@ GitHub runner
 4. Docker mutation이 실제 적용된 뒤 해당 응답만 API 쪽에서 끊는다.
 5. marker는 즉시 제거되어 이후 inspect 요청은 정상 통과한다.
 6. Docklane이 현재 Swarm 상태를 inspect해 동일 operation을 `SUCCESS`로 복구하는지 확인한다.
-7. Docker service spec version이 정확히 한 번만 증가했는지 확인한다.
+7. Agent proxy의 mutation log에서 v4 target digest에 대한 `POST /image` 전달이 정확히 한 번인지 확인한다.
 8. audit에서 `DEPLOY_STARTED`와 `DEPLOY_SUCCEEDED`가 각각 한 번이고 failure/attention 이벤트가 없는지 확인한다.
 
 이 시나리오는 Agent 요청을 다시 실행하지 않고 **응답 유실 후 관찰 기반 reconciliation**이 동작하는지 검증한다.
@@ -130,6 +130,7 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `restart-audit-actions.txt`
 - `agent-proxy.log`
 - `agent-proxy-drops.log`
+- `agent-image-mutations.jsonl`
 - `response-loss-release.json`
 - `response-loss-deploy-initial.json`
 - `response-loss-deploy-status.json`
@@ -203,3 +204,50 @@ bash tests/functional-poc/cleanup.sh
 ```
 
 `run.sh`의 EXIT trap과 GitHub Actions cleanup step 모두 위 방식으로 호출한다.
+
+
+## Functional PoC resource ownership
+
+PoC는 기존 Docker/Swarm 자원을 이름만 보고 삭제하지 않는다.
+
+실행 순서:
+
+```text
+preflight
+├─ Swarm inactive 확인
+├─ 고정 이름 registry/MySQL container 부재 확인
+└─ PoC service 이름 충돌 확인
+        ↓
+ownership 디렉터리 초기화
+        ↓
+EXIT cleanup 등록
+        ↓
+생성 직후 실제 resource ID / PID 기록
+```
+
+cleanup은 이번 실행이 기록한 다음 값만 사용한다.
+
+- registry container ID
+- MySQL container ID
+- Swarm node ID
+- service ID
+- API / Agent / Agent proxy PID
+
+현재 resource ID가 기록된 값과 일치할 때만 삭제한다. preflight가 실패하면 cleanup trap 자체가 등록되지 않으므로 기존 Swarm이나 동명 자원을 건드리지 않는다.
+
+## Mutation replay evidence
+
+Docker Service `Version.Index`는 Swarm 내부 상태 저장에도 변경될 수 있으므로 mutation 횟수 판정에 사용하지 않는다.
+
+PoC Agent proxy는 모든 `POST /v1/services/:id/image` 전달을 `agent-image-mutations.jsonl`에 기록한다.
+
+각 record는 최소 다음 정보를 포함한다.
+
+- Agent path
+- backend HTTP status
+- target image
+- expected version
+- target spec hash
+- response drop 여부
+
+API restart와 Agent response-loss 시나리오는 **해당 target digest에 대한 image mutation 전달 횟수가 정확히 1회**인지 직접 검증한다.
