@@ -181,6 +181,13 @@ jobs:
           bash -n tests/functional-poc/cleanup.sh
           python3 -m py_compile tests/functional-poc/app/server.py
           python3 -m py_compile tests/functional-poc/agent-proxy.py
+          python3 -m py_compile tests/functional-poc/agent-proxy-test.py
+          bash -n tests/functional-poc/preflight-safety-test.sh
+
+      - name: Run Functional PoC harness regressions
+        run: |
+          bash tests/functional-poc/preflight-safety-test.sh
+          python3 tests/functional-poc/agent-proxy-test.py
 
   docs-only:
     needs: changes
