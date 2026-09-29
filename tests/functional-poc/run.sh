@@ -139,15 +139,18 @@ done
 
 docker exec "$MYSQL_CONTAINER"   mysqladmin ping -uroot -pdocklane --silent >/dev/null 2>&1   || fail "MySQL did not become ready"
 
-log "building and pushing v1/v2/broken fixture images"
+log "building and pushing v1/v2/v3/broken fixture images"
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v1   -t "$IMAGE_REPO:v1"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v1.log"
 
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v2   -t "$IMAGE_REPO:v2"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v2.log"
+
+docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v3   --build-arg START_DELAY=8   -t "$IMAGE_REPO:v3"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v3.log"
 
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=vbroken   --build-arg HEALTH_STATUS=503   -t "$IMAGE_REPO:vbroken"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-vbroken.log"
 
 docker push "$IMAGE_REPO:v1" >"$LOG_DIR/docker-push-v1.log"
 docker push "$IMAGE_REPO:v2" >"$LOG_DIR/docker-push-v2.log"
+docker push "$IMAGE_REPO:v3" >"$LOG_DIR/docker-push-v3.log"
 docker push "$IMAGE_REPO:vbroken" >"$LOG_DIR/docker-push-vbroken.log"
 
 SWARM_ADDR="$(hostname -I | awk '{print $1}')"
@@ -200,20 +203,70 @@ TOKENS_JSON="$(jq -cn   --arg operator "$OPERATOR_TOKEN"   --arg viewer "$VIEWER
     }
   ]')"
 
+start_api() {
+  local mode="${1:-truncate}"
+  local redirect=">"
+
+  if [[ "$mode" == "append" ]]; then
+    redirect=">>"
+  fi
+
+  if [[ -f "$LOG_DIR/api.pid" ]]; then
+    local existing
+    existing="$(cat "$LOG_DIR/api.pid" 2>/dev/null || true)"
+    if [[ -n "$existing" ]] && kill -0 "$existing" 2>/dev/null; then
+      fail "API is already running with pid $existing"
+    fi
+  fi
+
+  if [[ "$redirect" == ">>" ]]; then
+    printf '\n===== API RESTART =====\n' >>"$LOG_DIR/api.log"
+    (
+      export PORT=3001
+      export DOCKLANE_CLUSTER_ID=default
+      export DOCKLANE_DATABASE_URL='mysql://root:docklane@127.0.0.1:33306/docklane'
+      export DOCKLANE_AGENT_INSECURE_DEV=true
+      export DOCKLANE_AGENT_URL="$AGENT_URL"
+      export DOCKLANE_API_TOKENS="$TOKENS_JSON"
+      export DOCKLANE_REGISTRY_PRIVATE_HOSTS="$REGISTRY"
+      export DOCKLANE_REGISTRY_AUTH_JSON='{}'
+      export DOCKLANE_HEALTH_PRIVATE_HOSTS='127.0.0.1:18080'
+      exec node "$ROOT_DIR/apps/api/dist/main.js"
+    ) >>"$LOG_DIR/api.log" 2>&1 &
+  else
+    (
+      export PORT=3001
+      export DOCKLANE_CLUSTER_ID=default
+      export DOCKLANE_DATABASE_URL='mysql://root:docklane@127.0.0.1:33306/docklane'
+      export DOCKLANE_AGENT_INSECURE_DEV=true
+      export DOCKLANE_AGENT_URL="$AGENT_URL"
+      export DOCKLANE_API_TOKENS="$TOKENS_JSON"
+      export DOCKLANE_REGISTRY_PRIVATE_HOSTS="$REGISTRY"
+      export DOCKLANE_REGISTRY_AUTH_JSON='{}'
+      export DOCKLANE_HEALTH_PRIVATE_HOSTS='127.0.0.1:18080'
+      exec node "$ROOT_DIR/apps/api/dist/main.js"
+    ) >"$LOG_DIR/api.log" 2>&1 &
+  fi
+
+  echo "$!" >"$LOG_DIR/api.pid"
+}
+
+crash_api() {
+  local pid
+  pid="$(cat "$LOG_DIR/api.pid")"
+  kill -9 "$pid"
+  for _ in {1..20}; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$LOG_DIR/api.pid"
+      return 0
+    fi
+    sleep 0.25
+  done
+  fail "API process $pid did not stop after SIGKILL"
+}
+
 log "starting Nest API"
-(
-  export PORT=3001
-  export DOCKLANE_CLUSTER_ID=default
-  export DOCKLANE_DATABASE_URL='mysql://root:docklane@127.0.0.1:33306/docklane'
-  export DOCKLANE_AGENT_INSECURE_DEV=true
-  export DOCKLANE_AGENT_URL="$AGENT_URL"
-  export DOCKLANE_API_TOKENS="$TOKENS_JSON"
-  export DOCKLANE_REGISTRY_PRIVATE_HOSTS="$REGISTRY"
-  export DOCKLANE_REGISTRY_AUTH_JSON='{}'
-  export DOCKLANE_HEALTH_PRIVATE_HOSTS='127.0.0.1:18080'
-  exec node "$ROOT_DIR/apps/api/dist/main.js"
-) >"$LOG_DIR/api.log" 2>&1 &
-echo "$!" >"$LOG_DIR/api.pid"
+start_api truncate
 
 wait_http "$API_URL/health" 200 90
 
