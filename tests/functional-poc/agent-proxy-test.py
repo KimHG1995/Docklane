@@ -58,6 +58,16 @@ def wait_proxy(port):
     raise RuntimeError("proxy did not start")
 
 
+def wait_listener(port):
+    for _ in range(50):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return
+        except OSError:
+            time.sleep(0.05)
+    raise RuntimeError("proxy listener did not start")
+
+
 def post_image(port, image):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
     body = json.dumps(
@@ -241,7 +251,7 @@ def run_connect_failure_regression(root):
             text=True,
         )
         try:
-            wait_proxy(proxy_port)
+            wait_listener(proxy_port)
             image = "registry.example/api@sha256:" + ("c" * 64)
 
             failed = False
