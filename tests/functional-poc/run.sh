@@ -117,7 +117,7 @@ assert_image_mutation_count() {
   local count=0
 
   if [[ -s "$log_file" ]]; then
-    count="$(jq -s       --arg digest "$digest"       '[.[] | select((.image // "") | endswith("@" + $digest))] | length'       "$log_file")"
+    count="$(jq -s       --arg digest "$digest"       '[.[] | select(.event == "forwarded" and ((.image // "") | endswith("@" + $digest)))] | length'       "$log_file")"
   fi
 
   if [[ "$count" != "$expected" ]]; then
@@ -206,7 +206,7 @@ SWARM_NODE_ID="$(docker info --format '{{.Swarm.NodeID}}')"
 printf '%s\n' "$SWARM_NODE_ID" >"$OWNERSHIP_DIR/swarm.node-id"
 
 log "creating initial replicated service"
-SERVICE_ID="$(docker service create   --name "$SERVICE_NAME"   --replicas 1   --publish published=18080,target=8080   --update-order start-first   --update-parallelism 1   --reserve-cpu 0.05   --reserve-memory 16M   "$IMAGE_REPO:v1")"
+SERVICE_ID="$(docker service create   --quiet   --name "$SERVICE_NAME"   --replicas 1   --publish published=18080,target=8080   --update-order start-first   --update-parallelism 1   --reserve-cpu 0.05   --reserve-memory 16M   "$IMAGE_REPO:v1")"
 printf '%s\n' "$SERVICE_ID" >"$LOG_DIR/service-create.log"
 printf '%s\n' "$SERVICE_ID" >"$OWNERSHIP_DIR/service.id"
 
