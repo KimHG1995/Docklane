@@ -27,6 +27,7 @@ kill_from_pidfile() {
 }
 
 kill_from_pidfile api
+kill_from_pidfile agent-proxy
 kill_from_pidfile agent
 
 if command -v docker >/dev/null 2>&1; then
@@ -41,6 +42,6 @@ if command -v docker >/dev/null 2>&1; then
   docker rm -f docklane-poc-registry docklane-poc-mysql >/dev/null 2>&1 || true
 fi
 
-rm -f "$LOG_DIR/api.pid" "$LOG_DIR/agent.pid" "$LOG_DIR/swarm-created"
+rm -f "$LOG_DIR/api.pid" "$LOG_DIR/agent-proxy.pid" "$LOG_DIR/agent.pid" "$LOG_DIR/swarm-created" "$LOG_DIR/drop-agent-image-response"
 
 printf 'Functional PoC cleanup complete (%s)\n' "$ROOT_DIR"
