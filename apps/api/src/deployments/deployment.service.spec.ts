@@ -1902,3 +1902,201 @@ test('legacy runtime hydration failure keeps deployment protected for retry', as
   assert.equal(pendingCalls, 1);
   assert.equal(attentionCalls, 0);
 });
+
+
+test('legacy deployment with definite external spec becomes NEEDS_ATTENTION', async () => {
+  const operation: OperationRecord = {
+    ...deploymentOperation,
+    id: 'legacy-external-deploy',
+    status: 'VERIFYING',
+    targetRuntimeSpecHash: null,
+  };
+  const deployment: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
+    id: 'legacy-external-deployment',
+    releaseId: 'release-1',
+    previousReleaseId: null,
+    deploymentTargetId: 'target-1',
+    operationId: operation.id,
+    rollbackOperationId: null,
+    status: 'VERIFYING',
+    reason: null,
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {},
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: null,
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+
+  let pendingCalls = 0;
+  let attentionCalls = 0;
+  const connection = {
+    beginTransaction: async () => undefined,
+    commit: async () => undefined,
+    rollback: async () => undefined,
+  };
+  const operations = {
+    markVerificationPending: async () => {
+      pendingCalls += 1;
+    },
+    markNeedsAttention: async () => {
+      attentionCalls += 1;
+      operation.status = 'NEEDS_ATTENTION';
+    },
+    findWithConnection: async () => operation,
+    audit: async () => undefined,
+  };
+  const deployments = {
+    markVerificationPending: async () => {
+      deployment.status = 'VERIFYING';
+    },
+    markNeedsAttention: async () => {
+      deployment.status = 'NEEDS_ATTENTION';
+    },
+    requireWithConnection: async () => deployment,
+  };
+  const agent = {
+    inspectService: async () =>
+      snapshot({
+        version: 20,
+        specHash: 'external-spec',
+      }),
+  };
+
+  const service = new DeploymentService(
+    {} as never,
+    deployments as never,
+    agent as never,
+    operations as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+  const reconciler = service as unknown as {
+    reconcileLocked(
+      connection: unknown,
+      operation: OperationRecord,
+      deployment: DeploymentRecord,
+    ): Promise<DeploymentRecord>;
+  };
+
+  const result = await reconciler.reconcileLocked(
+    connection,
+    operation,
+    deployment,
+  );
+
+  assert.equal(result.status, 'NEEDS_ATTENTION');
+  assert.equal(attentionCalls, 1);
+  assert.equal(pendingCalls, 0);
+});
+
+test('terminal rollback retry refreshes the latest deployment row', async () => {
+  const staleDeployment: DeploymentRecord = {
+    kind: 'DEPLOY',
+    sourceDeploymentId: null,
+    id: 'rollback-race-deployment',
+    releaseId: 'release-b',
+    previousReleaseId: 'release-a',
+    deploymentTargetId: 'target-1',
+    operationId: 'deploy-b',
+    rollbackOperationId: null,
+    status: 'FAILED',
+    reason: 'health failed',
+    noOp: false,
+    beforeSpec: {},
+    targetSpec: {},
+    health: {
+      url: 'https://health.example.com/ready',
+      intervalMs: 100,
+      timeoutMs: 1000,
+      retries: 1,
+      stabilityWindowMs: 500,
+      expectedStatus: 200,
+    },
+    expectedServiceVersion: 10,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    createdBy: 'operator-1',
+    createdAt: new Date(0).toISOString(),
+  };
+  const latestDeployment: DeploymentRecord = {
+    ...staleDeployment,
+    rollbackOperationId: 'rollback-race-op',
+    status: 'ROLLED_BACK',
+    reason: null,
+  };
+  const rollbackOperation: OperationRecord = {
+    ...deploymentOperation,
+    id: 'rollback-race-op',
+    type: 'ROLLBACK',
+    status: 'SUCCESS',
+  };
+
+  let deploymentFindCalls = 0;
+  let agentCalls = 0;
+  const service = new DeploymentService(
+    {
+      findDeploymentTarget: async () => ({
+        id: 'target-1',
+        applicationId: 'app-1',
+        clusterId: 'default',
+        dockerServiceId: 'service-1',
+      }),
+      findRelease: async () => ({
+        id: 'release-a',
+        applicationId: 'app-1',
+      }),
+    } as never,
+    {
+      find: async () => {
+        deploymentFindCalls += 1;
+        return deploymentFindCalls === 1
+          ? staleDeployment
+          : latestDeployment;
+      },
+    } as never,
+    {
+      inspectService: async () => {
+        agentCalls += 1;
+        throw new Error('terminal retry must not inspect Agent');
+      },
+    } as never,
+    {
+      find: async () => rollbackOperation,
+    } as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+
+  const result = await service.rollback(
+    'default',
+    staleDeployment.id,
+    { operationId: 'rollback-race-op' },
+    {
+      actorId: 'operator-1',
+      role: 'OPERATOR',
+      clusters: ['default'],
+    },
+  );
+
+  assert.equal(result.status, 'ROLLED_BACK');
+  assert.equal(result.rollbackOperationId, 'rollback-race-op');
+  assert.equal(deploymentFindCalls, 2);
+  assert.equal(agentCalls, 0);
+});
