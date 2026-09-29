@@ -129,3 +129,33 @@ bash tests/functional-poc/cleanup.sh
 - Swarm internal ports network exposure 검증
 
 이 항목들은 단일-node smoke가 안정화된 뒤 별도 시나리오로 확장한다.
+
+
+## Asynchronous deployment polling
+
+Deployment/rollback POST 응답은 동기 관찰 한계 안에서 terminal 상태가 되지 않으면
+`VERIFYING` 또는 `ROLLBACK_VERIFYING`을 반환할 수 있다.
+
+Functional PoC는 첫 POST 응답만으로 성공/실패를 판정하지 않는다.
+
+```text
+POST deploy / rollback
+       ↓
+deployment id 확보
+       ↓
+GET /v1/clusters/default/deployments/:id/status
+       ↓
+terminal 상태까지 제한 시간 polling
+```
+
+허용 terminal 상태는 시나리오별 예상값으로 검증하며, 다른 terminal 상태에 도달하면 즉시 실패한다.
+
+## Cleanup
+
+`cleanup.sh`의 Git 실행 권한에 의존하지 않는다.
+
+```bash
+bash tests/functional-poc/cleanup.sh
+```
+
+`run.sh`의 EXIT trap과 GitHub Actions cleanup step 모두 위 방식으로 호출한다.
