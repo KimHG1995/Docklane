@@ -9,7 +9,8 @@ SERVICE_NAME="docklane-poc"
 REGISTRY="127.0.0.1:5000"
 IMAGE_REPO="$REGISTRY/docklane-poc"
 API_URL="http://127.0.0.1:3001"
-AGENT_URL="http://127.0.0.1:9443"
+AGENT_BACKEND_URL="http://127.0.0.1:9443"
+AGENT_URL="http://127.0.0.1:9555"
 HEALTH_URL="http://127.0.0.1:18080"
 OPERATOR_TOKEN="docklane-poc-operator-00000001"
 VIEWER_TOKEN="docklane-poc-viewer-0000000001"
@@ -139,18 +140,21 @@ done
 
 docker exec "$MYSQL_CONTAINER"   mysqladmin ping -uroot -pdocklane --silent >/dev/null 2>&1   || fail "MySQL did not become ready"
 
-log "building and pushing v1/v2/v3/broken fixture images"
+log "building and pushing v1/v2/v3/v4/broken fixture images"
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v1   -t "$IMAGE_REPO:v1"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v1.log"
 
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v2   -t "$IMAGE_REPO:v2"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v2.log"
 
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v3   --build-arg START_DELAY=8   -t "$IMAGE_REPO:v3"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v3.log"
 
+docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v4   -t "$IMAGE_REPO:v4"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v4.log"
+
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=vbroken   --build-arg HEALTH_STATUS=503   -t "$IMAGE_REPO:vbroken"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-vbroken.log"
 
 docker push "$IMAGE_REPO:v1" >"$LOG_DIR/docker-push-v1.log"
 docker push "$IMAGE_REPO:v2" >"$LOG_DIR/docker-push-v2.log"
 docker push "$IMAGE_REPO:v3" >"$LOG_DIR/docker-push-v3.log"
+docker push "$IMAGE_REPO:v4" >"$LOG_DIR/docker-push-v4.log"
 docker push "$IMAGE_REPO:vbroken" >"$LOG_DIR/docker-push-vbroken.log"
 
 SWARM_ADDR="$(hostname -I | awk '{print $1}')"
@@ -185,6 +189,18 @@ log "starting Go Agent"
   exec "$ROOT_DIR/agent/bin/docklane-agent"
 ) >"$LOG_DIR/agent.log" 2>&1 &
 echo "$!" >"$LOG_DIR/agent.pid"
+
+wait_http "$AGENT_BACKEND_URL/v1/health" 200 60
+
+log "starting Agent response-loss proxy"
+(
+  export DOCKLANE_POC_AGENT_BACKEND_HOST=127.0.0.1
+  export DOCKLANE_POC_AGENT_BACKEND_PORT=9443
+  export DOCKLANE_POC_AGENT_DROP_MARKER="$LOG_DIR/drop-agent-image-response"
+  export DOCKLANE_POC_AGENT_DROP_LOG="$LOG_DIR/agent-proxy-drops.log"
+  exec python3 "$ROOT_DIR/tests/functional-poc/agent-proxy.py"
+) >"$LOG_DIR/agent-proxy.log" 2>&1 &
+echo "$!" >"$LOG_DIR/agent-proxy.pid"
 
 wait_http "$AGENT_URL/v1/health" 200 60
 
@@ -466,49 +482,61 @@ fi
 
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$RESTART_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/restart-audit-actions.txt"
 
-[[ "$(grep -c '^DEPLOY_STARTED
-docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
-
-for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
-  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
-done
-
-cat >"$LOG_DIR/summary.txt" <<EOF
-normal digest deploy: PASS
-same digest/spec no-op redeploy: PASS
-broken release manual rollback: PASS
-API restart during update: PASS
-authorization rejection: PASS
-audit completeness: PASS
-release digest: $RELEASE_DIGEST
-service id: $SERVICE_ID
-EOF
-
-log "functional PoC smoke passed"
-cat "$LOG_DIR/summary.txt"
- "$LOG_DIR/restart-audit-actions.txt" || true)" == "1" ]]   || fail "restart deployment must have exactly one DEPLOY_STARTED audit"
-[[ "$(grep -c '^DEPLOY_SUCCEEDED
-docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
-
-for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
-  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
-done
-
-cat >"$LOG_DIR/summary.txt" <<EOF
-normal digest deploy: PASS
-same digest/spec no-op redeploy: PASS
-broken release manual rollback: PASS
-authorization rejection: PASS
-audit completeness: PASS
-release digest: $RELEASE_DIGEST
-service id: $SERVICE_ID
-EOF
-
-log "functional PoC smoke passed"
-cat "$LOG_DIR/summary.txt"
- "$LOG_DIR/restart-audit-actions.txt" || true)" == "1" ]]   || fail "restart deployment must have exactly one DEPLOY_SUCCEEDED audit"
+[[ "$(grep -c '^DEPLOY_STARTED$' "$LOG_DIR/restart-audit-actions.txt" || true)" == "1" ]]   || fail "restart deployment must have exactly one DEPLOY_STARTED audit"
+[[ "$(grep -c '^DEPLOY_SUCCEEDED$' "$LOG_DIR/restart-audit-actions.txt" || true)" == "1" ]]   || fail "restart deployment must have exactly one DEPLOY_SUCCEEDED audit"
 if grep -Eq 'DEPLOY_FAILED|DEPLOY_NEEDS_ATTENTION' "$LOG_DIR/restart-audit-actions.txt"; then
   fail "restart deployment recorded failure/attention audit"
+fi
+
+log "scenario: Agent response loss after accepted image mutation"
+LOSS_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
+    "version":"v4",
+    "imageRepository":"http://127.0.0.1:5000/docklane-poc",
+    "imageTag":"v4",
+    "gitCommit":"functional-poc-response-loss",
+    "buildNumber":"manual-smoke-response-loss"
+  }')"
+printf '%s\n' "$LOSS_RELEASE_JSON" >"$LOG_DIR/response-loss-release.json"
+LOSS_RELEASE_ID="$(jq -er '.id' <<<"$LOSS_RELEASE_JSON")"
+LOSS_DIGEST="$(jq -er '.imageDigest' <<<"$LOSS_RELEASE_JSON")"
+LOSS_OPERATION_ID="functional-poc-deploy-response-loss"
+SERVICE_VERSION_BEFORE_LOSS="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
+
+: >"$LOG_DIR/agent-proxy-drops.log"
+touch "$LOG_DIR/drop-agent-image-response"
+
+LOSS_DEPLOY_JSON="$(api_post   "/v1/clusters/default/targets/$TARGET_ID/deploy"   "$(jq -cn     --arg releaseId "$LOSS_RELEASE_ID"     --argjson health "$HEALTH_JSON"     --arg operationId "$LOSS_OPERATION_ID"     '{
+      operationId: $operationId,
+      releaseId: $releaseId,
+      health: $health
+    }')")"
+printf '%s\n' "$LOSS_DEPLOY_JSON" >"$LOG_DIR/response-loss-deploy-initial.json"
+LOSS_DEPLOYMENT_ID="$(jq -er '.id' <<<"$LOSS_DEPLOY_JSON")"
+
+LOSS_DEPLOY_JSON="$(wait_deployment_terminal   "$LOSS_DEPLOYMENT_ID"   SUCCESS   "$LOG_DIR/response-loss-deploy-status.json"   120)"
+printf '%s\n' "$LOSS_DEPLOY_JSON" >"$LOG_DIR/response-loss-deploy.json"
+
+[[ ! -f "$LOG_DIR/drop-agent-image-response" ]]   || fail "Agent response-loss marker was not consumed"
+[[ "$(wc -l <"$LOG_DIR/agent-proxy-drops.log" | tr -d ' ')" == "1" ]]   || fail "expected exactly one dropped Agent image response"
+
+wait_for_body "$HEALTH_URL" "v4"
+wait_http "$HEALTH_URL/health" 200 60
+
+LOSS_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
+printf '%s\n' "$LOSS_SERVICE_JSON" >"$LOG_DIR/service-after-response-loss.json"
+jq -e --arg digest "$LOSS_DIGEST"   '.service.image | contains("@" + $digest)'   <<<"$LOSS_SERVICE_JSON" >/dev/null   || fail "response-loss reconciliation did not preserve target digest"
+
+SERVICE_VERSION_AFTER_LOSS="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
+if (( SERVICE_VERSION_AFTER_LOSS != SERVICE_VERSION_BEFORE_LOSS + 1 )); then
+  fail "service version changed more than once after Agent response loss: before=$SERVICE_VERSION_BEFORE_LOSS after=$SERVICE_VERSION_AFTER_LOSS"
+fi
+
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$LOSS_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/response-loss-audit-actions.txt"
+
+[[ "$(grep -c '^DEPLOY_STARTED$' "$LOG_DIR/response-loss-audit-actions.txt" || true)" == "1" ]]   || fail "response-loss deployment must have exactly one DEPLOY_STARTED audit"
+[[ "$(grep -c '^DEPLOY_SUCCEEDED$' "$LOG_DIR/response-loss-audit-actions.txt" || true)" == "1" ]]   || fail "response-loss deployment must have exactly one DEPLOY_SUCCEEDED audit"
+if grep -Eq 'DEPLOY_FAILED|DEPLOY_NEEDS_ATTENTION' "$LOG_DIR/response-loss-audit-actions.txt"; then
+  fail "response-loss deployment recorded failure/attention audit"
 fi
 
 log "scenario: audit completeness"
@@ -522,6 +550,8 @@ cat >"$LOG_DIR/summary.txt" <<EOF
 normal digest deploy: PASS
 same digest/spec no-op redeploy: PASS
 broken release manual rollback: PASS
+API restart during update: PASS
+Agent response loss: PASS
 authorization rejection: PASS
 audit completeness: PASS
 release digest: $RELEASE_DIGEST
