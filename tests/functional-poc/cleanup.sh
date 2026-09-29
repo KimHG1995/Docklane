@@ -10,6 +10,11 @@ mark_failed() {
   cleanup_failed=1
 }
 
+is_not_found_error() {
+  local file="$1"
+  grep -Eqi 'no such (object|container|service)|not found' "$file"
+}
+
 kill_owned_pid() {
   local name="$1"
   local file="$OWNERSHIP_DIR/$name.pid"
@@ -53,17 +58,24 @@ remove_owned_container() {
 
   [[ -f "$file" ]] || return 0
 
-  local owned_id current_id
+  local owned_id current_id error_file
   owned_id="$(cat "$file" 2>/dev/null || true)"
   if [[ -z "$owned_id" ]]; then
     rm -f "$file"
     return 0
   fi
 
-  current_id="$(docker inspect --format '{{.Id}}' "$owned_id" 2>/dev/null || true)"
-  if [[ -z "$current_id" ]]; then
-    rm -f "$file"
-    return 0
+  error_file="$OWNERSHIP_DIR/.$name.inspect.err"
+  if current_id="$(docker inspect --format '{{.Id}}' "$owned_id" 2>"$error_file")"; then
+    rm -f "$error_file"
+  else
+    if is_not_found_error "$error_file"; then
+      rm -f "$error_file" "$file"
+      return 0
+    fi
+    rm -f "$error_file"
+    mark_failed
+    return 1
   fi
 
   if [[ "$current_id" != "$owned_id" ]]; then
@@ -71,35 +83,37 @@ remove_owned_container() {
     return 1
   fi
 
-  if ! docker rm -f "$owned_id" >/dev/null 2>&1; then
-    mark_failed
-    return 1
+  if docker rm -f "$owned_id" >/dev/null 2>&1; then
+    rm -f "$file"
+    return 0
   fi
 
-  current_id="$(docker inspect --format '{{.Id}}' "$owned_id" 2>/dev/null || true)"
-  if [[ -n "$current_id" ]]; then
-    mark_failed
-    return 1
-  fi
-
-  rm -f "$file"
+  mark_failed
+  return 1
 }
 
 remove_owned_service() {
   local file="$OWNERSHIP_DIR/service.id"
   [[ -f "$file" ]] || return 0
 
-  local owned_id current_id
+  local owned_id current_id error_file
   owned_id="$(cat "$file" 2>/dev/null || true)"
   if [[ -z "$owned_id" ]]; then
     rm -f "$file"
     return 0
   fi
 
-  current_id="$(docker service inspect "$owned_id" --format '{{.ID}}' 2>/dev/null || true)"
-  if [[ -z "$current_id" ]]; then
-    rm -f "$file"
-    return 0
+  error_file="$OWNERSHIP_DIR/.service.inspect.err"
+  if current_id="$(docker service inspect "$owned_id" --format '{{.ID}}' 2>"$error_file")"; then
+    rm -f "$error_file"
+  else
+    if is_not_found_error "$error_file"; then
+      rm -f "$error_file" "$file"
+      return 0
+    fi
+    rm -f "$error_file"
+    mark_failed
+    return 1
   fi
 
   if [[ "$current_id" != "$owned_id" ]]; then
@@ -107,18 +121,13 @@ remove_owned_service() {
     return 1
   fi
 
-  if ! docker service rm "$owned_id" >/dev/null 2>&1; then
-    mark_failed
-    return 1
+  if docker service rm "$owned_id" >/dev/null 2>&1; then
+    rm -f "$file"
+    return 0
   fi
 
-  current_id="$(docker service inspect "$owned_id" --format '{{.ID}}' 2>/dev/null || true)"
-  if [[ -n "$current_id" ]]; then
-    mark_failed
-    return 1
-  fi
-
-  rm -f "$file"
+  mark_failed
+  return 1
 }
 
 leave_owned_swarm() {
@@ -132,30 +141,33 @@ leave_owned_swarm() {
     return 0
   fi
 
-  state="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
+  if ! state="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)"; then
+    mark_failed
+    return 1
+  fi
+
   if [[ "$state" != "active" ]]; then
     rm -f "$file"
     return 0
   fi
 
-  current_node="$(docker info --format '{{.Swarm.NodeID}}' 2>/dev/null || true)"
+  if ! current_node="$(docker info --format '{{.Swarm.NodeID}}' 2>/dev/null)"; then
+    mark_failed
+    return 1
+  fi
+
   if [[ "$current_node" != "$owned_node" ]]; then
     mark_failed
     return 1
   fi
 
-  if ! docker swarm leave --force >/dev/null 2>&1; then
-    mark_failed
-    return 1
+  if docker swarm leave --force >/dev/null 2>&1; then
+    rm -f "$file"
+    return 0
   fi
 
-  state="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
-  if [[ "$state" == "active" ]]; then
-    mark_failed
-    return 1
-  fi
-
-  rm -f "$file"
+  mark_failed
+  return 1
 }
 
 kill_owned_pid api || true
