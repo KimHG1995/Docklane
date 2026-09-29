@@ -7,6 +7,8 @@ from pathlib import Path
 
 BACKEND_HOST = os.environ.get("DOCKLANE_POC_AGENT_BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.environ.get("DOCKLANE_POC_AGENT_BACKEND_PORT", "9443"))
+PROXY_HOST = os.environ.get("DOCKLANE_POC_AGENT_PROXY_HOST", "127.0.0.1")
+PROXY_PORT = int(os.environ.get("DOCKLANE_POC_AGENT_PROXY_PORT", "9555"))
 DROP_MARKER = Path(
     os.environ.get(
         "DOCKLANE_POC_AGENT_DROP_MARKER",
@@ -139,4 +141,5 @@ class ProxyHandler(BaseHTTPRequestHandler):
         return
 
 
-ThreadingHTTPServer(("127.0.0.1", 9555), ProxyHandler).serve_forever()
+if __name__ == "__main__":
+    ThreadingHTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler).serve_forever()
