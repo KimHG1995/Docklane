@@ -1,4 +1,5 @@
 import http.client
+import json
 import os
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,12 @@ DROP_LOG = Path(
     os.environ.get(
         "DOCKLANE_POC_AGENT_DROP_LOG",
         "/tmp/docklane-poc/agent-proxy-drops.log",
+    )
+)
+MUTATION_LOG = Path(
+    os.environ.get(
+        "DOCKLANE_POC_AGENT_MUTATION_LOG",
+        "/tmp/docklane-poc/agent-image-mutations.jsonl",
     )
 )
 
@@ -68,12 +75,37 @@ class ProxyHandler(BaseHTTPRequestHandler):
         finally:
             connection.close()
 
-        should_drop = (
+        is_image_mutation = (
             self.command == "POST"
             and self.path.startswith("/v1/services/")
             and self.path.endswith("/image")
-            and DROP_MARKER.exists()
         )
+        should_drop = is_image_mutation and DROP_MARKER.exists()
+
+        if is_image_mutation:
+            mutation = {
+                "method": self.command,
+                "path": self.path,
+                "backendStatus": response.status,
+                "dropped": should_drop,
+            }
+            if body:
+                try:
+                    parsed_body = json.loads(body)
+                    if isinstance(parsed_body, dict):
+                        mutation["image"] = parsed_body.get("image")
+                        mutation["expectedVersion"] = parsed_body.get(
+                            "expectedVersion"
+                        )
+                        mutation["targetSpecHash"] = parsed_body.get(
+                            "targetSpecHash"
+                        )
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    mutation["bodyParseError"] = True
+
+            MUTATION_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with MUTATION_LOG.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(mutation, sort_keys=True) + "\n")
 
         if should_drop:
             DROP_MARKER.unlink(missing_ok=True)
