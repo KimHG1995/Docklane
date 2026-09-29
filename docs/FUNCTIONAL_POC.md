@@ -84,6 +84,19 @@ GitHub runner
 
 이 시나리오는 Agent 요청을 다시 실행하지 않고 **응답 유실 후 관찰 기반 reconciliation**이 동작하는지 검증한다.
 
+### External CLI conflict
+
+1. healthy `v5` Release 배포를 시작하고 10초 health stability window에 진입시킨다.
+2. Docklane이 v5 target digest를 실제 Swarm service에 반영한 것을 확인한다.
+3. 검증이 끝나기 전에 외부 CLI로 `docker service update --label-add`를 실행해 service spec만 변경한다.
+4. image와 health는 그대로 정상인 상태에서 service fingerprint divergence를 만든다.
+5. Deployment와 operation이 모두 `NEEDS_ATTENTION`인지 확인한다.
+6. operation error code가 `EXTERNAL_SERVICE_CONFLICT`인지 확인한다.
+7. audit에 `DEPLOY_STARTED`와 `DEPLOY_NEEDS_ATTENTION`이 각각 한 번만 존재하고 `DEPLOY_SUCCEEDED` / `DEPLOY_FAILED`가 없는지 확인한다.
+8. Agent proxy mutation log에서 v5 image mutation 전달이 정확히 한 번인지 확인한다.
+
+이 시나리오는 application health가 정상이어도 Docklane이 자신이 기록한 deployment target과 다른 외부 Swarm 변경을 성공으로 오인하지 않는지 검증한다.
+
 ### Authorization rejection
 
 VIEWER token으로 Application 생성 요청을 보내 HTTP 403을 확인한다.
@@ -137,6 +150,14 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `response-loss-deploy.json`
 - `service-after-response-loss.json`
 - `response-loss-audit-actions.txt`
+- `external-conflict-release.json`
+- `external-conflict-deploy-post.json`
+- `external-conflict-deploy-post.err`
+- `external-conflict-cli-update.log`
+- `external-conflict-deploy-status.json`
+- `external-conflict-deploy.json`
+- `external-conflict-status.json`
+- `external-conflict-audit-actions.txt`
 - `audit-actions.txt`
 - Docker build/push/swarm 생성 로그
 
@@ -164,7 +185,6 @@ bash tests/functional-poc/cleanup.sh
 
 - 3-node manager-01 / worker-01 / worker-02 topology
 - broken release + automatic rollback
-- external CLI conflict
 - API restart during update — harness implemented; acceptance pending an actual workflow run
 - Agent response loss — harness implemented; acceptance pending an actual workflow run
 - capacity shortage
@@ -274,7 +294,7 @@ Docker 조회 또는 삭제가 일시적으로 실패하면 해당 marker를 보
 
 Agent proxy의 mutation log는 backend 응답 완료 여부와 분리한다.
 
-- `event=forwarded`: backend로 image mutation 전달을 시작하기 전에 기록
+- `event=forwarded`: backend로 request body 전송이 완료된 직후, 응답을 읽기 전에 기록
 - `event=response`: backend 응답을 끝까지 읽은 경우
 - `event=response_error`: backend 응답이 중간에 끊긴 경우
 
