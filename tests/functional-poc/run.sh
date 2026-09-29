@@ -109,6 +109,22 @@ wait_deployment_terminal() {
   fail "timed out waiting for deployment $deployment_id to reach $expected"
 }
 
+assert_image_mutation_count() {
+  local digest="$1"
+  local expected="$2"
+  local label="$3"
+  local log_file="$LOG_DIR/agent-image-mutations.jsonl"
+  local count=0
+
+  if [[ -s "$log_file" ]]; then
+    count="$(jq -s       --arg digest "$digest"       '[.[] | select((.image // "") | endswith("@" + $digest))] | length'       "$log_file")"
+  fi
+
+  if [[ "$count" != "$expected" ]]; then
+    fail "$label forwarded image mutation count=$count; expected=$expected for digest=$digest"
+  fi
+}
+
 require_command docker
 require_command curl
 require_command jq
@@ -233,6 +249,7 @@ echo "$!" >"$LOG_DIR/agent-proxy.pid"
 cp "$LOG_DIR/agent-proxy.pid" "$OWNERSHIP_DIR/agent-proxy.pid"
 
 wait_http "$AGENT_URL/v1/health" 200 60
+: >"$LOG_DIR/agent-image-mutations.jsonl"
 
 TOKENS_JSON="$(jq -cn   --arg operator "$OPERATOR_TOKEN"   --arg viewer "$VIEWER_TOKEN"   '[
     {
@@ -451,8 +468,6 @@ RESTART_HEALTH_JSON='{
 }'
 
 RESTART_OPERATION_ID="functional-poc-deploy-restart"
-SERVICE_VERSION_BEFORE_RESTART="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
-
 (
   curl -sS     -X POST     -H "Authorization: Bearer $OPERATOR_TOKEN"     -H 'Content-Type: application/json'     --data "$(jq -cn       --arg releaseId "$RESTART_RELEASE_ID"       --argjson health "$RESTART_HEALTH_JSON"       --arg operationId "$RESTART_OPERATION_ID"       '{
         operationId: $operationId,
@@ -485,7 +500,6 @@ cat >"$LOG_DIR/restart-before-crash.txt" <<EOF
 deployment_id=$RESTART_DEPLOYMENT_ID
 operation_id=$RESTART_OPERATION_ID
 operation_status=$RESTART_OPERATION_STATUS
-service_version=$SERVICE_VERSION_BEFORE_RESTART
 service_image=$CURRENT_IMAGE
 EOF
 
@@ -506,10 +520,7 @@ RESTART_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
 printf '%s\n' "$RESTART_SERVICE_JSON" >"$LOG_DIR/service-after-api-restart.json"
 jq -e --arg digest "$RESTART_DIGEST"   '.service.image | contains("@" + $digest)'   <<<"$RESTART_SERVICE_JSON" >/dev/null   || fail "API restart reconciliation did not preserve target digest"
 
-SERVICE_VERSION_AFTER_RESTART="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
-if (( SERVICE_VERSION_AFTER_RESTART != SERVICE_VERSION_BEFORE_RESTART + 1 )); then
-  fail "service version changed more than once across API restart: before=$SERVICE_VERSION_BEFORE_RESTART after=$SERVICE_VERSION_AFTER_RESTART"
-fi
+assert_image_mutation_count "$RESTART_DIGEST" 1 "API restart deployment"
 
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$RESTART_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/restart-audit-actions.txt"
 
@@ -531,8 +542,6 @@ printf '%s\n' "$LOSS_RELEASE_JSON" >"$LOG_DIR/response-loss-release.json"
 LOSS_RELEASE_ID="$(jq -er '.id' <<<"$LOSS_RELEASE_JSON")"
 LOSS_DIGEST="$(jq -er '.imageDigest' <<<"$LOSS_RELEASE_JSON")"
 LOSS_OPERATION_ID="functional-poc-deploy-response-loss"
-SERVICE_VERSION_BEFORE_LOSS="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
-
 : >"$LOG_DIR/agent-proxy-drops.log"
 touch "$LOG_DIR/drop-agent-image-response"
 
@@ -557,10 +566,7 @@ LOSS_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
 printf '%s\n' "$LOSS_SERVICE_JSON" >"$LOG_DIR/service-after-response-loss.json"
 jq -e --arg digest "$LOSS_DIGEST"   '.service.image | contains("@" + $digest)'   <<<"$LOSS_SERVICE_JSON" >/dev/null   || fail "response-loss reconciliation did not preserve target digest"
 
-SERVICE_VERSION_AFTER_LOSS="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
-if (( SERVICE_VERSION_AFTER_LOSS != SERVICE_VERSION_BEFORE_LOSS + 1 )); then
-  fail "service version changed more than once after Agent response loss: before=$SERVICE_VERSION_BEFORE_LOSS after=$SERVICE_VERSION_AFTER_LOSS"
-fi
+assert_image_mutation_count "$LOSS_DIGEST" 1 "Agent response-loss deployment"
 
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$LOSS_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/response-loss-audit-actions.txt"
 
