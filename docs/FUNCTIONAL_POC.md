@@ -56,6 +56,21 @@ GitHub runner
 7. 실제 service image digest가 이전 v2 Release digest로 복구됐는지 확인한다.
 8. root response가 다시 `v2`, `/health`가 HTTP 200인지 확인한다.
 
+### API restart during update
+
+1. startup이 8초 지연되는 healthy `v3` image를 registry에 push한다.
+2. 별도 10초 health stability window로 v3 배포를 시작한다.
+3. DB에 operation/deployment intent가 저장되고, Swarm service image가 v3 digest로 실제 변경된 것을 확인한다.
+4. operation이 아직 `RUNNING` 또는 `VERIFYING`인 상태에서 API 프로세스를 SIGKILL로 종료한다.
+5. 동일 MySQL과 Agent를 유지한 채 API를 다시 시작한다.
+6. application bootstrap reconciliation이 기존 operation을 읽어 배포 검증을 재개한다.
+7. status API polling으로 `SUCCESS`를 확인한다.
+8. live response가 `v3`, `/health`가 HTTP 200인지 확인한다.
+9. Docker service spec version이 정확히 한 번만 증가했는지 확인한다.
+10. 해당 operation의 audit에 `DEPLOY_STARTED`와 `DEPLOY_SUCCEEDED`가 각각 정확히 한 번만 존재하고 실패/attention 이벤트가 없는지 확인한다.
+
+이 시나리오는 API 재기동 후 Docker image mutation을 blind retry하지 않고 persisted intent 기반으로 검증만 재개하는지 확인한다.
+
 ### Authorization rejection
 
 VIEWER token으로 Application 생성 요청을 보내 HTTP 403을 확인한다.
@@ -92,6 +107,14 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `service-after-deploy.json`
 - `service-after-broken-deploy.json`
 - `service-after-rollback.json`
+- `restart-release.json`
+- `restart-before-crash.txt`
+- `restart-deploy-post.json`
+- `restart-deploy-post.err`
+- `restart-deploy-status.json`
+- `restart-deploy.json`
+- `service-after-api-restart.json`
+- `restart-audit-actions.txt`
 - `audit-actions.txt`
 - Docker build/push/swarm 생성 로그
 
@@ -120,7 +143,7 @@ bash tests/functional-poc/cleanup.sh
 - 3-node manager-01 / worker-01 / worker-02 topology
 - broken release + automatic rollback
 - external CLI conflict
-- API restart during update
+- API restart during update — harness implemented; acceptance pending an actual workflow run
 - Agent response loss
 - capacity shortage
 - actual external LB traffic during rollout
