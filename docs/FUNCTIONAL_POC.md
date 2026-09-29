@@ -71,6 +71,19 @@ GitHub runner
 
 이 시나리오는 API 재기동 후 Docker image mutation을 blind retry하지 않고 persisted intent 기반으로 검증만 재개하는지 확인한다.
 
+### Agent response loss
+
+1. PoC API는 실제 Agent 앞의 로컬 pass-through proxy를 사용한다.
+2. `v4` Release 배포 직전에 one-shot marker를 생성한다.
+3. proxy는 `POST /v1/services/:id/image`를 실제 Agent에 전달하고 backend 응답까지 읽는다.
+4. Docker mutation이 실제 적용된 뒤 해당 응답만 API 쪽에서 끊는다.
+5. marker는 즉시 제거되어 이후 inspect 요청은 정상 통과한다.
+6. Docklane이 현재 Swarm 상태를 inspect해 동일 operation을 `SUCCESS`로 복구하는지 확인한다.
+7. Docker service spec version이 정확히 한 번만 증가했는지 확인한다.
+8. audit에서 `DEPLOY_STARTED`와 `DEPLOY_SUCCEEDED`가 각각 한 번이고 failure/attention 이벤트가 없는지 확인한다.
+
+이 시나리오는 Agent 요청을 다시 실행하지 않고 **응답 유실 후 관찰 기반 reconciliation**이 동작하는지 검증한다.
+
 ### Authorization rejection
 
 VIEWER token으로 Application 생성 요청을 보내 HTTP 403을 확인한다.
@@ -115,6 +128,14 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `restart-deploy.json`
 - `service-after-api-restart.json`
 - `restart-audit-actions.txt`
+- `agent-proxy.log`
+- `agent-proxy-drops.log`
+- `response-loss-release.json`
+- `response-loss-deploy-initial.json`
+- `response-loss-deploy-status.json`
+- `response-loss-deploy.json`
+- `service-after-response-loss.json`
+- `response-loss-audit-actions.txt`
 - `audit-actions.txt`
 - Docker build/push/swarm 생성 로그
 
@@ -144,7 +165,7 @@ bash tests/functional-poc/cleanup.sh
 - broken release + automatic rollback
 - external CLI conflict
 - API restart during update — harness implemented; acceptance pending an actual workflow run
-- Agent response loss
+- Agent response loss — harness implemented; acceptance pending an actual workflow run
 - capacity shortage
 - actual external LB traffic during rollout
 - worker failure
