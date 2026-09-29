@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="${DOCKLANE_POC_LOG_DIR:-${RUNNER_TEMP:-/tmp}/docklane-poc}"
+OWNERSHIP_DIR="$LOG_DIR/ownership"
 MYSQL_CONTAINER="docklane-poc-mysql"
 REGISTRY_CONTAINER="docklane-poc-registry"
 SERVICE_NAME="docklane-poc"
@@ -15,13 +16,11 @@ HEALTH_URL="http://127.0.0.1:18080"
 OPERATOR_TOKEN="docklane-poc-operator-00000001"
 VIEWER_TOKEN="docklane-poc-viewer-0000000001"
 
-mkdir -p "$LOG_DIR"
 export DOCKLANE_POC_LOG_DIR="$LOG_DIR"
 
 cleanup() {
   bash "$ROOT_DIR/tests/functional-poc/cleanup.sh" || true
 }
-trap cleanup EXIT
 
 log() {
   printf '[functional-poc] %s\n' "$*"
@@ -116,20 +115,44 @@ require_command jq
 require_command pnpm
 require_command go
 
+preflight_absent_container() {
+  local name="$1"
+  if docker inspect "$name" >/dev/null 2>&1; then
+    fail "functional PoC refuses to start because container already exists: $name"
+  fi
+}
+
+preflight_absent_service() {
+  local name="$1"
+  if docker service inspect "$name" >/dev/null 2>&1; then
+    fail "functional PoC refuses to start because service already exists: $name"
+  fi
+}
+
 if [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "inactive" ]]; then
   fail "functional PoC requires a disposable Docker host with Swarm inactive"
 fi
 
-cleanup
+preflight_absent_container "$REGISTRY_CONTAINER"
+preflight_absent_container "$MYSQL_CONTAINER"
+preflight_absent_service "$SERVICE_NAME"
+
 mkdir -p "$LOG_DIR"
+rm -rf "$OWNERSHIP_DIR"
+mkdir -p "$OWNERSHIP_DIR"
+trap cleanup EXIT
 
 log "starting local OCI registry"
-docker run -d   --name "$REGISTRY_CONTAINER"   -p 5000:5000   registry:2 >"$LOG_DIR/registry.container"
+REGISTRY_CONTAINER_ID="$(docker run -d   --name "$REGISTRY_CONTAINER"   -p 5000:5000   registry:2)"
+printf '%s\n' "$REGISTRY_CONTAINER_ID" >"$LOG_DIR/registry.container"
+printf '%s\n' "$REGISTRY_CONTAINER_ID" >"$OWNERSHIP_DIR/registry.container-id"
 
 wait_http "http://127.0.0.1:5000/v2/" 200 60
 
 log "starting MySQL"
-docker run -d   --name "$MYSQL_CONTAINER"   -e MYSQL_ROOT_PASSWORD=docklane   -e MYSQL_DATABASE=docklane   -p 33306:3306   mysql:8.4 >"$LOG_DIR/mysql.container"
+MYSQL_CONTAINER_ID="$(docker run -d   --name "$MYSQL_CONTAINER"   -e MYSQL_ROOT_PASSWORD=docklane   -e MYSQL_DATABASE=docklane   -p 33306:3306   mysql:8.4)"
+printf '%s\n' "$MYSQL_CONTAINER_ID" >"$LOG_DIR/mysql.container"
+printf '%s\n' "$MYSQL_CONTAINER_ID" >"$OWNERSHIP_DIR/mysql.container-id"
 
 for _ in {1..90}; do
   if docker exec "$MYSQL_CONTAINER"     mysqladmin ping -uroot -pdocklane --silent >/dev/null 2>&1; then
@@ -162,14 +185,18 @@ SWARM_ADDR="$(hostname -I | awk '{print $1}')"
 
 log "initializing single-node Swarm at $SWARM_ADDR"
 docker swarm init --advertise-addr "$SWARM_ADDR" >"$LOG_DIR/swarm-init.log"
-touch "$LOG_DIR/swarm-created"
+SWARM_NODE_ID="$(docker info --format '{{.Swarm.NodeID}}')"
+[[ -n "$SWARM_NODE_ID" ]] || fail "could not record owned Swarm node ID"
+printf '%s\n' "$SWARM_NODE_ID" >"$OWNERSHIP_DIR/swarm.node-id"
 
 log "creating initial replicated service"
-docker service create   --name "$SERVICE_NAME"   --replicas 1   --publish published=18080,target=8080   --update-order start-first   --update-parallelism 1   --reserve-cpu 0.05   --reserve-memory 16M   "$IMAGE_REPO:v1" >"$LOG_DIR/service-create.log"
+SERVICE_ID="$(docker service create   --name "$SERVICE_NAME"   --replicas 1   --publish published=18080,target=8080   --update-order start-first   --update-parallelism 1   --reserve-cpu 0.05   --reserve-memory 16M   "$IMAGE_REPO:v1")"
+printf '%s\n' "$SERVICE_ID" >"$LOG_DIR/service-create.log"
+printf '%s\n' "$SERVICE_ID" >"$OWNERSHIP_DIR/service.id"
 
 wait_for_body "$HEALTH_URL" "v1"
 
-SERVICE_ID="$(docker service inspect "$SERVICE_NAME" --format '{{.ID}}')"
+SERVICE_ID="$(docker service inspect "$SERVICE_ID" --format '{{.ID}}')"
 [[ -n "$SERVICE_ID" ]] || fail "could not resolve service ID"
 
 log "building Docklane API and Agent"
@@ -189,6 +216,7 @@ log "starting Go Agent"
   exec "$ROOT_DIR/agent/bin/docklane-agent"
 ) >"$LOG_DIR/agent.log" 2>&1 &
 echo "$!" >"$LOG_DIR/agent.pid"
+cp "$LOG_DIR/agent.pid" "$OWNERSHIP_DIR/agent.pid"
 
 wait_http "$AGENT_BACKEND_URL/v1/health" 200 60
 
@@ -198,9 +226,11 @@ log "starting Agent response-loss proxy"
   export DOCKLANE_POC_AGENT_BACKEND_PORT=9443
   export DOCKLANE_POC_AGENT_DROP_MARKER="$LOG_DIR/drop-agent-image-response"
   export DOCKLANE_POC_AGENT_DROP_LOG="$LOG_DIR/agent-proxy-drops.log"
+  export DOCKLANE_POC_AGENT_MUTATION_LOG="$LOG_DIR/agent-image-mutations.jsonl"
   exec python3 "$ROOT_DIR/tests/functional-poc/agent-proxy.py"
 ) >"$LOG_DIR/agent-proxy.log" 2>&1 &
 echo "$!" >"$LOG_DIR/agent-proxy.pid"
+cp "$LOG_DIR/agent-proxy.pid" "$OWNERSHIP_DIR/agent-proxy.pid"
 
 wait_http "$AGENT_URL/v1/health" 200 60
 
@@ -265,6 +295,7 @@ start_api() {
   fi
 
   echo "$!" >"$LOG_DIR/api.pid"
+  cp "$LOG_DIR/api.pid" "$OWNERSHIP_DIR/api.pid"
 }
 
 crash_api() {
@@ -273,7 +304,7 @@ crash_api() {
   kill -9 "$pid"
   for _ in {1..20}; do
     if ! kill -0 "$pid" 2>/dev/null; then
-      rm -f "$LOG_DIR/api.pid"
+      rm -f "$LOG_DIR/api.pid" "$OWNERSHIP_DIR/api.pid"
       return 0
     fi
     sleep 0.25
