@@ -180,6 +180,7 @@ jobs:
           bash -n tests/functional-poc/run.sh
           bash -n tests/functional-poc/cleanup.sh
           python3 -m py_compile tests/functional-poc/app/server.py
+          python3 -m py_compile tests/functional-poc/agent-proxy.py
 
   docs-only:
     needs: changes
