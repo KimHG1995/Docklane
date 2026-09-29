@@ -382,6 +382,135 @@ ROLLED_BACK_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")
 printf '%s\n' "$ROLLED_BACK_SERVICE_JSON" >"$LOG_DIR/service-after-rollback.json"
 jq -e --arg digest "$RELEASE_DIGEST"   '.service.image | contains("@" + $digest)'   <<<"$ROLLED_BACK_SERVICE_JSON" >/dev/null   || fail "rollback did not restore the previous release digest"
 
+log "scenario: API restart during deployment verification"
+RESTART_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
+    "version":"v3",
+    "imageRepository":"http://127.0.0.1:5000/docklane-poc",
+    "imageTag":"v3",
+    "gitCommit":"functional-poc-restart",
+    "buildNumber":"manual-smoke-restart"
+  }')"
+printf '%s\n' "$RESTART_RELEASE_JSON" >"$LOG_DIR/restart-release.json"
+RESTART_RELEASE_ID="$(jq -er '.id' <<<"$RESTART_RELEASE_JSON")"
+RESTART_DIGEST="$(jq -er '.imageDigest' <<<"$RESTART_RELEASE_JSON")"
+
+RESTART_HEALTH_JSON='{
+  "url":"http://127.0.0.1:18080/health",
+  "intervalMs":250,
+  "timeoutMs":1000,
+  "retries":10,
+  "stabilityWindowMs":10000,
+  "expectedStatus":200
+}'
+
+RESTART_OPERATION_ID="functional-poc-deploy-restart"
+SERVICE_VERSION_BEFORE_RESTART="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
+
+(
+  curl -sS     -X POST     -H "Authorization: Bearer $OPERATOR_TOKEN"     -H 'Content-Type: application/json'     --data "$(jq -cn       --arg releaseId "$RESTART_RELEASE_ID"       --argjson health "$RESTART_HEALTH_JSON"       --arg operationId "$RESTART_OPERATION_ID"       '{
+        operationId: $operationId,
+        releaseId: $releaseId,
+        health: $health
+      }')"     "$API_URL/v1/clusters/default/targets/$TARGET_ID/deploy"     >"$LOG_DIR/restart-deploy-post.json"     2>"$LOG_DIR/restart-deploy-post.err" || true
+) &
+RESTART_REQUEST_PID="$!"
+
+RESTART_DEPLOYMENT_ID=""
+RESTART_OPERATION_STATUS=""
+for _ in {1..120}; do
+  RESTART_OPERATION_STATUS="$(docker exec "$MYSQL_CONTAINER"     mysql -uroot -pdocklane docklane     --batch --skip-column-names     -e "SELECT status FROM operations WHERE id = '$RESTART_OPERATION_ID' LIMIT 1"     2>/dev/null || true)"
+  RESTART_DEPLOYMENT_ID="$(docker exec "$MYSQL_CONTAINER"     mysql -uroot -pdocklane docklane     --batch --skip-column-names     -e "SELECT id FROM deployments WHERE operation_id = '$RESTART_OPERATION_ID' LIMIT 1"     2>/dev/null || true)"
+  CURRENT_IMAGE="$(docker service inspect "$SERVICE_NAME" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+
+  if [[ -n "$RESTART_DEPLOYMENT_ID" ]] &&
+     [[ "$RESTART_OPERATION_STATUS" == "RUNNING" || "$RESTART_OPERATION_STATUS" == "VERIFYING" ]] &&
+     [[ "$CURRENT_IMAGE" == *"@$RESTART_DIGEST"* ]]; then
+    break
+  fi
+  sleep 0.5
+done
+
+[[ -n "$RESTART_DEPLOYMENT_ID" ]]   || fail "restart scenario did not persist deployment intent"
+[[ "$RESTART_OPERATION_STATUS" == "RUNNING" || "$RESTART_OPERATION_STATUS" == "VERIFYING" ]]   || fail "restart scenario operation became terminal before API crash: $RESTART_OPERATION_STATUS"
+[[ "$CURRENT_IMAGE" == *"@$RESTART_DIGEST"* ]]   || fail "restart scenario Docker mutation was not accepted before API crash"
+
+cat >"$LOG_DIR/restart-before-crash.txt" <<EOF
+deployment_id=$RESTART_DEPLOYMENT_ID
+operation_id=$RESTART_OPERATION_ID
+operation_status=$RESTART_OPERATION_STATUS
+service_version=$SERVICE_VERSION_BEFORE_RESTART
+service_image=$CURRENT_IMAGE
+EOF
+
+crash_api
+wait "$RESTART_REQUEST_PID" 2>/dev/null || true
+
+log "restarting Nest API against persisted MySQL state"
+start_api append
+wait_http "$API_URL/health" 200 120
+
+RESTART_DEPLOY_JSON="$(wait_deployment_terminal   "$RESTART_DEPLOYMENT_ID"   SUCCESS   "$LOG_DIR/restart-deploy-status.json"   120)"
+printf '%s\n' "$RESTART_DEPLOY_JSON" >"$LOG_DIR/restart-deploy.json"
+
+wait_for_body "$HEALTH_URL" "v3"
+wait_http "$HEALTH_URL/health" 200 60
+
+RESTART_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
+printf '%s\n' "$RESTART_SERVICE_JSON" >"$LOG_DIR/service-after-api-restart.json"
+jq -e --arg digest "$RESTART_DIGEST"   '.service.image | contains("@" + $digest)'   <<<"$RESTART_SERVICE_JSON" >/dev/null   || fail "API restart reconciliation did not preserve target digest"
+
+SERVICE_VERSION_AFTER_RESTART="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
+if (( SERVICE_VERSION_AFTER_RESTART != SERVICE_VERSION_BEFORE_RESTART + 1 )); then
+  fail "service version changed more than once across API restart: before=$SERVICE_VERSION_BEFORE_RESTART after=$SERVICE_VERSION_AFTER_RESTART"
+fi
+
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$RESTART_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/restart-audit-actions.txt"
+
+[[ "$(grep -c '^DEPLOY_STARTED
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
+
+for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
+  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
+done
+
+cat >"$LOG_DIR/summary.txt" <<EOF
+normal digest deploy: PASS
+same digest/spec no-op redeploy: PASS
+broken release manual rollback: PASS
+API restart during update: PASS
+authorization rejection: PASS
+audit completeness: PASS
+release digest: $RELEASE_DIGEST
+service id: $SERVICE_ID
+EOF
+
+log "functional PoC smoke passed"
+cat "$LOG_DIR/summary.txt"
+ "$LOG_DIR/restart-audit-actions.txt" || true)" == "1" ]]   || fail "restart deployment must have exactly one DEPLOY_STARTED audit"
+[[ "$(grep -c '^DEPLOY_SUCCEEDED
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
+
+for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
+  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
+done
+
+cat >"$LOG_DIR/summary.txt" <<EOF
+normal digest deploy: PASS
+same digest/spec no-op redeploy: PASS
+broken release manual rollback: PASS
+authorization rejection: PASS
+audit completeness: PASS
+release digest: $RELEASE_DIGEST
+service id: $SERVICE_ID
+EOF
+
+log "functional PoC smoke passed"
+cat "$LOG_DIR/summary.txt"
+ "$LOG_DIR/restart-audit-actions.txt" || true)" == "1" ]]   || fail "restart deployment must have exactly one DEPLOY_SUCCEEDED audit"
+if grep -Eq 'DEPLOY_FAILED|DEPLOY_NEEDS_ATTENTION' "$LOG_DIR/restart-audit-actions.txt"; then
+  fail "restart deployment recorded failure/attention audit"
+fi
+
 log "scenario: audit completeness"
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
 
