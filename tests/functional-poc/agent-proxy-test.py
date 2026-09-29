@@ -82,6 +82,136 @@ def post_image(port, image):
         connection.close()
 
 
+class BrokenThenConflictHandler(BaseHTTPRequestHandler):
+    requests = 0
+
+    def do_POST(self):
+        BrokenThenConflictHandler.requests += 1
+        length = int(self.headers.get("content-length", "0"))
+        if length:
+            self.rfile.read(length)
+
+        if BrokenThenConflictHandler.requests == 1:
+            body = b'{"partial":'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body) + 32))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.close()
+            return
+
+        body = b'{"error":"conflict"}'
+        self.send_response(409)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
+def run_incomplete_response_regression(root):
+    backend_port = free_port()
+    proxy_port = free_port()
+    backend = ThreadingHTTPServer(
+        ("127.0.0.1", backend_port),
+        BrokenThenConflictHandler,
+    )
+    thread = threading.Thread(target=backend.serve_forever, daemon=True)
+    thread.start()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        mutation_log = tmp_path / "mutations.jsonl"
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "DOCKLANE_POC_AGENT_BACKEND_HOST": "127.0.0.1",
+                "DOCKLANE_POC_AGENT_BACKEND_PORT": str(backend_port),
+                "DOCKLANE_POC_AGENT_PROXY_PORT": str(proxy_port),
+                "DOCKLANE_POC_AGENT_DROP_MARKER": str(tmp_path / "unused-drop"),
+                "DOCKLANE_POC_AGENT_DROP_LOG": str(tmp_path / "drops.log"),
+                "DOCKLANE_POC_AGENT_MUTATION_LOG": str(mutation_log),
+            }
+        )
+
+        process = subprocess.Popen(
+            [sys.executable, str(root / "tests/functional-poc/agent-proxy.py")],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wait_proxy(proxy_port)
+            image = "registry.example/api@sha256:" + ("b" * 64)
+
+            first_failed = False
+            try:
+                post_image(proxy_port, image)
+            except (
+                http.client.IncompleteRead,
+                http.client.RemoteDisconnected,
+                ConnectionResetError,
+                BrokenPipeError,
+            ):
+                first_failed = True
+            if not first_failed:
+                raise AssertionError("incomplete backend response was not surfaced")
+
+            status, _ = post_image(proxy_port, image)
+            if status != 409:
+                raise AssertionError(f"second Agent request returned {status}")
+
+            records = [
+                json.loads(line)
+                for line in mutation_log.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            forwarded = [
+                record for record in records if record.get("event") == "forwarded"
+            ]
+            response_errors = [
+                record
+                for record in records
+                if record.get("event") == "response_error"
+            ]
+            responses = [
+                record for record in records if record.get("event") == "response"
+            ]
+
+            if len(forwarded) != 2:
+                raise AssertionError(
+                    f"incomplete response must still count both forwards: {records}"
+                )
+            if len(response_errors) != 1:
+                raise AssertionError(
+                    f"expected one response_error event: {records}"
+                )
+            if len(responses) != 1 or responses[0].get("backendStatus") != 409:
+                raise AssertionError(
+                    f"expected second response to record 409: {records}"
+                )
+            if BrokenThenConflictHandler.requests != 2:
+                raise AssertionError(
+                    "backend did not receive both mutation attempts"
+                )
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+            backend.shutdown()
+            backend.server_close()
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     backend_port = free_port()
@@ -139,12 +269,24 @@ def main():
                 for line in mutation_log.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            if len(records) != 2:
-                raise AssertionError(f"expected 2 forwarded image mutations, got {len(records)}")
-            if [record["dropped"] for record in records] != [True, False]:
-                raise AssertionError(f"unexpected drop flags: {records}")
-            if any(record.get("image") != image for record in records):
-                raise AssertionError(f"image was not recorded correctly: {records}")
+            forwarded = [
+                record for record in records if record.get("event") == "forwarded"
+            ]
+            responses = [
+                record for record in records if record.get("event") == "response"
+            ]
+            if len(forwarded) != 2:
+                raise AssertionError(
+                    f"expected 2 forwarded image mutations, got {len(forwarded)}"
+                )
+            if [record["dropped"] for record in forwarded] != [True, False]:
+                raise AssertionError(f"unexpected drop flags: {forwarded}")
+            if any(record.get("image") != image for record in forwarded):
+                raise AssertionError(
+                    f"image was not recorded correctly: {forwarded}"
+                )
+            if len(responses) != 2:
+                raise AssertionError(f"expected 2 backend responses, got {responses}")
             if BackendHandler.requests != 2:
                 raise AssertionError(
                     f"backend expected 2 mutation requests, got {BackendHandler.requests}"
@@ -165,7 +307,8 @@ def main():
             backend.shutdown()
             backend.server_close()
 
-    print("Agent proxy mutation-count regression: PASS")
+    run_incomplete_response_regression(root)
+    print("Agent proxy mutation-count regressions: PASS")
 
 
 if __name__ == "__main__":
