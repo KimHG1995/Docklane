@@ -3,10 +3,11 @@ set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="${DOCKLANE_POC_LOG_DIR:-${RUNNER_TEMP:-/tmp}/docklane-poc}"
+OWNERSHIP_DIR="$LOG_DIR/ownership"
 
-kill_from_pidfile() {
+kill_owned_pid() {
   local name="$1"
-  local file="$LOG_DIR/$name.pid"
+  local file="$OWNERSHIP_DIR/$name.pid"
 
   if [[ ! -f "$file" ]]; then
     return
@@ -26,22 +27,65 @@ kill_from_pidfile() {
   fi
 }
 
-kill_from_pidfile api
-kill_from_pidfile agent-proxy
-kill_from_pidfile agent
+remove_owned_container() {
+  local name="$1"
+  local file="$OWNERSHIP_DIR/$name.container-id"
 
-if command -v docker >/dev/null 2>&1; then
-  if [[ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)" == "active" ]]; then
-    docker service rm docklane-poc >/dev/null 2>&1 || true
+  [[ -f "$file" ]] || return
+
+  local owned_id current_id
+  owned_id="$(cat "$file" 2>/dev/null || true)"
+  [[ -n "$owned_id" ]] || return
+
+  current_id="$(docker inspect --format '{{.Id}}' "$owned_id" 2>/dev/null || true)"
+  if [[ "$current_id" == "$owned_id" ]]; then
+    docker rm -f "$owned_id" >/dev/null 2>&1 || true
   fi
+}
 
-  if [[ -f "$LOG_DIR/swarm-created" ]]; then
+remove_owned_service() {
+  local file="$OWNERSHIP_DIR/service.id"
+  [[ -f "$file" ]] || return
+
+  local owned_id current_id
+  owned_id="$(cat "$file" 2>/dev/null || true)"
+  [[ -n "$owned_id" ]] || return
+
+  current_id="$(docker service inspect "$owned_id" --format '{{.ID}}' 2>/dev/null || true)"
+  if [[ "$current_id" == "$owned_id" ]]; then
+    docker service rm "$owned_id" >/dev/null 2>&1 || true
+  fi
+}
+
+leave_owned_swarm() {
+  local file="$OWNERSHIP_DIR/swarm.node-id"
+  [[ -f "$file" ]] || return
+
+  local owned_node current_node state
+  owned_node="$(cat "$file" 2>/dev/null || true)"
+  [[ -n "$owned_node" ]] || return
+
+  state="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
+  [[ "$state" == "active" ]] || return
+
+  current_node="$(docker info --format '{{.Swarm.NodeID}}' 2>/dev/null || true)"
+  if [[ "$current_node" == "$owned_node" ]]; then
     docker swarm leave --force >/dev/null 2>&1 || true
   fi
+}
 
-  docker rm -f docklane-poc-registry docklane-poc-mysql >/dev/null 2>&1 || true
+kill_owned_pid api
+kill_owned_pid agent-proxy
+kill_owned_pid agent
+
+if command -v docker >/dev/null 2>&1; then
+  remove_owned_service
+  leave_owned_swarm
+  remove_owned_container registry
+  remove_owned_container mysql
 fi
 
-rm -f "$LOG_DIR/api.pid" "$LOG_DIR/agent-proxy.pid" "$LOG_DIR/agent.pid" "$LOG_DIR/swarm-created" "$LOG_DIR/drop-agent-image-response"
+rm -f "$LOG_DIR/drop-agent-image-response"
+rm -rf "$OWNERSHIP_DIR"
 
 printf 'Functional PoC cleanup complete (%s)\n' "$ROOT_DIR"
