@@ -649,51 +649,8 @@ assert_image_mutation_count "$EXTERNAL_DIGEST" 1 "external CLI conflict deployme
 
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$EXTERNAL_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/external-conflict-audit-actions.txt"
 
-[[ "$(grep -c '^DEPLOY_STARTED
-docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
-
-for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
-  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
-done
-
-cat >"$LOG_DIR/summary.txt" <<EOF
-normal digest deploy: PASS
-same digest/spec no-op redeploy: PASS
-broken release manual rollback: PASS
-API restart during update: PASS
-Agent response loss: PASS
-external CLI conflict: PASS
-authorization rejection: PASS
-audit completeness: PASS
-release digest: $RELEASE_DIGEST
-service id: $SERVICE_ID
-EOF
-
-log "functional PoC smoke passed"
-cat "$LOG_DIR/summary.txt"
- "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_STARTED audit"
-[[ "$(grep -c '^DEPLOY_NEEDS_ATTENTION
-docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
-
-for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
-  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
-done
-
-cat >"$LOG_DIR/summary.txt" <<EOF
-normal digest deploy: PASS
-same digest/spec no-op redeploy: PASS
-broken release manual rollback: PASS
-API restart during update: PASS
-Agent response loss: PASS
-authorization rejection: PASS
-audit completeness: PASS
-release digest: $RELEASE_DIGEST
-service id: $SERVICE_ID
-EOF
-
-log "functional PoC smoke passed"
-cat "$LOG_DIR/summary.txt"
- "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_NEEDS_ATTENTION audit"
+[[ "$(grep -c '^DEPLOY_STARTED$' "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_STARTED audit"
+[[ "$(grep -c '^DEPLOY_NEEDS_ATTENTION$' "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_NEEDS_ATTENTION audit"
 if grep -Eq 'DEPLOY_SUCCEEDED|DEPLOY_FAILED' "$LOG_DIR/external-conflict-audit-actions.txt"; then
   fail "external conflict deployment recorded success/failure instead of operator attention"
 fi
@@ -711,6 +668,7 @@ same digest/spec no-op redeploy: PASS
 broken release manual rollback: PASS
 API restart during update: PASS
 Agent response loss: PASS
+external CLI conflict: PASS
 authorization rejection: PASS
 audit completeness: PASS
 release digest: $RELEASE_DIGEST
