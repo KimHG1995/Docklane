@@ -18,7 +18,7 @@ mkdir -p "$LOG_DIR"
 export DOCKLANE_POC_LOG_DIR="$LOG_DIR"
 
 cleanup() {
-  "$ROOT_DIR/tests/functional-poc/cleanup.sh" || true
+  bash "$ROOT_DIR/tests/functional-poc/cleanup.sh" || true
 }
 trap cleanup EXIT
 
@@ -77,6 +77,36 @@ api_post() {
 api_get() {
   local path="$1"
   curl -fsS     -H "Authorization: Bearer $OPERATOR_TOKEN"     "$API_URL$path"
+}
+
+wait_deployment_terminal() {
+  local deployment_id="$1"
+  local expected="$2"
+  local output_file="$3"
+  local attempts="${4:-120}"
+
+  for ((i = 1; i <= attempts; i++)); do
+    local status_json
+    status_json="$(api_get "/v1/clusters/default/deployments/$deployment_id/status")"
+    printf '%s\n' "$status_json" >"$output_file"
+
+    local status
+    status="$(jq -er '.deployment.status' <<<"$status_json")"
+
+    case "$status" in
+      "$expected")
+        jq -c '.deployment' <<<"$status_json"
+        return 0
+        ;;
+      SUCCESS|FAILED|ROLLED_BACK|ROLLBACK_FAILED|NEEDS_ATTENTION)
+        fail "deployment $deployment_id reached terminal status $status; expected $expected"
+        ;;
+    esac
+
+    sleep 1
+  done
+
+  fail "timed out waiting for deployment $deployment_id to reach $expected"
 }
 
 require_command docker
@@ -234,6 +264,9 @@ DEPLOY_JSON="$(api_post   "/v1/clusters/default/targets/$TARGET_ID/deploy"   "$(
       releaseId: $releaseId,
       health: $health
     }')")"
+printf '%s\n' "$DEPLOY_JSON" >"$LOG_DIR/deploy-initial.json"
+DEPLOYMENT_ID="$(jq -er '.id' <<<"$DEPLOY_JSON")"
+DEPLOY_JSON="$(wait_deployment_terminal "$DEPLOYMENT_ID" SUCCESS "$LOG_DIR/deploy-status.json")"
 printf '%s\n' "$DEPLOY_JSON" >"$LOG_DIR/deploy.json"
 jq -e '.status == "SUCCESS" and .noOp == false' <<<"$DEPLOY_JSON" >/dev/null   || fail "normal deploy did not finish SUCCESS"
 
@@ -249,6 +282,9 @@ NOOP_JSON="$(api_post   "/v1/clusters/default/targets/$TARGET_ID/deploy"   "$(jq
       releaseId: $releaseId,
       health: $health
     }')")"
+printf '%s\n' "$NOOP_JSON" >"$LOG_DIR/noop-deploy-initial.json"
+NOOP_DEPLOYMENT_ID="$(jq -er '.id' <<<"$NOOP_JSON")"
+NOOP_JSON="$(wait_deployment_terminal "$NOOP_DEPLOYMENT_ID" SUCCESS "$LOG_DIR/noop-deploy-status.json")"
 printf '%s\n' "$NOOP_JSON" >"$LOG_DIR/noop-deploy.json"
 jq -e '.status == "SUCCESS" and .noOp == true' <<<"$NOOP_JSON" >/dev/null   || fail "same digest/spec redeploy was not verified as no-op SUCCESS"
 
@@ -269,8 +305,10 @@ BROKEN_DEPLOY_JSON="$(api_post   "/v1/clusters/default/targets/$TARGET_ID/deploy
       releaseId: $releaseId,
       health: $health
     }')")"
-printf '%s\n' "$BROKEN_DEPLOY_JSON" >"$LOG_DIR/broken-deploy.json"
+printf '%s\n' "$BROKEN_DEPLOY_JSON" >"$LOG_DIR/broken-deploy-initial.json"
 BROKEN_DEPLOYMENT_ID="$(jq -er '.id' <<<"$BROKEN_DEPLOY_JSON")"
+BROKEN_DEPLOY_JSON="$(wait_deployment_terminal "$BROKEN_DEPLOYMENT_ID" FAILED "$LOG_DIR/broken-deploy-status.json")"
+printf '%s\n' "$BROKEN_DEPLOY_JSON" >"$LOG_DIR/broken-deploy.json"
 jq -e '.status == "FAILED"' <<<"$BROKEN_DEPLOY_JSON" >/dev/null   || fail "broken release did not finish FAILED"
 
 BROKEN_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
@@ -279,6 +317,8 @@ jq -e --arg digest "$BROKEN_DIGEST"   '.service.image | contains("@" + $digest)'
 
 log "scenario: manual rollback recovery"
 ROLLBACK_JSON="$(api_post   "/v1/clusters/default/deployments/$BROKEN_DEPLOYMENT_ID/rollback"   '{"operationId":"functional-poc-rollback-broken"}')"
+printf '%s\n' "$ROLLBACK_JSON" >"$LOG_DIR/rollback-initial.json"
+ROLLBACK_JSON="$(wait_deployment_terminal "$BROKEN_DEPLOYMENT_ID" ROLLED_BACK "$LOG_DIR/rollback-status.json")"
 printf '%s\n' "$ROLLBACK_JSON" >"$LOG_DIR/rollback.json"
 jq -e '.status == "ROLLED_BACK"' <<<"$ROLLBACK_JSON" >/dev/null   || fail "manual rollback did not finish ROLLED_BACK"
 
