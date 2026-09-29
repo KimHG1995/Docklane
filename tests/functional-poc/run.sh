@@ -179,7 +179,7 @@ done
 
 docker exec "$MYSQL_CONTAINER"   mysqladmin ping -uroot -pdocklane --silent >/dev/null 2>&1   || fail "MySQL did not become ready"
 
-log "building and pushing v1/v2/v3/v4/broken fixture images"
+log "building and pushing v1/v2/v3/v4/v5/broken fixture images"
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v1   -t "$IMAGE_REPO:v1"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v1.log"
 
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v2   -t "$IMAGE_REPO:v2"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v2.log"
@@ -188,12 +188,15 @@ docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg 
 
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v4   -t "$IMAGE_REPO:v4"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v4.log"
 
+docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=v5   -t "$IMAGE_REPO:v5"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-v5.log"
+
 docker build   -f "$ROOT_DIR/tests/functional-poc/app/Dockerfile"   --build-arg VERSION=vbroken   --build-arg HEALTH_STATUS=503   -t "$IMAGE_REPO:vbroken"   "$ROOT_DIR/tests/functional-poc/app"   >"$LOG_DIR/docker-build-vbroken.log"
 
 docker push "$IMAGE_REPO:v1" >"$LOG_DIR/docker-push-v1.log"
 docker push "$IMAGE_REPO:v2" >"$LOG_DIR/docker-push-v2.log"
 docker push "$IMAGE_REPO:v3" >"$LOG_DIR/docker-push-v3.log"
 docker push "$IMAGE_REPO:v4" >"$LOG_DIR/docker-push-v4.log"
+docker push "$IMAGE_REPO:v5" >"$LOG_DIR/docker-push-v5.log"
 docker push "$IMAGE_REPO:vbroken" >"$LOG_DIR/docker-push-vbroken.log"
 
 SWARM_ADDR="$(hostname -I | awk '{print $1}')"
@@ -574,6 +577,125 @@ docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --sk
 [[ "$(grep -c '^DEPLOY_SUCCEEDED$' "$LOG_DIR/response-loss-audit-actions.txt" || true)" == "1" ]]   || fail "response-loss deployment must have exactly one DEPLOY_SUCCEEDED audit"
 if grep -Eq 'DEPLOY_FAILED|DEPLOY_NEEDS_ATTENTION' "$LOG_DIR/response-loss-audit-actions.txt"; then
   fail "response-loss deployment recorded failure/attention audit"
+fi
+
+log "scenario: external CLI service spec conflict during deployment verification"
+EXTERNAL_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
+    "version":"v5",
+    "imageRepository":"http://127.0.0.1:5000/docklane-poc",
+    "imageTag":"v5",
+    "gitCommit":"functional-poc-external-conflict",
+    "buildNumber":"manual-smoke-external-conflict"
+  }')"
+printf '%s\n' "$EXTERNAL_RELEASE_JSON" >"$LOG_DIR/external-conflict-release.json"
+EXTERNAL_RELEASE_ID="$(jq -er '.id' <<<"$EXTERNAL_RELEASE_JSON")"
+EXTERNAL_DIGEST="$(jq -er '.imageDigest' <<<"$EXTERNAL_RELEASE_JSON")"
+EXTERNAL_OPERATION_ID="functional-poc-deploy-external-conflict"
+
+EXTERNAL_HEALTH_JSON='{
+  "url":"http://127.0.0.1:18080/health",
+  "intervalMs":250,
+  "timeoutMs":1000,
+  "retries":10,
+  "stabilityWindowMs":10000,
+  "expectedStatus":200
+}'
+
+(
+  curl -sS     -X POST     -H "Authorization: Bearer $OPERATOR_TOKEN"     -H 'Content-Type: application/json'     --data "$(jq -cn       --arg releaseId "$EXTERNAL_RELEASE_ID"       --argjson health "$EXTERNAL_HEALTH_JSON"       --arg operationId "$EXTERNAL_OPERATION_ID"       '{
+        operationId: $operationId,
+        releaseId: $releaseId,
+        health: $health
+      }')"     "$API_URL/v1/clusters/default/targets/$TARGET_ID/deploy"     >"$LOG_DIR/external-conflict-deploy-post.json"     2>"$LOG_DIR/external-conflict-deploy-post.err" || true
+) &
+EXTERNAL_REQUEST_PID="$!"
+
+EXTERNAL_DEPLOYMENT_ID=""
+EXTERNAL_OPERATION_STATUS=""
+CURRENT_IMAGE=""
+for _ in {1..120}; do
+  EXTERNAL_OPERATION_STATUS="$(docker exec "$MYSQL_CONTAINER"     mysql -uroot -pdocklane docklane     --batch --skip-column-names     -e "SELECT status FROM operations WHERE id = '$EXTERNAL_OPERATION_ID' LIMIT 1"     2>/dev/null || true)"
+  EXTERNAL_DEPLOYMENT_ID="$(docker exec "$MYSQL_CONTAINER"     mysql -uroot -pdocklane docklane     --batch --skip-column-names     -e "SELECT id FROM deployments WHERE operation_id = '$EXTERNAL_OPERATION_ID' LIMIT 1"     2>/dev/null || true)"
+  CURRENT_IMAGE="$(docker service inspect "$SERVICE_NAME" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+
+  if [[ -n "$EXTERNAL_DEPLOYMENT_ID" ]] &&
+     [[ "$EXTERNAL_OPERATION_STATUS" == "RUNNING" || "$EXTERNAL_OPERATION_STATUS" == "VERIFYING" ]] &&
+     [[ "$CURRENT_IMAGE" == *"@$EXTERNAL_DIGEST"* ]]; then
+    break
+  fi
+  sleep 0.25
+done
+
+[[ -n "$EXTERNAL_DEPLOYMENT_ID" ]]   || fail "external conflict scenario did not persist deployment intent"
+[[ "$EXTERNAL_OPERATION_STATUS" == "RUNNING" || "$EXTERNAL_OPERATION_STATUS" == "VERIFYING" ]]   || fail "external conflict scenario operation became terminal before CLI mutation: $EXTERNAL_OPERATION_STATUS"
+[[ "$CURRENT_IMAGE" == *"@$EXTERNAL_DIGEST"* ]]   || fail "external conflict scenario target image was not observed before CLI mutation"
+
+docker service update   --label-add docklane.poc.external-conflict=1   "$SERVICE_NAME"   >"$LOG_DIR/external-conflict-cli-update.log"
+
+wait "$EXTERNAL_REQUEST_PID" 2>/dev/null || true
+
+EXTERNAL_DEPLOY_JSON="$(wait_deployment_terminal   "$EXTERNAL_DEPLOYMENT_ID"   NEEDS_ATTENTION   "$LOG_DIR/external-conflict-deploy-status.json"   120)"
+printf '%s\n' "$EXTERNAL_DEPLOY_JSON" >"$LOG_DIR/external-conflict-deploy.json"
+
+EXTERNAL_STATUS_JSON="$(api_get "/v1/clusters/default/deployments/$EXTERNAL_DEPLOYMENT_ID/status")"
+printf '%s\n' "$EXTERNAL_STATUS_JSON" >"$LOG_DIR/external-conflict-status.json"
+jq -e   '.deployment.status == "NEEDS_ATTENTION"
+    and .operation.status == "NEEDS_ATTENTION"
+    and .operation.errorCode == "EXTERNAL_SERVICE_CONFLICT"'   <<<"$EXTERNAL_STATUS_JSON" >/dev/null   || fail "external CLI spec change was not classified as EXTERNAL_SERVICE_CONFLICT"
+
+wait_for_body "$HEALTH_URL" "v5"
+wait_http "$HEALTH_URL/health" 200 60
+assert_image_mutation_count "$EXTERNAL_DIGEST" 1 "external CLI conflict deployment"
+
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$EXTERNAL_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/external-conflict-audit-actions.txt"
+
+[[ "$(grep -c '^DEPLOY_STARTED
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
+
+for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
+  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
+done
+
+cat >"$LOG_DIR/summary.txt" <<EOF
+normal digest deploy: PASS
+same digest/spec no-op redeploy: PASS
+broken release manual rollback: PASS
+API restart during update: PASS
+Agent response loss: PASS
+external CLI conflict: PASS
+authorization rejection: PASS
+audit completeness: PASS
+release digest: $RELEASE_DIGEST
+service id: $SERVICE_ID
+EOF
+
+log "functional PoC smoke passed"
+cat "$LOG_DIR/summary.txt"
+ "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_STARTED audit"
+[[ "$(grep -c '^DEPLOY_NEEDS_ATTENTION
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
+
+for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
+  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
+done
+
+cat >"$LOG_DIR/summary.txt" <<EOF
+normal digest deploy: PASS
+same digest/spec no-op redeploy: PASS
+broken release manual rollback: PASS
+API restart during update: PASS
+Agent response loss: PASS
+authorization rejection: PASS
+audit completeness: PASS
+release digest: $RELEASE_DIGEST
+service id: $SERVICE_ID
+EOF
+
+log "functional PoC smoke passed"
+cat "$LOG_DIR/summary.txt"
+ "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_NEEDS_ATTENTION audit"
+if grep -Eq 'DEPLOY_SUCCEEDED|DEPLOY_FAILED' "$LOG_DIR/external-conflict-audit-actions.txt"; then
+  fail "external conflict deployment recorded success/failure instead of operator attention"
 fi
 
 log "scenario: audit completeness"
