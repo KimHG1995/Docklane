@@ -2,6 +2,11 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if ! grep -Eq 'docker service create[[:space:]].*--quiet' "$ROOT_DIR/tests/functional-poc/run.sh"; then
+  echo "docker service create must use --quiet so SERVICE_ID contains only the ID" >&2
+  exit 1
+fi
+
 TMP_DIR="$(mktemp -d)"
 FAKE_BIN="$TMP_DIR/bin"
 DOCKER_LOG="$TMP_DIR/docker.log"
