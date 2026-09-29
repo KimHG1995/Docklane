@@ -29,6 +29,7 @@ case "${1:-}" in
   inspect)
     id="${@: -1}"
     if is_removed "$id"; then
+      printf 'Error: No such object: %s\n' "$id" >&2
       exit 1
     fi
     printf '%s\n' "$id"
@@ -45,6 +46,7 @@ case "${1:-}" in
       inspect)
         id="${3:-}"
         if is_removed "service-$id"; then
+          printf 'Error: no such service: %s\n' "$id" >&2
           exit 1
         fi
         printf '%s\n' "$id"
