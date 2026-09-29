@@ -183,10 +183,12 @@ jobs:
           python3 -m py_compile tests/functional-poc/agent-proxy.py
           python3 -m py_compile tests/functional-poc/agent-proxy-test.py
           bash -n tests/functional-poc/preflight-safety-test.sh
+          bash -n tests/functional-poc/cleanup-retry-test.sh
 
       - name: Run Functional PoC harness regressions
         run: |
           bash tests/functional-poc/preflight-safety-test.sh
+          bash tests/functional-poc/cleanup-retry-test.sh
           python3 tests/functional-poc/agent-proxy-test.py
 
   docs-only:
