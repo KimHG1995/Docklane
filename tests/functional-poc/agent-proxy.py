@@ -59,6 +59,36 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if key.lower() not in HOP_BY_HOP and key.lower() != "host"
         }
 
+        is_image_mutation = (
+            self.command == "POST"
+            and self.path.startswith("/v1/services/")
+            and self.path.endswith("/image")
+        )
+        should_drop = is_image_mutation and DROP_MARKER.exists()
+
+        mutation_context = None
+        if is_image_mutation:
+            mutation_context = {
+                "method": self.command,
+                "path": self.path,
+                "dropped": should_drop,
+            }
+            if body:
+                try:
+                    parsed_body = json.loads(body)
+                    if isinstance(parsed_body, dict):
+                        mutation_context["image"] = parsed_body.get("image")
+                        mutation_context["expectedVersion"] = parsed_body.get(
+                            "expectedVersion"
+                        )
+                        mutation_context["targetSpecHash"] = parsed_body.get(
+                            "targetSpecHash"
+                        )
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    mutation_context["bodyParseError"] = True
+
+            self._log_mutation_event("forwarded", mutation_context)
+
         connection = http.client.HTTPConnection(
             BACKEND_HOST,
             BACKEND_PORT,
@@ -72,42 +102,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 headers=headers,
             )
             response = connection.getresponse()
-            response_body = response.read()
-            response_headers = response.getheaders()
+            try:
+                response_body = response.read()
+                response_headers = response.getheaders()
+            except Exception as error:
+                if mutation_context is not None:
+                    self._log_mutation_event(
+                        "response_error",
+                        mutation_context,
+                        error=repr(error),
+                    )
+                raise
+
+            if mutation_context is not None:
+                self._log_mutation_event(
+                    "response",
+                    mutation_context,
+                    backend_status=response.status,
+                )
         finally:
             connection.close()
-
-        is_image_mutation = (
-            self.command == "POST"
-            and self.path.startswith("/v1/services/")
-            and self.path.endswith("/image")
-        )
-        should_drop = is_image_mutation and DROP_MARKER.exists()
-
-        if is_image_mutation:
-            mutation = {
-                "method": self.command,
-                "path": self.path,
-                "backendStatus": response.status,
-                "dropped": should_drop,
-            }
-            if body:
-                try:
-                    parsed_body = json.loads(body)
-                    if isinstance(parsed_body, dict):
-                        mutation["image"] = parsed_body.get("image")
-                        mutation["expectedVersion"] = parsed_body.get(
-                            "expectedVersion"
-                        )
-                        mutation["targetSpecHash"] = parsed_body.get(
-                            "targetSpecHash"
-                        )
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    mutation["bodyParseError"] = True
-
-            MUTATION_LOG.parent.mkdir(parents=True, exist_ok=True)
-            with MUTATION_LOG.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(mutation, sort_keys=True) + "\n")
 
         if should_drop:
             DROP_MARKER.unlink(missing_ok=True)
@@ -136,6 +150,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         if response_body:
             self.wfile.write(response_body)
+
+    def _log_mutation_event(
+        self,
+        event,
+        context,
+        backend_status=None,
+        error=None,
+    ):
+        record = dict(context)
+        record["event"] = event
+        if backend_status is not None:
+            record["backendStatus"] = backend_status
+        if error is not None:
+            record["error"] = error
+
+        MUTATION_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with MUTATION_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
 
     def log_message(self, format, *args):
         return
