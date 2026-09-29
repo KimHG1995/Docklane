@@ -212,6 +212,76 @@ def run_incomplete_response_regression(root):
             backend.server_close()
 
 
+def run_connect_failure_regression(root):
+    backend_port = free_port()
+    proxy_port = free_port()
+
+    # Reserve and release backend_port so nothing is listening there.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        mutation_log = tmp_path / "mutations.jsonl"
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "DOCKLANE_POC_AGENT_BACKEND_HOST": "127.0.0.1",
+                "DOCKLANE_POC_AGENT_BACKEND_PORT": str(backend_port),
+                "DOCKLANE_POC_AGENT_PROXY_PORT": str(proxy_port),
+                "DOCKLANE_POC_AGENT_DROP_MARKER": str(tmp_path / "unused-drop"),
+                "DOCKLANE_POC_AGENT_DROP_LOG": str(tmp_path / "drops.log"),
+                "DOCKLANE_POC_AGENT_MUTATION_LOG": str(mutation_log),
+            }
+        )
+
+        process = subprocess.Popen(
+            [sys.executable, str(root / "tests/functional-poc/agent-proxy.py")],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wait_proxy(proxy_port)
+            image = "registry.example/api@sha256:" + ("c" * 64)
+
+            failed = False
+            try:
+                post_image(proxy_port, image)
+            except (
+                http.client.RemoteDisconnected,
+                ConnectionResetError,
+                BrokenPipeError,
+            ):
+                failed = True
+
+            if not failed:
+                raise AssertionError("backend connect failure was not surfaced")
+
+            if mutation_log.exists():
+                records = [
+                    json.loads(line)
+                    for line in mutation_log.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            else:
+                records = []
+
+            forwarded = [
+                record for record in records if record.get("event") == "forwarded"
+            ]
+            if forwarded:
+                raise AssertionError(
+                    f"connect failure must not count as forwarded: {records}"
+                )
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     backend_port = free_port()
@@ -308,6 +378,7 @@ def main():
             backend.server_close()
 
     run_incomplete_response_regression(root)
+    run_connect_failure_regression(root)
     print("Agent proxy mutation-count regressions: PASS")
 
 
