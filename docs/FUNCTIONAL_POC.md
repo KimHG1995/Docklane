@@ -251,3 +251,31 @@ PoC Agent proxy는 모든 `POST /v1/services/:id/image` 전달을 `agent-image-m
 - response drop 여부
 
 API restart와 Agent response-loss 시나리오는 **해당 target digest에 대한 image mutation 전달 횟수가 정확히 1회**인지 직접 검증한다.
+
+
+## PoC harness safety details
+
+### Service ID capture
+
+`docker service create`는 `--quiet`로 실행해 service ID만 캡처한다. 진행 메시지가 stdout에 섞인 값을 후속 `service inspect` 입력으로 사용하지 않는다.
+
+### Cleanup retryability
+
+cleanup ownership marker는 다음 경우에만 제거한다.
+
+- 삭제 명령이 성공한 경우
+- Docker가 명시적으로 resource not-found를 반환한 경우
+- 기록된 PID가 더 이상 존재하지 않는 경우
+- 기록된 Swarm이 더 이상 active가 아닌 경우
+
+Docker 조회 또는 삭제가 일시적으로 실패하면 해당 marker를 보존하고 cleanup은 non-zero로 종료한다. 동일 `cleanup.sh`를 다시 실행하면 남은 marker를 기준으로 정리를 재시도할 수 있다.
+
+### Agent mutation accounting
+
+Agent proxy의 mutation log는 backend 응답 완료 여부와 분리한다.
+
+- `event=forwarded`: backend로 image mutation 전달을 시작하기 전에 기록
+- `event=response`: backend 응답을 끝까지 읽은 경우
+- `event=response_error`: backend 응답이 중간에 끊긴 경우
+
+mutation replay 판정은 `event=forwarded`만 집계한다. 따라서 첫 요청의 backend 응답이 중간에 끊기고 두 번째 요청이 CAS 409로 끝나는 경우에도 전달 횟수는 2회로 탐지된다.
