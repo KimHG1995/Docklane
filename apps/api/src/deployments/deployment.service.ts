@@ -289,19 +289,21 @@ export class DeploymentService
       return null;
     }
 
+    const latestDeployment = await this.deployments.find(deployment.id);
     if (
+      !latestDeployment ||
       operation.type !== 'ROLLBACK' ||
       operation.clusterId !== clusterId ||
       operation.actorId !== principal.actorId ||
       operation.serviceId !== serviceId ||
-      deployment.rollbackOperationId !== input.operationId
+      latestDeployment.rollbackOperationId !== input.operationId
     ) {
       throw new ConflictException(
         'operationId was already used for a different rollback',
       );
     }
 
-    return deployment;
+    return latestDeployment;
   }
 
   async rollback(
@@ -1314,6 +1316,30 @@ export class DeploymentService
     return this.deployments.requireWithConnection(connection, deploymentId);
   }
 
+  private async legacyIntentHasExternalConflict(
+    operation: OperationRecord,
+  ): Promise<boolean> {
+    if (
+      operation.targetRuntimeSpecHash ||
+      !operation.beforeSpecHash ||
+      !operation.targetSpecHash
+    ) {
+      return false;
+    }
+
+    let current: ServiceDetailResponse;
+    try {
+      current = await this.agentClient.inspectService(operation.serviceId);
+    } catch {
+      return false;
+    }
+
+    return (
+      current.service.specHash !== operation.beforeSpecHash &&
+      current.service.specHash !== operation.targetSpecHash
+    );
+  }
+
   private async hydrateLegacyRuntimeFingerprint(
     connection: PoolConnection,
     operation: OperationRecord,
@@ -1393,6 +1419,20 @@ export class DeploymentService
     deployment: DeploymentRecord,
     initialError?: string,
   ): Promise<DeploymentRecord> {
+    if (await this.legacyIntentHasExternalConflict(operation)) {
+      await this.attention(
+        connection,
+        deployment.id,
+        operation.id,
+        'EXTERNAL_SERVICE_CONFLICT',
+        'Service changed outside the recorded legacy deployment transition',
+      );
+      return this.deployments.requireWithConnection(
+        connection,
+        deployment.id,
+      );
+    }
+
     const compatibleOperation =
       await this.hydrateLegacyRuntimeFingerprint(connection, operation);
     if (
@@ -1846,6 +1886,20 @@ export class DeploymentService
     deployment: DeploymentRecord,
     initialError?: string,
   ): Promise<DeploymentRecord> {
+    if (await this.legacyIntentHasExternalConflict(operation)) {
+      await this.rollbackAttention(
+        connection,
+        deployment.id,
+        operation.id,
+        'ROLLBACK_EXTERNAL_CONFLICT',
+        'Service changed outside the recorded legacy rollback transition',
+      );
+      return this.deployments.requireWithConnection(
+        connection,
+        deployment.id,
+      );
+    }
+
     const compatibleOperation =
       await this.hydrateLegacyRuntimeFingerprint(connection, operation);
     if (
