@@ -1,8 +1,10 @@
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VERSION = os.environ.get("APP_VERSION", "unknown")
 HEALTH_STATUS = int(os.environ.get("HEALTH_STATUS", "200"))
+START_DELAY = float(os.environ.get("START_DELAY", "0"))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -28,5 +30,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
+
+if START_DELAY > 0:
+    time.sleep(START_DELAY)
 
 ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
