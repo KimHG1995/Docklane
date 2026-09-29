@@ -87,8 +87,6 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     mutation_context["bodyParseError"] = True
 
-            self._log_mutation_event("forwarded", mutation_context)
-
         connection = http.client.HTTPConnection(
             BACKEND_HOST,
             BACKEND_PORT,
@@ -101,8 +99,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 body=body,
                 headers=headers,
             )
-            response = connection.getresponse()
+            if mutation_context is not None:
+                self._log_mutation_event("forwarded", mutation_context)
+
             try:
+                response = connection.getresponse()
                 response_body = response.read()
                 response_headers = response.getheaders()
             except Exception as error:
