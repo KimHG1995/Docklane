@@ -6,7 +6,7 @@ import { BootstrapService } from './bootstrap.service.js';
 
 test('bootstrap token is returned once while only its hash is persisted', async () => {
   let storedHash = '';
-  let storedExpiresAt: Date | null = null;
+  let storedExpiresAtMs = 0;
   const repository = {
     create: async (input: {
       id: string;
@@ -18,7 +18,7 @@ test('bootstrap token is returned once while only its hash is persisted', async 
       expiresAt: Date;
     }): Promise<BootstrapTokenRecord> => {
       storedHash = input.tokenHash;
-      storedExpiresAt = input.expiresAt;
+      storedExpiresAtMs = input.expiresAt.getTime();
       return {
         id: input.id,
         clusterId: input.clusterId,
@@ -54,10 +54,9 @@ test('bootstrap token is returned once while only its hash is persisted', async 
   assert.equal(issued.clusterId, 'cluster-1');
   assert.equal(issued.nodeRole, 'worker');
   assert.deepEqual(issued.labels, { zone: 'a' });
-  assert.ok(storedExpiresAt);
   assert.ok(
-    storedExpiresAt!.getTime() >= before + 599_000 &&
-      storedExpiresAt!.getTime() <= before + 601_000,
+    storedExpiresAtMs >= before + 599_000 &&
+      storedExpiresAtMs <= before + 601_000,
   );
 });
 
