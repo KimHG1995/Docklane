@@ -12,6 +12,21 @@ API_URL="http://127.0.0.1:3001"
 OPERATOR_TOKEN="docklane-poc-operator-00000001"
 LB_SERVICE_NAME="docklane-poc-lb"
 LB_URL="http://127.0.0.1:18082"
+stop_file=""
+traffic_pid=""
+
+stop_traffic() {
+  if [[ -n "$stop_file" ]]; then
+    touch "$stop_file" 2>/dev/null || true
+  fi
+
+  if [[ -n "$traffic_pid" ]]; then
+    wait "$traffic_pid" 2>/dev/null || true
+    traffic_pid=""
+  fi
+}
+
+trap stop_traffic EXIT
 
 fail() {
   printf '[functional-poc-3node-lb] ERROR: %s\n' "$*" >&2
@@ -117,8 +132,7 @@ fi
 printf '%s\n' "$result" >"$LOG_DIR/lb-restart.json"
 
 sleep 1
-touch "$stop_file"
-wait "$traffic_pid" || true
+stop_traffic
 
 requests="$(wc -l <"$traffic_log" | tr -d ' ')"
 bad="$(awk -F'|' '$2 != "200" {n++} END {print n+0}' "$traffic_log")"
