@@ -154,7 +154,7 @@ worker-02
 - [x] manager-01 / worker-01 / worker-02 DinD Swarm bootstrap
 - [x] 3-node Ready/Active topology 검증
 - [x] manager Docker API host-loopback 접근 검증
-- [ ] node drain scenario
+- [x] node drain scenario
 - [ ] worker failure scenario
 - [ ] actual external LB traffic scenario
 - [ ] Swarm internal ports network exposure scenario
