@@ -89,3 +89,24 @@ Bootstrap claim은 client가 생성한 UUID `claimId`를 요구한다.
 - 동시 claim은 DB row lock으로 직렬화하며 최초 claimId만 소유권을 획득한다.
 
 응답의 `replayed` 필드로 최초 처리와 idempotent retry를 구분할 수 있다.
+
+
+## Post-join node / role verification
+
+Bootstrap client는 Docker join 직후 Control Plane에 실제 Swarm `nodeId`를 보고한다.
+
+```http
+POST /v1/bootstrap/complete
+```
+
+요청은 원래 bootstrap token, 동일한 `claimId`, join 결과의 `nodeId`를 포함한다.
+
+Control Plane은 client 자기보고를 신뢰하지 않고 기존 manager Agent의 node inspect 결과로 다음 조건을 검증한다.
+
+- node가 실제 Swarm에 존재
+- `state=ready`
+- `availability=active`
+- 실제 role이 bootstrap scope의 `manager|worker`와 동일
+- manager flag가 scope와 일치
+
+검증이 실패하면 bootstrap completion은 성공으로 기록하지 않는다.
