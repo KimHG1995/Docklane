@@ -8,6 +8,7 @@ export const CreateBootstrapTokenRequestSchema = z.object({
 
 export const BootstrapClaimRequestSchema = z.object({
   token: z.string().min(32).max(256),
+  claimId: z.uuid(),
 }).strict();
 
 export type CreateBootstrapTokenRequest = z.infer<
