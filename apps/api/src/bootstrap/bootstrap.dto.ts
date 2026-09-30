@@ -11,9 +11,19 @@ export const BootstrapClaimRequestSchema = z.object({
   claimId: z.uuid(),
 }).strict();
 
+export const BootstrapCompleteRequestSchema = z.object({
+  token: z.string().min(32).max(256),
+  claimId: z.uuid(),
+  nodeId: z.string().min(1).max(128),
+}).strict();
+
 export type CreateBootstrapTokenRequest = z.infer<
   typeof CreateBootstrapTokenRequestSchema
 >;
 export type BootstrapClaimRequest = z.infer<
   typeof BootstrapClaimRequestSchema
+>;
+
+export type BootstrapCompleteRequest = z.infer<
+  typeof BootstrapCompleteRequestSchema
 >;
