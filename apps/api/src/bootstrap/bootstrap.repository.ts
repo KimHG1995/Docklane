@@ -59,7 +59,7 @@ export class BootstrapRepository implements OnModuleInit {
     nodeRole: BootstrapNodeRole;
     labels: Record<string, string>;
     createdBy: string;
-    expiresAt: Date;
+    ttlSeconds: number;
   }): Promise<BootstrapTokenRecord> {
     const connection = await this.db.getConnection();
     try {
@@ -70,7 +70,7 @@ export class BootstrapRepository implements OnModuleInit {
            id, token_hash, cluster_id, node_role, labels_json,
            created_by, expires_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ? SECOND))`,
         [
           input.id,
           input.tokenHash,
@@ -78,7 +78,7 @@ export class BootstrapRepository implements OnModuleInit {
           input.nodeRole,
           JSON.stringify(input.labels),
           input.createdBy,
-          input.expiresAt,
+          input.ttlSeconds,
         ],
       );
 
@@ -113,15 +113,20 @@ export class BootstrapRepository implements OnModuleInit {
     tokenHash: string,
     claimId: string,
   ): Promise<BootstrapTokenRecord | null> {
-    const [rows] = await this.db.pool.query<BootstrapTokenRow[]>(
-      `SELECT * FROM bootstrap_tokens
-       WHERE token_hash = ?
-         AND expires_at > CURRENT_TIMESTAMP(6)
-         AND (used_at IS NULL OR claim_id = ?)
-       LIMIT 1`,
-      [tokenHash, claimId],
-    );
-    return rows[0] ? mapRow(rows[0]) : null;
+    const connection = await this.db.getConnection();
+    try {
+      const [rows] = await connection.query<BootstrapTokenRow[]>(
+        `SELECT * FROM bootstrap_tokens
+         WHERE token_hash = ?
+           AND expires_at > UTC_TIMESTAMP(6)
+           AND (used_at IS NULL OR claim_id = ?)
+         LIMIT 1`,
+        [tokenHash, claimId],
+      );
+      return rows[0] ? mapRow(rows[0]) : null;
+    } finally {
+      connection.release();
+    }
   }
 
   async consume(
@@ -135,7 +140,7 @@ export class BootstrapRepository implements OnModuleInit {
       const [rows] = await connection.query<BootstrapTokenRow[]>(
         `SELECT * FROM bootstrap_tokens
          WHERE token_hash = ?
-           AND expires_at > CURRENT_TIMESTAMP(6)
+           AND expires_at > UTC_TIMESTAMP(6)
          LIMIT 1
          FOR UPDATE`,
         [tokenHash],
@@ -174,7 +179,7 @@ export class BootstrapRepository implements OnModuleInit {
 
       await connection.execute(
         `UPDATE bootstrap_tokens
-         SET used_at = CURRENT_TIMESTAMP(6), claim_id = ?
+         SET used_at = UTC_TIMESTAMP(6), claim_id = ?
          WHERE id = ? AND used_at IS NULL`,
         [claimId, current.id],
       );
