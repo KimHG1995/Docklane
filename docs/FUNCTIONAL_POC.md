@@ -97,6 +97,18 @@ GitHub runner
 
 이 시나리오는 **Swarm 자체 rollback을 Docklane-triggered rollback으로 오인하지 않고, 기존 deployment intent를 기준으로 관찰 및 종결하는지** 검증한다.
 
+### Capacity shortage pre-check
+
+1. 정상 v4 service의 현재 Docker version과 replica 수를 기록한다.
+2. 현재 service version을 `expectedVersion`으로 사용해 replica 1000 scale을 요청한다.
+3. fixture service의 0.05 CPU reservation을 기준으로 single-node runner가 수용할 수 없는 추가 capacity를 요구한다.
+4. API가 HTTP 409와 `INSUFFICIENT_CLUSTER_CAPACITY`를 반환하는지 확인한다.
+5. Docker service version과 replica 수가 요청 전후 동일한지 확인한다.
+6. 해당 operationId가 `operations` 테이블에 생성되지 않았는지 확인한다.
+7. 기존 v4 service의 root response와 health가 계속 정상인지 확인한다.
+
+이 시나리오는 capacity pre-check가 **operation intent 저장과 Docker mutation보다 먼저** 실패하여 부작용 없이 요청을 거절하는지 검증한다.
+
 ### External CLI conflict
 
 1. healthy `v5` Release 배포를 시작하고 10초 health stability window에 진입시킨다.
@@ -171,6 +183,7 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `automatic-rollback-status.json`
 - `service-after-automatic-rollback.json`
 - `automatic-rollback-audit-actions.txt`
+- `capacity-shortage-response.json`
 - `external-conflict-release.json`
 - `external-conflict-deploy-post.json`
 - `external-conflict-deploy-post.err`
@@ -207,7 +220,6 @@ bash tests/functional-poc/cleanup.sh
 - 3-node manager-01 / worker-01 / worker-02 topology
 - API restart during update — harness implemented; acceptance pending an actual workflow run
 - Agent response loss — harness implemented; acceptance pending an actual workflow run
-- capacity shortage
 - actual external LB traffic during rollout
 - worker failure
 - node drain
