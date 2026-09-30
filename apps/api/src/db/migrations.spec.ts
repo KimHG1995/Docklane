@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DATABASE_MIGRATIONS,
+  assertMigrationCatalog,
   migrationChecksum,
   runDatabaseMigrations,
 } from './migrations.js';
@@ -134,4 +135,16 @@ test('migration checksum is deterministic and catalog metadata is stable', () =>
   assert.match(first, /^[a-f0-9]{64}$/);
   assert.equal(migration.version, 1);
   assert.equal(migration.name, 'baseline-current-schema');
+});
+
+
+test('migration catalog rejects non-contiguous versions', () => {
+  assert.throws(
+    () =>
+      assertMigrationCatalog([
+        { version: 1, name: 'one', signature: 'one' },
+        { version: 3, name: 'three', signature: 'three' },
+      ]),
+    /must be contiguous/,
+  );
 });
