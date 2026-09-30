@@ -77,6 +77,20 @@ export class BootstrapRepository implements OnModuleInit {
     return record;
   }
 
+  async findValidByHash(
+    tokenHash: string,
+  ): Promise<BootstrapTokenRecord | null> {
+    const [rows] = await this.db.pool.query<BootstrapTokenRow[]>(
+      `SELECT * FROM bootstrap_tokens
+       WHERE token_hash = ?
+         AND used_at IS NULL
+         AND expires_at > CURRENT_TIMESTAMP(6)
+       LIMIT 1`,
+      [tokenHash],
+    );
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+
   async consume(tokenHash: string): Promise<BootstrapTokenRecord | null> {
     const connection = await this.db.getConnection();
     try {
