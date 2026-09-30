@@ -30,3 +30,17 @@ export interface BootstrapClaimResponse extends BootstrapScope {
     joinToken: string;
   };
 }
+
+
+export interface BootstrapCompleteResponse extends BootstrapScope {
+  tokenId: string;
+  claimId: string;
+  node: {
+    id: string;
+    hostname: string;
+    role: string;
+    state: string;
+    availability: string;
+  };
+  verifiedAt: string;
+}
