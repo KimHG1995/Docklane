@@ -106,6 +106,13 @@ wait_deployment_terminal() {
     sleep 1
   done
 
+  local service_id
+  service_id="$(jq -er '.operation.serviceId // empty' "$output_file" 2>/dev/null || true)"
+  if [[ -n "$service_id" ]]; then
+    api_get "/v1/clusters/default/services/$service_id" \
+      >"${output_file%.json}-service.json" 2>/dev/null || true
+  fi
+
   fail "timed out waiting for deployment $deployment_id to reach $expected"
 }
 
