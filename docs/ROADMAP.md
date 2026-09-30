@@ -37,7 +37,7 @@ Exit criteria:
 ## v0.1 — Swarm Read Model
 
 - [ ] cluster registration
-- [ ] manager quorum
+- [x] manager quorum
 - [x] node list/detail
 - [x] service list/detail
 - [x] task status
