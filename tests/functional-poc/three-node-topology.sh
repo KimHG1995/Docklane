@@ -187,6 +187,7 @@ preflight_absent_container "$MANAGER_CONTAINER"
 preflight_absent_container "$WORKER_01_CONTAINER"
 preflight_absent_container "$WORKER_02_CONTAINER"
 preflight_absent_container "$MYSQL_CONTAINER"
+preflight_absent_container "docklane-poc-external-lb"
 preflight_absent_network
 
 mkdir -p "$LOG_DIR"
