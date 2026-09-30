@@ -22,6 +22,7 @@ jobs:
       agent: ${{ steps.filter.outputs.agent }}
       docs: ${{ steps.filter.outputs.docs }}
       poc: ${{ steps.filter.outputs.poc }}
+      bootstrap: ${{ steps.filter.outputs.bootstrap }}
       any_runtime: ${{ steps.filter.outputs.any_runtime }}
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +54,7 @@ jobs:
           agent=false
           docs=false
           poc=false
+          bootstrap=false
           unknown=false
 
           while IFS= read -r file; do
@@ -88,6 +90,9 @@ jobs:
                 api=true
                 agent=true
                 ;;
+              scripts/bootstrap-docker.sh|tests/bootstrap-docker-test.sh)
+                bootstrap=true
+                ;;
               docs/*|README.md|CONTRIBUTING.md|SECURITY.md|LICENSE)
                 docs=true
                 ;;
@@ -115,6 +120,7 @@ jobs:
             echo "agent=$agent"
             echo "docs=$docs"
             echo "poc=$poc"
+            echo "bootstrap=$bootstrap"
             echo "any_runtime=$any_runtime"
           } >> "$GITHUB_OUTPUT"
 
@@ -221,6 +227,20 @@ jobs:
           bash tests/functional-poc/cleanup-retry-test.sh
           python3 tests/functional-poc/agent-proxy-test.py
 
+  bootstrap-docker:
+    needs: changes
+    if: needs.changes.outputs.bootstrap == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify bootstrap Docker script syntax
+        run: |
+          bash -n scripts/bootstrap-docker.sh
+          bash -n tests/bootstrap-docker-test.sh
+      - name: Run bootstrap Docker regressions
+        run: bash tests/bootstrap-docker-test.sh
+
   docs-only:
     needs: changes
     if: needs.changes.outputs.any_runtime != 'true' && needs.changes.outputs.docs == 'true'
@@ -231,7 +251,7 @@ jobs:
 
   validation-gate:
     if: always()
-    needs: [changes, api, web, go-agent, agent-mtls-poc, functional-poc-lint, docs-only]
+    needs: [changes, api, web, go-agent, agent-mtls-poc, functional-poc-lint, bootstrap-docker, docs-only]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -245,7 +265,7 @@ jobs:
             exit 1
           fi
 
-          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.agent-mtls-poc.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.docs-only.result }}"; do
+          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.agent-mtls-poc.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.bootstrap-docker.result }}"             "${{ needs.docs-only.result }}"; do
             if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
               echo "A required validation job failed or was cancelled"
               exit 1
