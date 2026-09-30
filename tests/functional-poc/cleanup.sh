@@ -92,6 +92,47 @@ remove_owned_container() {
   return 1
 }
 
+
+remove_owned_network() {
+  local name="$1"
+  local file="$OWNERSHIP_DIR/$name.network-id"
+
+  [[ -f "$file" ]] || return 0
+
+  local owned_id current_id error_file
+  owned_id="$(cat "$file" 2>/dev/null || true)"
+  if [[ -z "$owned_id" ]]; then
+    rm -f "$file"
+    return 0
+  fi
+
+  error_file="$OWNERSHIP_DIR/.$name.network.inspect.err"
+  if current_id="$(docker network inspect --format '{{.Id}}' "$owned_id" 2>"$error_file")"; then
+    rm -f "$error_file"
+  else
+    if is_not_found_error "$error_file"; then
+      rm -f "$error_file" "$file"
+      return 0
+    fi
+    rm -f "$error_file"
+    mark_failed
+    return 1
+  fi
+
+  if [[ "$current_id" != "$owned_id" ]]; then
+    mark_failed
+    return 1
+  fi
+
+  if docker network rm "$owned_id" >/dev/null 2>&1; then
+    rm -f "$file"
+    return 0
+  fi
+
+  mark_failed
+  return 1
+}
+
 remove_owned_service() {
   local file="$OWNERSHIP_DIR/service.id"
   [[ -f "$file" ]] || return 0
@@ -176,9 +217,13 @@ kill_owned_pid agent || true
 
 if command -v docker >/dev/null 2>&1; then
   remove_owned_service || true
+  remove_owned_container worker-02 || true
+  remove_owned_container worker-01 || true
+  remove_owned_container manager-01 || true
   leave_owned_swarm || true
   remove_owned_container registry || true
   remove_owned_container mysql || true
+  remove_owned_network three-node-network || true
 fi
 
 rm -f "$LOG_DIR/drop-agent-image-response"
