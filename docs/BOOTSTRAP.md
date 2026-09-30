@@ -66,3 +66,26 @@ Control Plane은 native join token을 `DOCKLANE_SWARM_JOIN_JSON`에서 읽으며
 5. bootstrap token은 claim 직후 사용 처리되지만 Docker native token의 rotation/lifetime에는 영향을 주지 않는다.
 
 실제 `docker swarm join` 실행과 post-join verification은 다음 bootstrap 단계에서 처리한다.
+
+
+## Retry / partial failure protocol
+
+Bootstrap claim은 client가 생성한 UUID `claimId`를 요구한다.
+
+```json
+{
+  "token": "docklane_bootstrap_...",
+  "claimId": "11111111-1111-4111-8111-111111111111"
+}
+```
+
+규칙:
+
+- 최초 유효 claim은 bootstrap token에 `claimId`와 `usedAt`을 원자적으로 기록한다.
+- 응답 유실이나 네트워크 중단 시 동일한 token + 동일한 `claimId` 요청은 같은 claim 결과를 replay한다.
+- 동일 token을 다른 `claimId`로 재사용하면 거절한다.
+- token expiry 이후에는 동일 `claimId`라도 replay하지 않는다.
+- native Swarm join credential 설정이 누락된 경우 bootstrap token을 consume하기 전에 실패한다.
+- 동시 claim은 DB row lock으로 직렬화하며 최초 claimId만 소유권을 획득한다.
+
+응답의 `replayed` 필드로 최초 처리와 idempotent retry를 구분할 수 있다.
