@@ -128,7 +128,7 @@ Deployment와 같은 mutation coordinator에 운영 작업을 연결한다.
 - [x] node drain/activate
 - [ ] mutation conflict UX
 - [x] capacity pre-check
-- [ ] ingress routing mesh validation
+- [x] ingress routing mesh validation
 
 Exit criteria:
 
