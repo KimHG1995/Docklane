@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/functional-poc-3node.yml'
+      - 'tests/functional-poc/three-node-topology.sh'
 
 concurrency:
   group: functional-poc-3node

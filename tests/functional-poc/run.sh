@@ -106,11 +106,14 @@ wait_deployment_terminal() {
     sleep 1
   done
 
-  local service_id
-  service_id="$(jq -er '.operation.serviceId // empty' "$output_file" 2>/dev/null || true)"
-  if [[ -n "$service_id" ]]; then
-    api_get "/v1/clusters/default/services/$service_id" \
-      >"${output_file%.json}-service.json" 2>/dev/null || true
+  api_get "/v1/clusters/default/deployments/$deployment_id/status" >"$LOG_DIR/deployment-timeout-$deployment_id-status.json" 2>/dev/null || true
+
+  local timeout_service_id
+  timeout_service_id="$(jq -r '.operation.serviceId // empty' "$LOG_DIR/deployment-timeout-$deployment_id-status.json" 2>/dev/null || true)"
+  if [[ -n "$timeout_service_id" ]]; then
+    api_get "/v1/clusters/default/services/$timeout_service_id" >"$LOG_DIR/deployment-timeout-$deployment_id-service.json" 2>/dev/null || true
+    docker service inspect "$timeout_service_id" >"$LOG_DIR/deployment-timeout-$deployment_id-docker-service.json" 2>/dev/null || true
+    docker service ps --no-trunc "$timeout_service_id" >"$LOG_DIR/deployment-timeout-$deployment_id-docker-tasks.txt" 2>/dev/null || true
   fi
 
   fail "timed out waiting for deployment $deployment_id to reach $expected"

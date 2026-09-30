@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/functional-poc.yml'
+      - 'tests/functional-poc/run.sh'
 
 concurrency:
   group: functional-poc
