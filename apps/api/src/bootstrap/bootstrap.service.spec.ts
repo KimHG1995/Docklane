@@ -4,6 +4,8 @@ import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { BootstrapTokenRecord } from './bootstrap.types.js';
 import { BootstrapService } from './bootstrap.service.js';
 
+process.env.DOCKLANE_CLUSTER_ID = 'cluster-1';
+
 test('bootstrap token is returned once while only its hash and TTL are persisted', async () => {
   let storedHash = '';
   let storedTtlSeconds = 0;
@@ -249,6 +251,7 @@ test('bootstrap completion verifies joined node role through Agent', async () =>
   };
   const repository = {
     findClaimableByHash: async () => record,
+    bindCompletionNode: async () => 'BOUND' as const,
     recordCompletionAudit: async () => undefined,
   };
   const agent = {
@@ -309,6 +312,7 @@ test('bootstrap completion rejects node role mismatch', async () => {
   };
   const repository = {
     findClaimableByHash: async () => record,
+    bindCompletionNode: async () => 'BOUND' as const,
     recordCompletionAudit: async () => undefined,
   };
   const agent = {
@@ -357,6 +361,7 @@ test('bootstrap completion applies scoped labels through node mutation coordinat
   };
   const repository = {
     findClaimableByHash: async () => record,
+    bindCompletionNode: async () => 'BOUND' as const,
     recordCompletionAudit: async () => undefined,
   };
 
@@ -448,6 +453,7 @@ test('bootstrap label completion reuses persisted operation expectedVersion on r
   };
   const repository = {
     findClaimableByHash: async () => record,
+    bindCompletionNode: async () => 'BOUND' as const,
     recordCompletionAudit: async () => undefined,
   };
   const agent = {
@@ -519,6 +525,7 @@ test('bootstrap completion rejects labels that are not observed after mutation',
   };
   const repository = {
     findClaimableByHash: async () => record,
+    bindCompletionNode: async () => 'BOUND' as const,
     recordCompletionAudit: async () => undefined,
   };
   const agent = {
@@ -564,5 +571,183 @@ test('bootstrap completion rejects labels that are not observed after mutation',
         nodeId: 'node-1',
       }),
     /Joined node labels do not match bootstrap scope/,
+  );
+});
+
+
+test('bootstrap issue rejects cluster outside configured Agent scope', async () => {
+  let credentialCalls = 0;
+  let createCalls = 0;
+  const repository = {
+    create: async () => {
+      createCalls += 1;
+      throw new Error('must not persist foreign-cluster bootstrap token');
+    },
+  };
+  const swarmJoin = {
+    credentials: () => {
+      credentialCalls += 1;
+      return {
+        remoteAddr: '10.0.1.10:2377',
+        joinToken: 'SWMTKN-1-worker-foreign-token-1234567890',
+      };
+    },
+  };
+  const service = new BootstrapService(
+    repository as never,
+    swarmJoin as never,
+    {} as never,
+    {} as never,
+  );
+
+  await assert.rejects(
+    () =>
+      service.issue(
+        'foreign-cluster',
+        {
+          nodeRole: 'worker',
+          labels: {},
+          ttlSeconds: 600,
+        },
+        {
+          actorId: 'admin-1',
+          role: 'ADMIN',
+          clusters: ['foreign-cluster'],
+        },
+      ),
+    /Cluster not found/,
+  );
+
+  assert.equal(credentialCalls, 0);
+  assert.equal(createCalls, 0);
+});
+
+test('bootstrap completion rejects foreign cluster before Agent lookup', async () => {
+  const claimId = '99999999-9999-4999-8999-999999999999';
+  let inspectCalls = 0;
+  const record: BootstrapTokenRecord = {
+    id: 'foreign-token',
+    clusterId: 'foreign-cluster',
+    nodeRole: 'worker',
+    labels: {},
+    createdBy: 'admin-1',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    usedAt: new Date().toISOString(),
+    claimId,
+    createdAt: new Date(0).toISOString(),
+  };
+  const repository = {
+    findClaimableByHash: async () => record,
+  };
+  const agent = {
+    inspectNode: async () => {
+      inspectCalls += 1;
+      throw new Error('must not inspect default Agent for foreign cluster');
+    },
+  };
+  const service = new BootstrapService(
+    repository as never,
+    {} as never,
+    agent as never,
+    {} as never,
+  );
+
+  await assert.rejects(
+    () =>
+      service.complete({
+        token: 'docklane_bootstrap_foreign_token_1234567890',
+        claimId,
+        nodeId: 'node-foreign',
+      }),
+    /Cluster not found/,
+  );
+  assert.equal(inspectCalls, 0);
+});
+
+test('bootstrap completion binds one canonical node and rejects a different retry node', async () => {
+  const claimId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const record: BootstrapTokenRecord = {
+    id: 'token-node-bound',
+    clusterId: 'cluster-1',
+    nodeRole: 'worker',
+    labels: {},
+    createdBy: 'admin-1',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    usedAt: new Date().toISOString(),
+    claimId,
+    createdAt: new Date(0).toISOString(),
+  };
+
+  let boundNodeId: string | null = null;
+  const repository = {
+    findClaimableByHash: async () => record,
+    bindCompletionNode: async (
+      _tokenId: string,
+      _claimId: string,
+      nodeId: string,
+    ) => {
+      if (boundNodeId === null) {
+        boundNodeId = nodeId;
+        return 'BOUND' as const;
+      }
+      return boundNodeId === nodeId
+        ? ('REPLAY' as const)
+        : ('CONFLICT' as const);
+    },
+    recordCompletionAudit: async () => undefined,
+  };
+
+  const agent = {
+    inspectNode: async (nodeId: string) => ({
+      node: {
+        id: nodeId,
+        version: 1,
+        specHash: 'node-spec',
+        hostname: nodeId,
+        address: '10.0.0.21',
+        role: 'worker',
+        availability: 'active',
+        state: 'ready',
+        manager: false,
+        leader: false,
+        engineVersion: '28.5.1',
+        nanoCpus: 2_000_000_000,
+        memoryBytes: 4_000_000_000,
+        labels: {},
+      },
+      tasks: [],
+      serviceIds: [],
+    }),
+  };
+
+  const service = new BootstrapService(
+    repository as never,
+    {} as never,
+    agent as never,
+    {} as never,
+  );
+
+  const first = await service.complete({
+    token: 'docklane_bootstrap_bound_token_1234567890',
+    claimId,
+    nodeId: 'node-a',
+  });
+  assert.equal(first.node.id, 'node-a');
+
+  const replay = await service.complete({
+    token: 'docklane_bootstrap_bound_token_1234567890',
+    claimId,
+    nodeId: 'node-a',
+  });
+  assert.equal(replay.node.id, 'node-a');
+
+  await assert.rejects(
+    () =>
+      service.complete({
+        token: 'docklane_bootstrap_bound_token_1234567890',
+        claimId,
+        nodeId: 'node-b',
+      }),
+    /already bound to a different node/,
   );
 });
