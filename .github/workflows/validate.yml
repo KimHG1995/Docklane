@@ -23,6 +23,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       poc: ${{ steps.filter.outputs.poc }}
       bootstrap: ${{ steps.filter.outputs.bootstrap }}
+      operational: ${{ steps.filter.outputs.operational }}
       any_runtime: ${{ steps.filter.outputs.any_runtime }}
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +56,7 @@ jobs:
           docs=false
           poc=false
           bootstrap=false
+          operational=false
           unknown=false
 
           while IFS= read -r file; do
@@ -78,6 +80,9 @@ jobs:
                 api=true
                 web=true
                 ;;
+              .github/workflows/operational-readiness-*.yml)
+                operational=true
+                ;;
               .github/workflows/*)
                 api=true
                 web=true
@@ -92,6 +97,9 @@ jobs:
                 ;;
               scripts/bootstrap-docker.sh|tests/bootstrap-docker-test.sh)
                 bootstrap=true
+                ;;
+              tests/operational-readiness/*)
+                operational=true
                 ;;
               docs/*|README.md|CONTRIBUTING.md|SECURITY.md|LICENSE)
                 docs=true
@@ -121,6 +129,7 @@ jobs:
             echo "docs=$docs"
             echo "poc=$poc"
             echo "bootstrap=$bootstrap"
+            echo "operational=$operational"
             echo "any_runtime=$any_runtime"
           } >> "$GITHUB_OUTPUT"
 
@@ -227,6 +236,18 @@ jobs:
           bash tests/functional-poc/cleanup-retry-test.sh
           python3 tests/functional-poc/agent-proxy-test.py
 
+  operational-readiness-lint:
+    needs: changes
+    if: needs.changes.outputs.operational == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify operational readiness harness syntax
+        run: |
+          bash -n tests/operational-readiness/leader-loss.sh
+          bash -n tests/operational-readiness/cleanup.sh
+
   bootstrap-docker:
     needs: changes
     if: needs.changes.outputs.bootstrap == 'true'
@@ -251,7 +272,7 @@ jobs:
 
   validation-gate:
     if: always()
-    needs: [changes, api, web, go-agent, agent-mtls-poc, functional-poc-lint, bootstrap-docker, docs-only]
+    needs: [changes, api, web, go-agent, agent-mtls-poc, functional-poc-lint, operational-readiness-lint, bootstrap-docker, docs-only]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -265,7 +286,7 @@ jobs:
             exit 1
           fi
 
-          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.agent-mtls-poc.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.bootstrap-docker.result }}"             "${{ needs.docs-only.result }}"; do
+          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.agent-mtls-poc.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.operational-readiness-lint.result }}"             "${{ needs.bootstrap-docker.result }}"             "${{ needs.docs-only.result }}"; do
             if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
               echo "A required validation job failed or was cancelled"
               exit 1
