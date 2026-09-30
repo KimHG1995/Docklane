@@ -77,7 +77,6 @@ func TestTaskRuntimeSpecHashChangesForRuntimeConfig(t *testing.T) {
 	}
 }
 
-
 func TestTaskRuntimeSpecHashCanonicalizesDefaultContainerRuntime(t *testing.T) {
 	implicit := swarm.TaskSpec{
 		ContainerSpec: &swarm.ContainerSpec{
