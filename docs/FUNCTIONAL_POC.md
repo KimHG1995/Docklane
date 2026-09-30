@@ -6,7 +6,7 @@ Functional PoC는 일반 PR validation과 분리한다. Docker service를 생성
 
 ## 실행 방식
 
-GitHub Actions의 `functional-poc` workflow를 수동 실행한다.
+GitHub Actions의 `functional-poc` workflow는 single-node smoke를, `functional-poc-3node` workflow는 3-node topology harness를 수동 실행한다.
 
 현재 자동 smoke 범위는 disposable GitHub runner의 단일 manager Swarm이다.
 
@@ -21,6 +21,29 @@ GitHub runner
 ```
 
 이 단계는 v0.6의 3-node topology를 대체하지 않는다. Control Plane과 실제 Docker/MySQL/Registry 사이의 첫 통합 경계를 검증하는 smoke gate다.
+
+
+### 3-node topology harness
+
+별도 `functional-poc-3node` workflow는 GitHub runner의 outer Docker 위에 privileged DinD 컨테이너 3개를 생성한다.
+
+```text
+GitHub runner Docker
+└─ docklane-poc-3node-net
+   ├─ manager-01 (DinD, Swarm manager/leader)
+   ├─ worker-01  (DinD, Swarm worker)
+   └─ worker-02  (DinD, Swarm worker)
+```
+
+검증 범위:
+
+- 세 노드가 정확히 3개 존재
+- `manager-01`이 `Ready / Active / Leader`
+- `worker-01`, `worker-02`가 `Ready / Active`
+- manager Docker API가 host loopback `tcp://127.0.0.1:22375`에서 동일한 node view를 제공
+- cleanup은 이번 실행이 만든 DinD container/network ID만 제거
+
+현재 단계는 topology 기반만 검증하며, node drain / worker failure / LB traffic 시나리오는 이 harness 위에 순차 추가한다.
 
 ## 현재 자동 검증 시나리오
 
@@ -193,6 +216,10 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `external-conflict-status.json`
 - `external-conflict-audit-actions.txt`
 - `audit-actions.txt`
+- `three-node-summary.txt`
+- `three-node-topology.txt`
+- `manager-api-node-ls.txt`
+- `manager-docker-info.txt`
 - Docker build/push/swarm 생성 로그
 
 artifact retention은 14일이다.
@@ -217,7 +244,6 @@ bash tests/functional-poc/cleanup.sh
 
 ## 아직 수동/후속 검증인 v0.6 항목
 
-- 3-node manager-01 / worker-01 / worker-02 topology
 - API restart during update — harness implemented; acceptance pending an actual workflow run
 - Agent response loss — harness implemented; acceptance pending an actual workflow run
 - actual external LB traffic during rollout
