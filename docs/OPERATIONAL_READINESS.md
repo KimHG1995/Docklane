@@ -189,3 +189,33 @@ manager-03 | Ready | Active | Reachable
 ```
 
 1/3 상태에서 manager control-plane read/write가 차단됐고, manager 한 대 복구 후 2/3 quorum에서 read/write가 다시 가능해졌다.
+
+
+## Network partition
+
+현재 Leader 프로세스는 계속 실행한 채, 해당 manager의 network namespace에 peer manager 2대의 IP를 대상으로 INPUT/OUTPUT DROP rule을 적용해 leader를 다수측으로부터 격리한다.
+
+검증 순서:
+
+1. 3 manager가 Ready/Active이고 1 Leader + 2 Reachable인지 확인한다.
+2. 현재 Leader를 동적으로 식별한다.
+3. Leader container 내부 iptables에 나머지 manager 2대와의 양방향 DROP rule을 추가한다.
+4. 다수측 2 manager가 기존 Leader와 다른 새 Leader를 선출하는지 확인한다.
+5. 격리된 former Leader에서 control-plane read/write가 실패하는지 확인한다.
+6. 다수측 새 Leader에서는 node-spec write가 계속 성공하는지 확인한다.
+7. DROP rule을 제거해 네트워크를 복구한다.
+8. 3 manager가 다시 Ready/Active, 1 Leader + 2 Reachable 상태로 합류하는지 확인한다.
+
+주요 evidence:
+
+- `topology-before-partition.txt`
+- `partition-input-rules.txt`
+- `partition-output-rules.txt`
+- `topology-during-partition.txt`
+- `isolated-node-ls.err`
+- `isolated-write.err`
+- `majority-write.log`
+- `topology-after-partition-recovery.txt`
+- `network-partition-summary.txt`
+
+이 시나리오는 프로세스 종료가 아닌 통신 단절에서 Raft majority가 새 leader를 유지하고, minority manager가 control-plane mutation을 수행하지 못하는지 검증한다.
