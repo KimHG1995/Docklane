@@ -137,6 +137,15 @@ export class BootstrapService {
     this.assertNodeMatchesBootstrapScope(record, observed.node);
 
     const verified = await this.applyBootstrapLabels(record, observed);
+    const verifiedAt = new Date().toISOString();
+
+    await this.repository.recordCompletionAudit(record, {
+      nodeId: verified.node.id,
+      hostname: verified.node.hostname,
+      role: verified.node.role,
+      labels: verified.node.labels,
+      verifiedAt,
+    });
 
     return {
       tokenId: record.id,
@@ -152,7 +161,7 @@ export class BootstrapService {
         availability: verified.node.availability,
         labels: verified.node.labels,
       },
-      verifiedAt: new Date().toISOString(),
+      verifiedAt,
     };
   }
 
