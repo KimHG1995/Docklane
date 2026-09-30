@@ -159,3 +159,33 @@ non-leader manager 한 대의 장애와 복구 동안 leader continuity와 2/3 q
 - `quorum-loss-summary.txt`
 
 Leader loss, manager loss, quorum loss는 모두 `operational-readiness-three-manager` concurrency group을 사용해 동일한 DinD resource namespace를 직렬화한다.
+
+
+### Quorum loss acceptance
+
+2026-09-30 GitHub Actions run #36682067172: **SUCCESS**
+
+관찰 결과:
+
+```text
+before
+manager-01 | Ready | Active | Leader
+manager-02 | Ready | Active | Reachable
+manager-03 | Ready | Active | Reachable
+
+1/3 quorum
+docker node ls -> context canceled
+node write -> The swarm does not have a leader. It's possible that too few managers are online.
+
+2/3 recovery
+manager-01 | Ready   | Active | Leader
+manager-02 | Ready   | Active | Reachable
+manager-03 | Unknown | Active | Unreachable
+
+3/3 recovery
+manager-01 | Ready | Active | Leader
+manager-02 | Ready | Active | Reachable
+manager-03 | Ready | Active | Reachable
+```
+
+1/3 상태에서 manager control-plane read/write가 차단됐고, manager 한 대 복구 후 2/3 quorum에서 read/write가 다시 가능해졌다.
