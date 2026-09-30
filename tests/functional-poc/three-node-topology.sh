@@ -116,7 +116,9 @@ grep -q '^worker-02|Ready|Active|$' "$LOG_DIR/three-node-topology.txt"   || fail
 log "verifying manager Docker API through host loopback"
 DOCKER_HOST="$MANAGER_DOCKER_HOST" docker info >"$LOG_DIR/manager-docker-info.txt"
 DOCKER_HOST="$MANAGER_DOCKER_HOST" docker node ls   --format '{{.Hostname}}|{{.Status}}|{{.Availability}}|{{.ManagerStatus}}'   >"$LOG_DIR/manager-api-node-ls.txt"
-cmp "$LOG_DIR/three-node-topology.txt" "$LOG_DIR/manager-api-node-ls.txt"   || fail "manager Docker API view differs between in-container and host-loopback access"
+sort "$LOG_DIR/three-node-topology.txt" >"$LOG_DIR/three-node-topology.sorted.txt"
+sort "$LOG_DIR/manager-api-node-ls.txt" >"$LOG_DIR/manager-api-node-ls.sorted.txt"
+cmp "$LOG_DIR/three-node-topology.sorted.txt" "$LOG_DIR/manager-api-node-ls.sorted.txt"   || fail "manager Docker API view differs between in-container and host-loopback access"
 
 cat >"$LOG_DIR/three-node-summary.txt" <<EOF
 manager-01 Ready/Active/Leader: PASS
