@@ -27,6 +27,7 @@ test('bootstrap token is returned once while only its hash is persisted', async 
         createdBy: input.createdBy,
         expiresAt: input.expiresAt.toISOString(),
         usedAt: null,
+        claimId: null,
         createdAt: new Date(0).toISOString(),
       };
     },
@@ -69,25 +70,46 @@ test('bootstrap token is returned once while only its hash is persisted', async 
   );
 });
 
-test('bootstrap token claim is one-time', async () => {
-  let consumed = false;
-  const record: BootstrapTokenRecord = {
+test('bootstrap claim replays only for the same claimId', async () => {
+  const claimId = '11111111-1111-4111-8111-111111111111';
+  let claimed = false;
+  const claimedAt = new Date().toISOString();
+  const base: BootstrapTokenRecord = {
     id: 'token-1',
     clusterId: 'cluster-1',
     nodeRole: 'manager',
     labels: { rack: 'r1' },
     createdBy: 'admin-1',
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    usedAt: new Date().toISOString(),
+    usedAt: null,
+    claimId: null,
     createdAt: new Date(0).toISOString(),
   };
   const repository = {
-    findValidByHash: async (): Promise<BootstrapTokenRecord | null> =>
-      consumed ? null : { ...record, usedAt: null },
-    consume: async (): Promise<BootstrapTokenRecord | null> => {
-      if (consumed) return null;
-      consumed = true;
-      return record;
+    findClaimableByHash: async (
+      _hash: string,
+      requestedClaimId: string,
+    ): Promise<BootstrapTokenRecord | null> => {
+      if (!claimed) return base;
+      return requestedClaimId === claimId
+        ? { ...base, usedAt: claimedAt, claimId }
+        : null;
+    },
+    consume: async (
+      _hash: string,
+      requestedClaimId: string,
+    ): Promise<{ record: BootstrapTokenRecord; replayed: boolean } | null> => {
+      if (claimed && requestedClaimId !== claimId) return null;
+      const replayed = claimed;
+      claimed = true;
+      return {
+        record: {
+          ...base,
+          usedAt: claimedAt,
+          claimId,
+        },
+        replayed,
+      };
     },
   };
   const swarmJoin = {
@@ -99,28 +121,37 @@ test('bootstrap token claim is one-time', async () => {
           : 'SWMTKN-1-worker-test-token-1234567890',
     }),
   };
-
   const service = new BootstrapService(
     repository as never,
     swarmJoin as never,
   );
-  const claim = await service.claim({ token: 'docklane_bootstrap_test_token_1234567890' });
+  const request = {
+    token: 'docklane_bootstrap_test_token_1234567890',
+    claimId,
+  };
 
-  assert.equal(claim.tokenId, 'token-1');
-  assert.equal(claim.clusterId, 'cluster-1');
-  assert.equal(claim.nodeRole, 'manager');
-  assert.deepEqual(claim.labels, { rack: 'r1' });
-  assert.deepEqual(claim.swarmJoin, {
+  const first = await service.claim(request);
+  assert.equal(first.claimId, claimId);
+  assert.equal(first.replayed, false);
+  assert.deepEqual(first.swarmJoin, {
     remoteAddr: '10.0.0.10:2377',
     joinToken: 'SWMTKN-1-manager-test-token-1234567890',
   });
 
+  const replay = await service.claim(request);
+  assert.equal(replay.claimId, claimId);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.claimedAt, first.claimedAt);
+
   await assert.rejects(
-    () => service.claim({ token: 'docklane_bootstrap_test_token_1234567890' }),
+    () =>
+      service.claim({
+        token: request.token,
+        claimId: '22222222-2222-4222-8222-222222222222',
+      }),
     UnauthorizedException,
   );
 });
-
 
 test('bootstrap issue fails before persistence when Swarm credentials are missing', async () => {
   let createCalls = 0;
@@ -168,10 +199,11 @@ test('bootstrap claim does not consume token when native credentials are unavail
     createdBy: 'admin-1',
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     usedAt: null,
+    claimId: null,
     createdAt: new Date(0).toISOString(),
   };
   const repository = {
-    findValidByHash: async () => pending,
+    findClaimableByHash: async () => pending,
     consume: async () => {
       consumeCalls += 1;
       return null;
@@ -189,6 +221,7 @@ test('bootstrap claim does not consume token when native credentials are unavail
     () =>
       service.claim({
         token: 'docklane_bootstrap_test_token_1234567890',
+        claimId: '33333333-3333-4333-8333-333333333333',
       }),
     /Swarm join credentials are not configured/,
   );
