@@ -3,12 +3,14 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { AGENT_CLIENT, type AgentClient } from '../agent/agent-client.js';
 import type { Principal } from '../auth/auth.types.js';
+import { NodeMutationService } from '../operations/node-mutation.service.js';
 import type {
   BootstrapClaimRequest,
   BootstrapCompleteRequest,
@@ -33,6 +35,8 @@ export class BootstrapService {
     private readonly swarmJoin: SwarmJoinCredentialProvider,
     @Inject(AGENT_CLIENT)
     private readonly agentClient: AgentClient,
+    @Inject(NodeMutationService)
+    private readonly nodeMutations: NodeMutationService,
   ) {}
 
   async issue(
@@ -129,17 +133,9 @@ export class BootstrapService {
       );
     }
 
-    const expectedManager = record.nodeRole === 'manager';
-    if (
-      observed.node.state !== 'ready' ||
-      observed.node.availability !== 'active' ||
-      observed.node.role !== record.nodeRole ||
-      observed.node.manager !== expectedManager
-    ) {
-      throw new ConflictException(
-        'Joined node state or role does not match bootstrap scope',
-      );
-    }
+    this.assertNodeMatchesBootstrapScope(record, observed.node);
+
+    const verified = await this.applyBootstrapLabels(record, observed);
 
     return {
       tokenId: record.id,
@@ -148,14 +144,96 @@ export class BootstrapService {
       nodeRole: record.nodeRole,
       labels: record.labels,
       node: {
-        id: observed.node.id,
-        hostname: observed.node.hostname,
-        role: observed.node.role,
-        state: observed.node.state,
-        availability: observed.node.availability,
+        id: verified.node.id,
+        hostname: verified.node.hostname,
+        role: verified.node.role,
+        state: verified.node.state,
+        availability: verified.node.availability,
+        labels: verified.node.labels,
       },
       verifiedAt: new Date().toISOString(),
     };
+  }
+
+  private async applyBootstrapLabels(
+    record: BootstrapTokenIssueResponse,
+    observed: Awaited<ReturnType<AgentClient['inspectNode']>>,
+  ): Promise<Awaited<ReturnType<AgentClient['inspectNode']>>> {
+    if (Object.keys(record.labels).length === 0) {
+      return observed;
+    }
+
+    let expectedVersion = observed.node.version;
+    try {
+      const existing = await this.nodeMutations.operation(
+        record.clusterId,
+        record.id,
+      );
+      expectedVersion = existing.expectedVersion;
+    } catch (error) {
+      if (!(error instanceof NotFoundException)) {
+        throw error;
+      }
+    }
+
+    const operation = await this.nodeMutations.labels(
+      record.clusterId,
+      observed.node.id,
+      {
+        operationId: record.id,
+        expectedVersion,
+        set: record.labels,
+        remove: [],
+      },
+      {
+        actorId: `bootstrap:${record.id}`,
+        role: 'ADMIN',
+        clusters: [record.clusterId],
+      },
+    );
+
+    if (operation.status !== 'SUCCESS') {
+      throw new ConflictException(
+        `Bootstrap node labels did not converge: ${operation.status}`,
+      );
+    }
+
+    let verified;
+    try {
+      verified = await this.agentClient.inspectNode(observed.node.id);
+    } catch {
+      throw new BadGatewayException(
+        'Joined node labels could not be verified through the cluster Agent',
+      );
+    }
+
+    this.assertNodeMatchesBootstrapScope(record, verified.node);
+    for (const [key, value] of Object.entries(record.labels)) {
+      if (verified.node.labels[key] !== value) {
+        throw new ConflictException(
+          'Joined node labels do not match bootstrap scope',
+        );
+      }
+    }
+
+    return verified;
+  }
+
+  private assertNodeMatchesBootstrapScope(
+    record: BootstrapTokenIssueResponse,
+    node: Awaited<ReturnType<AgentClient['inspectNode']>>['node'],
+  ): void {
+    const expectedManager = record.nodeRole === 'manager';
+    if (
+      node.state !== 'ready' ||
+      node.availability !== 'active' ||
+      node.role !== record.nodeRole ||
+      node.manager !== expectedManager
+    ) {
+      throw new ConflictException(
+        'Joined node state or role does not match bootstrap scope',
+      );
+    }
   }
 
   private requireSwarmJoinCredentials(
