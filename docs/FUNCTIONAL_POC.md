@@ -68,6 +68,16 @@ GitHub runner Docker
 
 이 시나리오는 외부 worker 장애 시 Swarm 자체 rescheduling과 Docklane read model의 장애 관찰을 함께 검증한다.
 
+### 3-node external LB traffic
+
+- worker 전용 Nginx service 2 replicas를 ingress published port로 생성한다.
+- outer network의 HAProxy가 세 Swarm node의 routing-mesh endpoint를 backend로 사용한다.
+- HAProxy를 통한 지속 HTTP 요청 중 Docklane restart API로 start-first rollout을 발생시킨다.
+- rollout 전후 desired/running 2/2 수렴을 확인한다.
+- 최소 20건 이상 요청에서 non-200 응답이 없는지 확인한다.
+
+이 시나리오는 실제 외부 LB 경로의 트래픽을 유지한 상태에서 Docklane rollout의 무중단성을 검증한다.
+
 ## 현재 자동 검증 시나리오
 
 ### Normal digest deploy
