@@ -366,6 +366,9 @@ done
 log "scenario: external HAProxy traffic during Docklane restart rollout"
 bash "$ROOT_DIR/tests/functional-poc/three-node-external-lb.sh"
 
+log "scenario: Swarm internal port exposure"
+bash "$ROOT_DIR/tests/functional-poc/three-node-network-exposure.sh"
+
 log "scenario: worker failure reschedules service task"
 wait_service_running_task "$DRAIN_SERVICE_ID" "$LOG_DIR/worker-failure-service-before.txt"
 FAILURE_TASK_BEFORE="$(grep '|Running ' "$LOG_DIR/worker-failure-service-before.txt" | head -n1)"
@@ -415,6 +418,7 @@ manager Docker API loopback access: PASS
 Docklane node drain task relocation: PASS
 Docklane node activate recovery: PASS
 external HAProxy traffic during Docklane rollout: PASS
+Swarm internal ports outer-host blocked: PASS
 worker failure task reschedule: PASS
 Docklane failed-worker read model: PASS
 topology node count: 3
