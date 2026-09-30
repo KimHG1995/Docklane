@@ -222,7 +222,7 @@ worker-02
 - [x] Docklane one-time bootstrap token
 - [x] TTL / scope
 - [x] Docker install/validate
-- [ ] native Swarm join token handling
+- [x] native Swarm join token handling
 - [ ] retry/partial failure protocol
 - [ ] post-join node/role verification
 - [ ] label application
