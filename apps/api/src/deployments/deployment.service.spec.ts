@@ -172,7 +172,7 @@ test('placement-only task spec drift is accepted by runtime fingerprint', () => 
   );
 });
 
-test('deployment requires unique running slots and target TaskSpec identity', () => {
+test('deployment requires unique running slots but not API-normalized task fingerprint equality', () => {
   const duplicateSlot = snapshot();
   duplicateSlot.tasks[1]!.slot = 1;
   assert.equal(
@@ -180,11 +180,11 @@ test('deployment requires unique running slots and target TaskSpec identity', ()
     'PENDING',
   );
 
-  const wrongRuntimeSpec = snapshot();
-  wrongRuntimeSpec.tasks[0]!.runtimeSpecHash = 'old-runtime-spec';
+  const normalizedRuntimeSpec = snapshot();
+  normalizedRuntimeSpec.tasks[0]!.runtimeSpecHash = 'docker-api-normalized-runtime-spec';
   assert.equal(
-    classifyDeploymentSnapshot(wrongRuntimeSpec, plan, digest, false),
-    'PENDING',
+    classifyDeploymentSnapshot(normalizedRuntimeSpec, plan, digest, false),
+    'SUCCESS',
   );
 });
 
@@ -255,6 +255,45 @@ test('rollback convergence remains pending while rollback is running', () => {
       rollbackDigest,
     ),
     'PENDING',
+  );
+});
+
+test('rollback convergence accepts API-normalized task fingerprint drift', () => {
+  const rollbackDigest = `sha256:${'b'.repeat(64)}`;
+  const rollbackImage =
+    `registry.example.com/team/api@${rollbackDigest}`;
+  const rollbackPlan: ServiceMutationPlan = {
+    serviceId: 'service-1',
+    version: 12,
+    beforeSpecHash: 'failed-spec',
+    targetSpecHash: 'previous-spec',
+    targetForceUpdate: 0,
+    targetReplicas: 2,
+    targetImage: rollbackImage,
+    targetTaskSpecHash: 'previous-task-spec',
+    targetRuntimeSpecHash: 'previous-runtime-spec',
+  };
+  const current = snapshot(
+    {
+      version: 13,
+      specHash: 'previous-spec',
+      image: rollbackImage,
+      updateState: 'rollback_completed',
+    },
+    rollbackImage,
+  );
+  for (const task of current.tasks) {
+    task.specHash = 'docker-api-normalized-task-spec';
+    task.runtimeSpecHash = 'docker-api-normalized-runtime-spec';
+  }
+
+  assert.equal(
+    classifyRollbackSnapshot(
+      current,
+      rollbackPlan,
+      rollbackDigest,
+    ),
+    'SUCCESS',
   );
 });
 
