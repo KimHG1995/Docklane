@@ -29,6 +29,8 @@ const TOKEN_PREFIX = 'docklane_bootstrap_';
 
 @Injectable()
 export class BootstrapService {
+  private readonly clusterId = process.env.DOCKLANE_CLUSTER_ID ?? 'default';
+
   constructor(
     @Inject(BootstrapRepository)
     private readonly repository: BootstrapRepository,
@@ -45,6 +47,7 @@ export class BootstrapService {
     input: CreateBootstrapTokenRequest,
     principal: Principal,
   ): Promise<BootstrapTokenIssueResponse> {
+    this.assertCluster(clusterId);
     this.requireSwarmJoinCredentials(clusterId, input.nodeRole);
 
     const token = `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
@@ -76,6 +79,7 @@ export class BootstrapService {
         'Invalid, expired, or already used bootstrap token',
       );
     }
+    this.assertCluster(pending.clusterId);
 
     const swarmJoin = this.requireSwarmJoinCredentials(
       pending.clusterId,
@@ -123,6 +127,7 @@ export class BootstrapService {
         'Bootstrap claim is not active for this claimId',
       );
     }
+    this.assertCluster(record.clusterId);
 
     let observed;
     try {
@@ -134,6 +139,22 @@ export class BootstrapService {
     }
 
     this.assertNodeMatchesBootstrapScope(record, observed.node);
+
+    const binding = await this.repository.bindCompletionNode(
+      record.id,
+      input.claimId,
+      observed.node.id,
+    );
+    if (binding === 'INACTIVE') {
+      throw new UnauthorizedException(
+        'Bootstrap claim is not active for this claimId',
+      );
+    }
+    if (binding === 'CONFLICT') {
+      throw new ConflictException(
+        'Bootstrap claim is already bound to a different node',
+      );
+    }
 
     const verified = await this.applyBootstrapLabels(record, observed);
     const verifiedAt = new Date().toISOString();
@@ -242,6 +263,12 @@ export class BootstrapService {
       throw new ConflictException(
         'Joined node state or role does not match bootstrap scope',
       );
+    }
+  }
+
+  private assertCluster(clusterId: string): void {
+    if (clusterId !== this.clusterId) {
+      throw new NotFoundException('Cluster not found');
     }
   }
 
