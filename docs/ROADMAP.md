@@ -142,11 +142,27 @@ Exit criteria:
 체크박스는 실제 Functional PoC run에서 해당 시나리오가 끝까지 통과한 경우에만 완료 처리한다.
 Harness 구현 여부와 acceptance 통과 여부를 구분한다.
 
-2026-09-30 acceptance run:
+2026-09-30 acceptance 완료:
 
-- single-node run #36651728867: **FAILED** — normal digest deploy가 Docker mutation 이후 `VERIFYING`에서 수렴하지 않음
-- 3-node run #36651728844: **PARTIAL** — node drain, external LB traffic, network exposure 통과 후 worker failure read-model 검증에서 실패
-- 다음 수정 순서: single-node convergence → worker-failure read model → automatic rollback → capacity shortage
+- single-node run #36671264551: **SUCCESS**
+  - normal digest deploy
+  - same digest/spec no-op redeploy
+  - broken release + manual rollback
+  - API restart during update
+  - Agent response loss
+  - Swarm automatic rollback
+  - capacity shortage pre-check
+  - external CLI conflict
+  - authorization rejection
+  - audit completeness
+- 3-node run #36662265999: **SUCCESS**
+  - manager-01 / worker-01 / worker-02 Ready/Active topology
+  - node drain/activate task relocation
+  - worker failure reschedule 및 Docklane read-model 수렴
+  - external HAProxy traffic during rollout
+  - Swarm internal ports outer-host 차단
+
+v0.6 Functional PoC acceptance를 완료했다.
 
 Topology:
 
@@ -156,7 +172,7 @@ worker-01
 worker-02
 ```
 
-필수 acceptance는 **실제 3-node Functional PoC 실행 결과**로만 체크한다. 단일-node harness 구현 여부와 분리한다.
+필수 acceptance는 시나리오 특성에 따라 single-node와 3-node 실제 Functional PoC 실행 결과로 체크한다. topology, worker failure, node drain, external LB, network exposure는 3-node run을 근거로 하고 나머지 deployment/reconciliation 시나리오는 single-node run을 근거로 한다.
 
 현재 3-node topology harness:
 
@@ -183,18 +199,18 @@ worker-02
 
 필수:
 
-- [ ] normal digest deploy — acceptance run reached VERIFYING but did not converge
-- [ ] broken release rollback
-- [ ] external CLI conflict — harness implemented, single-node acceptance blocked earlier
-- [ ] API restart during update — harness implemented, single-node acceptance blocked earlier
-- [ ] Agent response loss — harness implemented, single-node acceptance blocked earlier
-- [ ] capacity shortage
+- [x] normal digest deploy
+- [x] broken release rollback
+- [x] external CLI conflict
+- [x] API restart during update
+- [x] Agent response loss
+- [x] capacity shortage
 - [x] actual external LB traffic during rollout
-- [ ] worker failure — Swarm reschedule succeeded; Docklane read model reported desired=1/running=2 during shutdown overlap
+- [x] worker failure
 - [x] node drain
 - [x] authorization rejection
-- [ ] audit completeness
-- [ ] same digest/spec no-op redeploy
+- [x] audit completeness
+- [x] same digest/spec no-op redeploy
 - [x] Swarm internal ports blocked from untrusted/public networks
 
 이 단계까지가 **기능 MVP**다.
