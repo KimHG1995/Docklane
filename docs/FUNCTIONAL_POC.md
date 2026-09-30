@@ -158,7 +158,7 @@ GitHub runner Docker
 4. Docklane은 `rollback_started` 동안 mutation protection을 유지하고, `rollback_completed`를 관찰한 뒤 원래 배포를 `FAILED`로 종결한다.
 5. 별도 Docklane rollback operation이 생성되지 않았는지 확인한다.
 6. 실제 service image가 이전 v4 digest로 복구되고 root 응답과 health가 정상인지 확인한다.
-7. broken digest에 대한 Docklane image mutation 전달이 정확히 한 번인지 확인한다.
+7. broken digest와 해당 deployment target spec hash 조합에 대한 Docklane image mutation 전달이 정확히 한 번인지 확인한다.
 8. audit에는 `DEPLOY_STARTED`와 `DEPLOY_FAILED`만 남고 `ROLLBACK_STARTED` / `ROLLBACK_SUCCEEDED`가 없는지 확인한다.
 
 이 시나리오는 **Swarm 자체 rollback을 Docklane-triggered rollback으로 오인하지 않고, 기존 deployment intent를 기준으로 관찰 및 종결하는지** 검증한다.
@@ -386,7 +386,7 @@ PoC Agent proxy는 모든 `POST /v1/services/:id/image` 전달을 `agent-image-m
 - target spec hash
 - response drop 여부
 
-API restart와 Agent response-loss 시나리오는 **해당 target digest에 대한 image mutation 전달 횟수가 정확히 1회**인지 직접 검증한다.
+`agent-image-mutations.jsonl`은 target digest를 기본 식별자로 사용하고, 동일 digest를 여러 deployment에서 재사용하는 시나리오는 `targetSpecHash`까지 함께 사용해 mutation 전달 횟수를 구분한다. API restart와 Agent response-loss처럼 digest가 고유한 시나리오는 digest만으로, automatic rollback처럼 기존 broken digest를 재사용하는 시나리오는 digest + target spec hash로 정확히 1회 전달을 검증한다.
 
 
 ## PoC harness safety details
