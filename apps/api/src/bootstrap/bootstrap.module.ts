@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AgentModule } from '../agent/agent.module.js';
 import { DbModule } from '../db/db.module.js';
 import { BootstrapController } from './bootstrap.controller.js';
 import { BootstrapRepository } from './bootstrap.repository.js';
@@ -6,7 +7,7 @@ import { BootstrapService } from './bootstrap.service.js';
 import { SwarmJoinCredentialProvider } from './swarm-join-credential.provider.js';
 
 @Module({
-  imports: [DbModule],
+  imports: [DbModule, AgentModule],
   controllers: [BootstrapController],
   providers: [
     BootstrapRepository,
