@@ -181,6 +181,7 @@ jobs:
           bash -n tests/functional-poc/cleanup.sh
           bash -n tests/functional-poc/three-node-topology.sh
           bash -n tests/functional-poc/three-node-external-lb.sh
+          bash -n tests/functional-poc/three-node-network-exposure.sh
           python3 -m py_compile tests/functional-poc/app/server.py
           python3 -m py_compile tests/functional-poc/agent-proxy.py
           python3 -m py_compile tests/functional-poc/agent-proxy-test.py
