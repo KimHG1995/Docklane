@@ -84,6 +84,10 @@ jobs:
               tests/functional-poc/*)
                 poc=true
                 ;;
+              tests/agent-mtls-poc.sh)
+                api=true
+                agent=true
+                ;;
               docs/*|README.md|CONTRIBUTING.md|SECURITY.md|LICENSE)
                 docs=true
                 ;;
@@ -168,6 +172,29 @@ jobs:
       - run: go test ./...
       - run: go build -o bin/docklane-agent ./cmd/docklane-agent
 
+  agent-mtls-poc:
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.agent == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - run: corepack enable
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @docklane/api build
+      - name: Build Go Agent
+        working-directory: agent
+        run: go build -o bin/docklane-agent ./cmd/docklane-agent
+      - name: Run Control Plane to Agent mTLS PoC
+        run: bash tests/agent-mtls-poc.sh
+
   functional-poc-lint:
     needs: changes
     if: needs.changes.outputs.poc == 'true'
@@ -204,7 +231,7 @@ jobs:
 
   validation-gate:
     if: always()
-    needs: [changes, api, web, go-agent, functional-poc-lint, docs-only]
+    needs: [changes, api, web, go-agent, agent-mtls-poc, functional-poc-lint, docs-only]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -218,7 +245,7 @@ jobs:
             exit 1
           fi
 
-          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.docs-only.result }}"; do
+          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.agent-mtls-poc.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.docs-only.result }}"; do
             if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
               echo "A required validation job failed or was cancelled"
               exit 1
