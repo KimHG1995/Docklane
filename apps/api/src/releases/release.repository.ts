@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { AuditRepository } from '../audit/audit.repository.js';
 import { Database } from '../db/database.js';
@@ -48,66 +48,11 @@ interface ReleaseRow extends RowDataPacket {
 }
 
 @Injectable()
-export class ReleaseRepository implements OnModuleInit {
+export class ReleaseRepository {
   constructor(
     @Inject(Database) private readonly db: Database,
     @Inject(AuditRepository) private readonly audit: AuditRepository,
   ) {}
-
-  async onModuleInit(): Promise<void> {
-    await this.db.pool.query(`
-      CREATE TABLE IF NOT EXISTS applications (
-        id VARCHAR(64) PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        description TEXT NULL,
-        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-          ON UPDATE CURRENT_TIMESTAMP(6),
-        UNIQUE KEY uq_applications_name (name)
-      ) ENGINE=InnoDB
-    `);
-
-    await this.db.pool.query(`
-      CREATE TABLE IF NOT EXISTS deployment_targets (
-        id VARCHAR(64) PRIMARY KEY,
-        application_id VARCHAR(64) NOT NULL,
-        cluster_id VARCHAR(128) NOT NULL,
-        environment VARCHAR(255) NOT NULL,
-        docker_service_id VARCHAR(255) NOT NULL,
-        service_name VARCHAR(255) NOT NULL,
-        routing_mode VARCHAR(32) NOT NULL,
-        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-          ON UPDATE CURRENT_TIMESTAMP(6),
-        UNIQUE KEY uq_target_cluster_service (cluster_id, docker_service_id),
-        UNIQUE KEY uq_target_application_environment (application_id, environment),
-        INDEX idx_targets_application (application_id),
-        CONSTRAINT fk_targets_application
-          FOREIGN KEY (application_id) REFERENCES applications(id)
-          ON DELETE RESTRICT
-      ) ENGINE=InnoDB
-    `);
-
-    await this.db.pool.query(`
-      CREATE TABLE IF NOT EXISTS releases (
-        id VARCHAR(64) PRIMARY KEY,
-        application_id VARCHAR(64) NOT NULL,
-        version VARCHAR(255) NOT NULL,
-        image_repository VARCHAR(512) NOT NULL,
-        image_tag VARCHAR(255) NULL,
-        image_digest VARCHAR(80) NOT NULL,
-        git_commit VARCHAR(128) NULL,
-        build_number VARCHAR(128) NULL,
-        created_by VARCHAR(128) NOT NULL,
-        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        UNIQUE KEY uq_release_application_version (application_id, version),
-        INDEX idx_releases_application_created (application_id, created_at),
-        CONSTRAINT fk_releases_application
-          FOREIGN KEY (application_id) REFERENCES applications(id)
-          ON DELETE RESTRICT
-      ) ENGINE=InnoDB
-    `);
-  }
 
   async createApplication(
     input: CreateApplicationRequest,
