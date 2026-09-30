@@ -43,7 +43,7 @@ GitHub runner Docker
 - manager Docker API가 host loopback `tcp://127.0.0.1:22375`에서 동일한 node view를 제공
 - cleanup은 이번 실행이 만든 DinD container/network ID만 제거
 
-현재 harness는 topology 기반에 더해 Docklane node drain/activate와 worker 간 task relocation까지 검증한다. worker failure / LB traffic 시나리오는 이 harness 위에 순차 추가한다.
+현재 harness는 topology, Docklane node drain/activate, worker 간 task relocation과 worker failure recovery까지 검증한다. LB traffic 시나리오는 이 harness 위에 순차 추가한다.
 
 ### 3-node Docklane node drain
 
@@ -57,6 +57,16 @@ GitHub runner Docker
 8. NODE_DRAIN_STARTED, NODE_DRAIN_SUCCEEDED, NODE_ACTIVATE_STARTED, NODE_ACTIVATE_SUCCEEDED audit가 각각 한 번인지 확인한다.
 
 이 시나리오는 node availability 변경뿐 아니라 실제 Swarm task relocation과 Docklane audit/recovery 경로를 함께 검증한다.
+
+### 3-node worker failure
+
+1. node drain/activate 검증 이후 현재 fixture task가 실행 중인 worker를 식별한다.
+2. 해당 worker의 outer DinD 컨테이너를 강제 종료해 실제 worker failure를 만든다.
+3. Docklane node read model이 해당 node를 더 이상 ready로 보고하지 않는지 확인한다.
+4. Swarm이 기존 task를 종료하고 surviving worker에 새로운 task ID를 Running 상태로 생성하는지 확인한다.
+5. Docklane service read model에서 desired/running replica가 다시 1/1로 수렴했는지 확인한다.
+
+이 시나리오는 외부 worker 장애 시 Swarm 자체 rescheduling과 Docklane read model의 장애 관찰을 함께 검증한다.
 
 ## 현재 자동 검증 시나리오
 
@@ -241,6 +251,10 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `activate-operation.json`
 - `activate-node-after.json`
 - `node-drain-audit-actions.txt`
+- `worker-failure-node-before.json`
+- `worker-failure-node-after.json`
+- `worker-failure-service-after.txt`
+- `worker-failure-service.json`
 - Docker build/push/swarm 생성 로그
 
 artifact retention은 14일이다.
@@ -268,7 +282,6 @@ bash tests/functional-poc/cleanup.sh
 - API restart during update — harness implemented; acceptance pending an actual workflow run
 - Agent response loss — harness implemented; acceptance pending an actual workflow run
 - actual external LB traffic during rollout
-- worker failure
 - Swarm internal ports network exposure 검증
 
 이 항목들은 단일-node smoke가 안정화된 뒤 별도 시나리오로 확장한다.
