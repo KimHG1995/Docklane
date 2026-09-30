@@ -1,4 +1,4 @@
-import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { PoolConnection } from 'mysql2/promise';
 import { Database } from '../db/database.js';
 
@@ -14,28 +14,8 @@ export interface DomainAuditEvent {
 }
 
 @Injectable()
-export class AuditRepository implements OnModuleInit {
+export class AuditRepository {
   constructor(@Inject(Database) private readonly db: Database) {}
-
-  async onModuleInit(): Promise<void> {
-    await this.db.pool.query(`
-      CREATE TABLE IF NOT EXISTS audit_events (
-        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        operation_id VARCHAR(64) NOT NULL,
-        actor_id VARCHAR(128) NOT NULL,
-        cluster_id VARCHAR(128) NOT NULL,
-        service_id VARCHAR(128) NOT NULL,
-        resource_type VARCHAR(32) NOT NULL DEFAULT 'service',
-        resource_id VARCHAR(128) NOT NULL DEFAULT '',
-        action VARCHAR(64) NOT NULL,
-        before_json JSON NULL,
-        after_json JSON NULL,
-        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        INDEX idx_audit_operation (operation_id),
-        INDEX idx_audit_resource (cluster_id, service_id, created_at)
-      ) ENGINE=InnoDB
-    `);
-  }
 
   async record(
     connection: PoolConnection,
