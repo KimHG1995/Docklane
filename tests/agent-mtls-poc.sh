@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
 TMP_DIR="$(mktemp -d)"
 AGENT_ADDR="127.0.0.1:19443"
 AGENT_URL="https://$AGENT_ADDR"
