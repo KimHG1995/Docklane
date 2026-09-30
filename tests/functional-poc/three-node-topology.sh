@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="${DOCKLANE_POC_LOG_DIR:-${RUNNER_TEMP:-/tmp}/docklane-poc-3node}"
+export DOCKLANE_POC_LOG_DIR="$LOG_DIR"
 OWNERSHIP_DIR="$LOG_DIR/ownership"
 NETWORK_NAME="docklane-poc-3node-net"
 MANAGER_CONTAINER="docklane-poc-manager-01"
