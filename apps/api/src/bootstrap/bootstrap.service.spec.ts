@@ -252,6 +252,7 @@ test('bootstrap completion verifies joined node role through Agent', async () =>
   };
   const repository = {
     findClaimableByHash: async () => record,
+    recordCompletionAudit: async () => undefined,
   };
   const agent = {
     inspectNode: async () => ({
@@ -311,6 +312,7 @@ test('bootstrap completion rejects node role mismatch', async () => {
   };
   const repository = {
     findClaimableByHash: async () => record,
+    recordCompletionAudit: async () => undefined,
   };
   const agent = {
     inspectNode: async () => ({
@@ -358,6 +360,7 @@ test('bootstrap completion applies scoped labels through node mutation coordinat
   };
   const repository = {
     findClaimableByHash: async () => record,
+    recordCompletionAudit: async () => undefined,
   };
 
   let inspectCalls = 0;
@@ -448,6 +451,7 @@ test('bootstrap label completion reuses persisted operation expectedVersion on r
   };
   const repository = {
     findClaimableByHash: async () => record,
+    recordCompletionAudit: async () => undefined,
   };
   const agent = {
     inspectNode: async () => ({
@@ -518,6 +522,7 @@ test('bootstrap completion rejects labels that are not observed after mutation',
   };
   const repository = {
     findClaimableByHash: async () => record,
+    recordCompletionAudit: async () => undefined,
   };
   const agent = {
     inspectNode: async () => ({
