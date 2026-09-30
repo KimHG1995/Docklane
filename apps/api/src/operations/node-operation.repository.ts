@@ -1,4 +1,4 @@
-import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
 import type {
@@ -29,38 +29,8 @@ interface NodeOperationRow extends RowDataPacket {
 }
 
 @Injectable()
-export class NodeOperationRepository implements OnModuleInit {
+export class NodeOperationRepository {
   constructor(@Inject(Database) private readonly db: Database) {}
-
-  async onModuleInit(): Promise<void> {
-    await this.db.pool.query(`
-      CREATE TABLE IF NOT EXISTS node_operations (
-        id VARCHAR(64) PRIMARY KEY,
-        cluster_id VARCHAR(128) NOT NULL,
-        node_id VARCHAR(128) NOT NULL,
-        type VARCHAR(32) NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        actor_id VARCHAR(128) NOT NULL,
-        expected_version BIGINT UNSIGNED NOT NULL,
-        before_spec_hash VARCHAR(64) NOT NULL,
-        target_spec_hash VARCHAR(64) NOT NULL,
-        target_availability VARCHAR(16) NOT NULL,
-        affected_service_ids JSON NOT NULL,
-        target_labels JSON NULL,
-        label_patch JSON NULL,
-        result_version BIGINT UNSIGNED NULL,
-        error_code VARCHAR(64) NULL,
-        error_message TEXT NULL,
-        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-          ON UPDATE CURRENT_TIMESTAMP(6),
-        INDEX idx_node_operations_node (cluster_id, node_id, created_at),
-        INDEX idx_node_operations_status (status, updated_at)
-      ) ENGINE=InnoDB
-    `);
-    await this.ensureColumn('target_labels', 'JSON NULL');
-    await this.ensureColumn('label_patch', 'JSON NULL');
-  }
 
   async find(id: string): Promise<NodeOperationRecord | null> {
     const [rows] = await this.db.pool.query<NodeOperationRow[]>(
@@ -183,27 +153,6 @@ export class NodeOperationRepository implements OnModuleInit {
         input.targetLabels == null ? null : JSON.stringify(input.targetLabels),
         input.labelPatch == null ? null : JSON.stringify(input.labelPatch),
       ],
-    );
-  }
-
-  private async ensureColumn(
-    columnName: string,
-    definition: string,
-  ): Promise<void> {
-    const [rows] = await this.db.pool.query<Array<RowDataPacket & { count: number }>>(
-      `SELECT COUNT(*) AS count
-       FROM information_schema.columns
-       WHERE table_schema = DATABASE()
-         AND table_name = 'node_operations'
-         AND column_name = ?`,
-      [columnName],
-    );
-    if ((rows[0]?.count ?? 0) > 0) return;
-    if (!/^[a-z_]+$/.test(columnName)) {
-      throw new Error('Unsafe node operation column name');
-    }
-    await this.db.pool.query(
-      `ALTER TABLE node_operations ADD COLUMN ${columnName} ${definition}`,
     );
   }
 
