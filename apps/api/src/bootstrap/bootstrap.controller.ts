@@ -18,11 +18,13 @@ import type {
 } from '../auth/auth.types.js';
 import {
   BootstrapClaimRequestSchema,
+  BootstrapCompleteRequestSchema,
   CreateBootstrapTokenRequestSchema,
 } from './bootstrap.dto.js';
 import { BootstrapService } from './bootstrap.service.js';
 import type {
   BootstrapClaimResponse,
+  BootstrapCompleteResponse,
   BootstrapTokenIssueResponse,
 } from './bootstrap.types.js';
 
@@ -45,6 +47,15 @@ export class BootstrapController {
       clusterId,
       parseBody(CreateBootstrapTokenRequestSchema, body),
       principal(request),
+    );
+  }
+
+  @Post('bootstrap/complete')
+  @HttpCode(200)
+  @Public()
+  complete(@Body() body: unknown): Promise<BootstrapCompleteResponse> {
+    return this.bootstrap.complete(
+      parseBody(BootstrapCompleteRequestSchema, body),
     );
   }
 
