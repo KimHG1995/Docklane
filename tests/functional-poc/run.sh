@@ -642,6 +642,33 @@ if grep -Eq 'ROLLBACK_STARTED|ROLLBACK_SUCCEEDED|DEPLOY_SUCCEEDED|DEPLOY_NEEDS_A
   fail "automatic rollback deployment recorded an unexpected Docklane rollback/success/attention audit"
 fi
 
+log "scenario: capacity shortage blocks scale before Docker mutation"
+CAPACITY_OPERATION_ID="11111111-1111-4111-8111-111111111111"
+CAPACITY_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
+CAPACITY_EXPECTED_VERSION="$(jq -er '.service.version' <<<"$CAPACITY_SERVICE_JSON")"
+CAPACITY_BEFORE_DOCKER_VERSION="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
+CAPACITY_BEFORE_REPLICAS="$(docker service inspect "$SERVICE_NAME" --format '{{.Spec.Mode.Replicated.Replicas}}')"
+
+CAPACITY_CODE="$(curl -sS   -o "$LOG_DIR/capacity-shortage-response.json"   -w '%{http_code}'   -X POST   -H "Authorization: Bearer $OPERATOR_TOKEN"   -H 'Content-Type: application/json'   --data "$(jq -cn     --arg operationId "$CAPACITY_OPERATION_ID"     --argjson expectedVersion "$CAPACITY_EXPECTED_VERSION"     '{
+      operationId: $operationId,
+      expectedVersion: $expectedVersion,
+      replicas: 1000
+    }')"   "$API_URL/v1/clusters/default/services/$SERVICE_ID/scale")"
+
+[[ "$CAPACITY_CODE" == "409" ]]   || fail "capacity shortage scale expected HTTP 409, got $CAPACITY_CODE"
+jq -e '.. | strings | select(. == "INSUFFICIENT_CLUSTER_CAPACITY")'   "$LOG_DIR/capacity-shortage-response.json" >/dev/null   || fail "capacity shortage response did not include INSUFFICIENT_CLUSTER_CAPACITY"
+
+CAPACITY_AFTER_DOCKER_VERSION="$(docker service inspect "$SERVICE_NAME" --format '{{.Version.Index}}')"
+CAPACITY_AFTER_REPLICAS="$(docker service inspect "$SERVICE_NAME" --format '{{.Spec.Mode.Replicated.Replicas}}')"
+[[ "$CAPACITY_AFTER_DOCKER_VERSION" == "$CAPACITY_BEFORE_DOCKER_VERSION" ]]   || fail "capacity shortage changed Docker service version before mutation should have been rejected"
+[[ "$CAPACITY_AFTER_REPLICAS" == "$CAPACITY_BEFORE_REPLICAS" ]]   || fail "capacity shortage changed replica count from $CAPACITY_BEFORE_REPLICAS to $CAPACITY_AFTER_REPLICAS"
+
+CAPACITY_OPERATION_COUNT="$(docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT COUNT(*) FROM operations WHERE id = '$CAPACITY_OPERATION_ID'"   2>/dev/null)"
+[[ "$CAPACITY_OPERATION_COUNT" == "0" ]]   || fail "capacity shortage persisted operation intent before rejecting the mutation"
+
+wait_for_body "$HEALTH_URL" "v4"
+wait_http "$HEALTH_URL/health" 200 60
+
 log "scenario: external CLI service spec conflict during deployment verification"
 EXTERNAL_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
     "version":"v5",
@@ -732,6 +759,7 @@ broken release manual rollback: PASS
 API restart during update: PASS
 Agent response loss: PASS
 Swarm automatic rollback: PASS
+capacity shortage pre-check: PASS
 external CLI conflict: PASS
 authorization rejection: PASS
 audit completeness: PASS
