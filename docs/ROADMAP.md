@@ -224,7 +224,7 @@ worker-02
 - [x] Docker install/validate
 - [x] native Swarm join token handling
 - [x] retry/partial failure protocol
-- [ ] post-join node/role verification
+- [x] post-join node/role verification
 - [ ] label application
 - [ ] bootstrap audit
 
