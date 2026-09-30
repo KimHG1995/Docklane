@@ -101,6 +101,49 @@ wait_service_running_task() {
   fail "service $service_id did not obtain a running task"
 }
 
+wait_worker_failure_relocation() {
+  local service_id="$1"
+  local failed_task_id="$2"
+  local failed_node_name="$3"
+  local output_file="$4"
+
+  for _ in {1..150}; do
+    DOCKER_HOST="$MANAGER_DOCKER_HOST" docker service ps       --filter desired-state=running       --format '{{.ID}}|{{.Node}}|{{.CurrentState}}'       "$service_id" >"$output_file" 2>/dev/null || true
+
+    local line task_id node_name
+    line="$(grep '|Running ' "$output_file" | head -n1 || true)"
+    if [[ -n "$line" ]]; then
+      IFS='|' read -r task_id node_name _ <<<"$line"
+      if [[ "$task_id" != "$failed_task_id" && "$node_name" != "$failed_node_name" ]]; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+
+  fail "service $service_id was not relocated away from failed worker $failed_node_name"
+}
+
+wait_docklane_node_not_ready() {
+  local node_id="$1"
+  local output_file="$2"
+
+  for _ in {1..150}; do
+    local body state
+    body="$(api_get "/v1/clusters/default/nodes/$node_id" 2>/dev/null || true)"
+    if [[ -n "$body" ]]; then
+      printf '%s\n' "$body" >"$output_file"
+      state="$(jq -er '.node.state' <<<"$body" 2>/dev/null || true)"
+      if [[ -n "$state" && "$state" != "ready" ]]; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+
+  fail "Docklane did not observe failed node $node_id as non-ready"
+}
+
 preflight_absent_container() {
   local name="$1"
   if docker inspect "$name" >/dev/null 2>&1; then
@@ -319,6 +362,46 @@ for action in NODE_DRAIN_STARTED NODE_DRAIN_SUCCEEDED NODE_ACTIVATE_STARTED NODE
   [[ "$(grep -c "^$action$" "$LOG_DIR/node-drain-audit-actions.txt" || true)" == "1" ]]     || fail "node drain scenario expected exactly one $action audit"
 done
 
+log "scenario: worker failure reschedules service task"
+FAILURE_TASK_BEFORE="$(grep '|Running ' "$LOG_DIR/drain-service-after.txt" | head -n1)"
+IFS='|' read -r FAILURE_TASK_BEFORE_ID FAILURE_NODE_NAME _ <<<"$FAILURE_TASK_BEFORE"
+
+case "$FAILURE_NODE_NAME" in
+  worker-01)
+    FAILURE_CONTAINER="$WORKER_01_CONTAINER"
+    ;;
+  worker-02)
+    FAILURE_CONTAINER="$WORKER_02_CONTAINER"
+    ;;
+  *)
+    fail "worker failure scenario task is not running on a worker: $FAILURE_NODE_NAME"
+    ;;
+esac
+
+FAILURE_NODE_JSON="$(api_get "/v1/clusters/default/nodes/$FAILURE_NODE_NAME")"
+printf '%s\n' "$FAILURE_NODE_JSON" >"$LOG_DIR/worker-failure-node-before.json"
+FAILURE_NODE_ID="$(jq -er '.node.id' <<<"$FAILURE_NODE_JSON")"
+
+log "stopping outer DinD container for $FAILURE_NODE_NAME"
+docker rm -f "$FAILURE_CONTAINER" >"$LOG_DIR/worker-failure-container-rm.log"
+
+wait_docklane_node_not_ready "$FAILURE_NODE_ID" "$LOG_DIR/worker-failure-node-after.json"
+wait_worker_failure_relocation   "$DRAIN_SERVICE_ID"   "$FAILURE_TASK_BEFORE_ID"   "$FAILURE_NODE_NAME"   "$LOG_DIR/worker-failure-service-after.txt"
+
+FAILURE_TASK_AFTER="$(grep '|Running ' "$LOG_DIR/worker-failure-service-after.txt" | head -n1)"
+IFS='|' read -r FAILURE_TASK_AFTER_ID FAILURE_NODE_AFTER_NAME _ <<<"$FAILURE_TASK_AFTER"
+[[ "$FAILURE_TASK_AFTER_ID" != "$FAILURE_TASK_BEFORE_ID" ]]   || fail "worker failure did not create a replacement task"
+[[ "$FAILURE_NODE_AFTER_NAME" != "$FAILURE_NODE_NAME" ]]   || fail "replacement task remained on failed worker $FAILURE_NODE_NAME"
+
+FAILURE_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$DRAIN_SERVICE_ID")"
+printf '%s\n' "$FAILURE_SERVICE_JSON" >"$LOG_DIR/worker-failure-service.json"
+jq -e '.service.desiredReplicas == 1
+    and .service.runningReplicas == 1
+    and ([.tasks[] | select(.desiredState == "running" and .state == "running")] | length) == 1'   <<<"$FAILURE_SERVICE_JSON" >/dev/null   || fail "Docklane service read model did not converge after worker failure"
+
+FAILURE_NODE_AFTER_JSON="$(cat "$LOG_DIR/worker-failure-node-after.json")"
+jq -e '.node.state != "ready"' <<<"$FAILURE_NODE_AFTER_JSON" >/dev/null   || fail "Docklane still reports failed worker as ready"
+
 cat >"$LOG_DIR/three-node-summary.txt" <<EOF
 manager-01 Ready/Active/Leader: PASS
 worker-01 Ready/Active: PASS
@@ -326,6 +409,8 @@ worker-02 Ready/Active: PASS
 manager Docker API loopback access: PASS
 Docklane node drain task relocation: PASS
 Docklane node activate recovery: PASS
+worker failure task reschedule: PASS
+Docklane failed-worker read model: PASS
 topology node count: 3
 EOF
 
