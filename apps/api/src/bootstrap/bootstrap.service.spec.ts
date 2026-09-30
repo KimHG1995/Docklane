@@ -42,6 +42,7 @@ test('bootstrap token is returned once while only its hash is persisted', async 
   const service = new BootstrapService(
     repository as never,
     swarmJoin as never,
+    {} as never,
   );
   const before = Date.now();
   const issued = await service.issue(
@@ -124,6 +125,7 @@ test('bootstrap claim replays only for the same claimId', async () => {
   const service = new BootstrapService(
     repository as never,
     swarmJoin as never,
+    {} as never,
   );
   const request = {
     token: 'docklane_bootstrap_test_token_1234567890',
@@ -167,6 +169,7 @@ test('bootstrap issue fails before persistence when Swarm credentials are missin
   const service = new BootstrapService(
     repository as never,
     swarmJoin as never,
+    {} as never,
   );
 
   await assert.rejects(
@@ -215,6 +218,7 @@ test('bootstrap claim does not consume token when native credentials are unavail
   const service = new BootstrapService(
     repository as never,
     swarmJoin as never,
+    {} as never,
   );
 
   await assert.rejects(
@@ -226,4 +230,107 @@ test('bootstrap claim does not consume token when native credentials are unavail
     /Swarm join credentials are not configured/,
   );
   assert.equal(consumeCalls, 0);
+});
+
+
+test('bootstrap completion verifies joined node role through Agent', async () => {
+  const claimId = '44444444-4444-4444-8444-444444444444';
+  const record: BootstrapTokenRecord = {
+    id: 'token-complete',
+    clusterId: 'cluster-1',
+    nodeRole: 'worker',
+    labels: { zone: 'a' },
+    createdBy: 'admin-1',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    usedAt: new Date().toISOString(),
+    claimId,
+    createdAt: new Date(0).toISOString(),
+  };
+  const repository = {
+    findClaimableByHash: async () => record,
+  };
+  const agent = {
+    inspectNode: async () => ({
+      node: {
+        id: 'node-1',
+        version: 1,
+        specHash: 'node-spec',
+        hostname: 'worker-01',
+        address: '10.0.0.21',
+        role: 'worker',
+        availability: 'active',
+        state: 'ready',
+        manager: false,
+        leader: false,
+        engineVersion: '28.5.1',
+        nanoCpus: 2_000_000_000,
+        memoryBytes: 4_000_000_000,
+        labels: {},
+      },
+      tasks: [],
+      serviceIds: [],
+    }),
+  };
+  const service = new BootstrapService(
+    repository as never,
+    {} as never,
+    agent as never,
+  );
+
+  const result = await service.complete({
+    token: 'docklane_bootstrap_test_token_1234567890',
+    claimId,
+    nodeId: 'node-1',
+  });
+
+  assert.equal(result.node.id, 'node-1');
+  assert.equal(result.node.role, 'worker');
+  assert.equal(result.node.state, 'ready');
+  assert.equal(result.nodeRole, 'worker');
+  assert.deepEqual(result.labels, { zone: 'a' });
+});
+
+test('bootstrap completion rejects node role mismatch', async () => {
+  const claimId = '55555555-5555-4555-8555-555555555555';
+  const record: BootstrapTokenRecord = {
+    id: 'token-role-mismatch',
+    clusterId: 'cluster-1',
+    nodeRole: 'manager',
+    labels: {},
+    createdBy: 'admin-1',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    usedAt: new Date().toISOString(),
+    claimId,
+    createdAt: new Date(0).toISOString(),
+  };
+  const repository = {
+    findClaimableByHash: async () => record,
+  };
+  const agent = {
+    inspectNode: async () => ({
+      node: {
+        id: 'node-worker',
+        hostname: 'worker-02',
+        role: 'worker',
+        availability: 'active',
+        state: 'ready',
+        manager: false,
+      },
+    }),
+  };
+  const service = new BootstrapService(
+    repository as never,
+    {} as never,
+    agent as never,
+  );
+
+  await assert.rejects(
+    () =>
+      service.complete({
+        token: 'docklane_bootstrap_test_token_1234567890',
+        claimId,
+        nodeId: 'node-worker',
+      }),
+    /Joined node state or role does not match bootstrap scope/,
+  );
 });
