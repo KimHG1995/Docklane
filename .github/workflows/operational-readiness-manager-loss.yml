@@ -1,0 +1,50 @@
+name: operational-readiness-manager-loss
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/operational-readiness-manager-loss.yml'
+      - 'tests/operational-readiness/manager-loss.sh'
+      - 'tests/operational-readiness/cleanup.sh'
+
+concurrency:
+  group: operational-readiness-three-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  manager-loss:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify disposable Docker host
+        run: |
+          docker version
+          docker info
+          test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive"
+
+      - name: Run three-manager manager-loss scenario
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+        run: bash tests/operational-readiness/manager-loss.sh
+
+      - name: Upload operational readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-operational-readiness-manager-loss-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-operational-readiness
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup operational readiness topology
+        if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+        run: bash tests/operational-readiness/cleanup.sh
