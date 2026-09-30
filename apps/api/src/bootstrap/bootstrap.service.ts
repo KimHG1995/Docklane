@@ -22,6 +22,7 @@ import type {
   BootstrapClaimResponse,
   BootstrapCompleteResponse,
   BootstrapTokenIssueResponse,
+  BootstrapTokenRecord,
 } from './bootstrap.types.js';
 
 const TOKEN_PREFIX = 'docklane_bootstrap_';
@@ -156,7 +157,7 @@ export class BootstrapService {
   }
 
   private async applyBootstrapLabels(
-    record: BootstrapTokenIssueResponse,
+    record: BootstrapTokenRecord,
     observed: Awaited<ReturnType<AgentClient['inspectNode']>>,
   ): Promise<Awaited<ReturnType<AgentClient['inspectNode']>>> {
     if (Object.keys(record.labels).length === 0) {
@@ -220,7 +221,7 @@ export class BootstrapService {
   }
 
   private assertNodeMatchesBootstrapScope(
-    record: BootstrapTokenIssueResponse,
+    record: BootstrapTokenRecord,
     node: Awaited<ReturnType<AgentClient['inspectNode']>>['node'],
   ): void {
     const expectedManager = record.nodeRole === 'manager';
