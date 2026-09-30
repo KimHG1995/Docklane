@@ -172,7 +172,7 @@ test('placement-only task spec drift is accepted by runtime fingerprint', () => 
   );
 });
 
-test('deployment requires unique running slots but not API-normalized task fingerprint equality', () => {
+test('deployment requires unique running slots and target runtime fingerprint', () => {
   const duplicateSlot = snapshot();
   duplicateSlot.tasks[1]!.slot = 1;
   assert.equal(
@@ -180,11 +180,26 @@ test('deployment requires unique running slots but not API-normalized task finge
     'PENDING',
   );
 
-  const normalizedRuntimeSpec = snapshot();
-  normalizedRuntimeSpec.tasks[0]!.runtimeSpecHash = 'docker-api-normalized-runtime-spec';
+  const staleRuntimeSpec = snapshot();
+  staleRuntimeSpec.tasks[0]!.runtimeSpecHash = 'stale-runtime-spec';
   assert.equal(
-    classifyDeploymentSnapshot(normalizedRuntimeSpec, plan, digest, false),
-    'SUCCESS',
+    classifyDeploymentSnapshot(staleRuntimeSpec, plan, digest, false),
+    'PENDING',
+  );
+});
+
+test('no-op deployment waits while a same-digest task still has stale runtime config', () => {
+  const current = snapshot({ updateState: undefined });
+  current.tasks[0]!.runtimeSpecHash = 'previous-runtime-spec';
+
+  assert.equal(
+    classifyDeploymentSnapshot(
+      current,
+      { ...plan, beforeSpecHash: 'target-spec' },
+      digest,
+      true,
+    ),
+    'PENDING',
   );
 });
 
