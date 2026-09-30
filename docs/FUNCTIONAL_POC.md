@@ -265,6 +265,11 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `worker-failure-node-after.json`
 - `worker-failure-service-after.txt`
 - `worker-failure-service.json`
+- `lb-traffic.log`
+- `lb-service-before.json`
+- `lb-restart.json`
+- `lb-service-after.json`
+- `lb-summary.txt`
 - Docker build/push/swarm 생성 로그
 
 artifact retention은 14일이다.
@@ -291,7 +296,6 @@ bash tests/functional-poc/cleanup.sh
 
 - API restart during update — harness implemented; acceptance pending an actual workflow run
 - Agent response loss — harness implemented; acceptance pending an actual workflow run
-- actual external LB traffic during rollout
 - Swarm internal ports network exposure 검증
 
 이 항목들은 단일-node smoke가 안정화된 뒤 별도 시나리오로 확장한다.
