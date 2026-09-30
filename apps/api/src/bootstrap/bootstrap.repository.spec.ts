@@ -30,6 +30,9 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
     ...initial,
   };
 
+  const executedSql: string[] = [];
+  const queriedSql: string[] = [];
+
   const auditRows: Array<{
     operationId: string;
     actorId: string;
@@ -47,6 +50,7 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
     rollback: async () => undefined,
     release: () => undefined,
     query: async (sql: string, params: unknown[] = []) => {
+      queriedSql.push(sql);
       if (sql.includes('FROM bootstrap_tokens')) {
         return [[{ ...row }], []];
       }
@@ -66,6 +70,7 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
       throw new Error(`unexpected query: ${sql}`);
     },
     execute: async (sql: string, params: unknown[] = []) => {
+      executedSql.push(sql);
       if (sql.includes('INSERT INTO bootstrap_tokens')) {
         const [
           id,
@@ -74,7 +79,7 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
           nodeRole,
           labelsJson,
           createdBy,
-          expiresAt,
+          ttlSeconds,
         ] = params as [
           string,
           string,
@@ -82,7 +87,7 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
           'manager' | 'worker',
           string,
           string,
-          Date,
+          number,
         ];
         row.id = id;
         row.token_hash = tokenHash;
@@ -90,10 +95,10 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
         row.node_role = nodeRole;
         row.labels_json = labelsJson;
         row.created_by = createdBy;
-        row.expires_at = expiresAt;
+        row.expires_at = new Date(Date.now() + ttlSeconds * 1000);
         return [{ affectedRows: 1 }, []];
       }
-      if (sql.includes('SET used_at = CURRENT_TIMESTAMP')) {
+      if (sql.includes('SET used_at = UTC_TIMESTAMP')) {
         const [claimId] = params as [string, string];
         row.claim_id = claimId;
         row.used_at = new Date('2026-09-30T00:00:00.000Z');
@@ -128,6 +133,8 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
   return {
     row,
     auditRows,
+    executedSql,
+    queriedSql,
     db: {
       getConnection: async () => connection,
       pool: {
@@ -148,9 +155,15 @@ test('bootstrap issue audit stores scope without credential secrets', async () =
     nodeRole: 'worker',
     labels: { zone: 'a' },
     createdBy: 'admin-1',
-    expiresAt: state.row.expires_at,
+    ttlSeconds: 600,
   });
 
+  assert.ok(
+    state.executedSql.some(
+      (sql) =>
+        sql.includes('DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ? SECOND)'),
+    ),
+  );
   assert.equal(state.auditRows.length, 1);
   const audit = state.auditRows[0]!;
   assert.equal(audit.action, 'BOOTSTRAP_TOKEN_ISSUED');
@@ -230,4 +243,34 @@ test('bootstrap completion audit is exactly once for retries', async () => {
     claimId,
     ...completion,
   });
+});
+
+
+test('bootstrap claimability and consume use UTC database clock', async () => {
+  const state = fakeDb();
+  const repository = new BootstrapRepository(state.db as never);
+  const claimId = '44444444-4444-4444-8444-444444444444';
+
+  const claimable = await repository.findClaimableByHash(
+    state.row.token_hash,
+    claimId,
+  );
+  assert.ok(claimable);
+  assert.ok(
+    state.queriedSql.some((sql) =>
+      sql.includes('expires_at > UTC_TIMESTAMP(6)'),
+    ),
+  );
+
+  await repository.consume(state.row.token_hash, claimId);
+  assert.ok(
+    state.executedSql.some((sql) =>
+      sql.includes('SET used_at = UTC_TIMESTAMP(6)'),
+    ),
+  );
+  assert.ok(
+    state.queriedSql.some((sql) =>
+      sql.includes('expires_at > UTC_TIMESTAMP(6)'),
+    ),
+  );
 });
