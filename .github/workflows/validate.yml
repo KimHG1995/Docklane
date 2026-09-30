@@ -247,6 +247,7 @@ jobs:
         run: |
           bash -n tests/operational-readiness/leader-loss.sh
           bash -n tests/operational-readiness/manager-loss.sh
+          bash -n tests/operational-readiness/quorum-loss.sh
           bash -n tests/operational-readiness/cleanup.sh
 
   bootstrap-docker:
