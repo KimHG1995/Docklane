@@ -129,3 +129,33 @@ manager-03 | Ready | Active | Reachable
 ```
 
 non-leader manager 한 대의 장애와 복구 동안 leader continuity와 2/3 quorum control이 유지됐다.
+
+
+## Quorum loss
+
+3-manager Swarm에서 현재 Leader만 남기고 Reachable manager 2대를 동시에 중지해 1/3 상태를 만든다.
+
+검증 순서:
+
+1. 3 manager가 Ready/Active이고 1 Leader + 2 Reachable인지 확인한다.
+2. 두 Reachable manager를 중지해 현재 Leader만 남긴다.
+3. surviving manager에서 manager control-plane read가 실패하는지 확인한다.
+4. node label write도 실패해 1/3 상태에서 Raft mutation이 차단되는지 확인한다.
+5. follower manager 1대를 복구한다.
+6. 2/3 manager quorum과 1 Leader가 복구되는지 확인한다.
+7. node label write가 다시 성공하는지 확인한다.
+8. 마지막 manager까지 복구해 3/3 Ready/Active 상태를 확인한다.
+
+주요 evidence:
+
+- `topology-before-quorum-loss.txt`
+- `quorum-loss-node-ls.out`
+- `quorum-loss-node-ls.err`
+- `quorum-loss-write.out`
+- `quorum-loss-write.err`
+- `topology-after-quorum-recovery.txt`
+- `quorum-recovery-write.log`
+- `topology-after-full-recovery.txt`
+- `quorum-loss-summary.txt`
+
+Leader loss, manager loss, quorum loss는 모두 `operational-readiness-three-manager` concurrency group을 사용해 동일한 DinD resource namespace를 직렬화한다.
