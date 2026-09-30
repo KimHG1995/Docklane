@@ -40,6 +40,8 @@ export const DATABASE_MIGRATIONS: readonly Migration[] = [
 export async function runDatabaseMigrations(
   connection: PoolConnection,
 ): Promise<void> {
+  assertMigrationCatalog(DATABASE_MIGRATIONS);
+
   const [lockRows] = await connection.query<LockRow[]>(
     'SELECT GET_LOCK(?, ?) AS acquired',
     [MIGRATION_LOCK, MIGRATION_LOCK_TIMEOUT_SECONDS],
@@ -113,6 +115,26 @@ export async function runDatabaseMigrations(
     } catch {
       // The dedicated migration connection is released by the caller, which
       // also releases any advisory locks held by that MySQL session.
+    }
+  }
+}
+
+export function assertMigrationCatalog(
+  migrations: readonly Pick<Migration, 'version' | 'name' | 'signature'>[],
+): void {
+  for (let index = 0; index < migrations.length; index += 1) {
+    const migration = migrations[index]!;
+    const expectedVersion = index + 1;
+
+    if (migration.version !== expectedVersion) {
+      throw new Error(
+        `Database migration catalog must be contiguous from version 1: expected ${expectedVersion}, found ${migration.version}`,
+      );
+    }
+    if (migration.name.trim() === '' || migration.signature.trim() === '') {
+      throw new Error(
+        `Database migration ${migration.version} must have stable name and signature metadata`,
+      );
     }
   }
 }
