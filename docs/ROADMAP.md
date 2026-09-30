@@ -223,7 +223,7 @@ worker-02
 - [x] TTL / scope
 - [x] Docker install/validate
 - [x] native Swarm join token handling
-- [ ] retry/partial failure protocol
+- [x] retry/partial failure protocol
 - [ ] post-join node/role verification
 - [ ] label application
 - [ ] bootstrap audit
