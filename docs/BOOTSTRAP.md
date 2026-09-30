@@ -110,3 +110,36 @@ Control Plane은 client 자기보고를 신뢰하지 않고 기존 manager Agent
 - manager flag가 scope와 일치
 
 검증이 실패하면 bootstrap completion은 성공으로 기록하지 않는다.
+
+
+## Bootstrap label application
+
+Bootstrap token에 labels가 지정된 경우 post-join role 검증이 끝난 뒤 기존 node mutation coordinator를 통해 labels를 적용한다.
+
+규칙:
+
+- bootstrap token ID를 node label operationId로 재사용해 completion retry를 idempotent하게 처리한다.
+- 직접 Docker node update를 호출하지 않고 기존 CAS, node/service lock, affected-service placement 검증을 재사용한다.
+- label mutation이 SUCCESS가 된 뒤 Agent로 node를 다시 조회해 요청한 label key/value를 실제 상태에서 확인한다.
+- labels가 비어 있으면 node mutation을 만들지 않는다.
+- completion 응답의 node.labels는 최종 Agent 관찰값이다.
+
+
+## Bootstrap audit
+
+Bootstrap lifecycle의 성공 경계를 `audit_events`에 기록한다.
+
+기록 이벤트:
+
+- `BOOTSTRAP_TOKEN_ISSUED`
+- `BOOTSTRAP_TOKEN_CLAIMED`
+- `BOOTSTRAP_COMPLETED`
+
+보안 및 재시도 규칙:
+
+- token 발급 audit는 bootstrap token insert와 같은 transaction에서 기록한다.
+- claim audit는 token consume과 같은 transaction에서 기록한다.
+- claim replay와 completion retry는 token row lock과 `operation_id + action` 조회를 사용해 같은 lifecycle audit를 중복 기록하지 않는다.
+- audit resource type은 `bootstrap_token`, resource ID는 token ID를 사용한다.
+- bootstrap token 원문과 native Swarm join token은 audit payload에 기록하지 않는다.
+- bootstrap label 변경 자체는 기존 node mutation audit(`NODE_LABELS_STARTED`, `NODE_LABELS_SUCCEEDED`)를 그대로 사용한다.
