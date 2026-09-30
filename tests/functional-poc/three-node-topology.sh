@@ -10,6 +10,12 @@ WORKER_01_CONTAINER="docklane-poc-worker-01"
 WORKER_02_CONTAINER="docklane-poc-worker-02"
 DIND_IMAGE="${DOCKLANE_POC_DIND_IMAGE:-docker:28-dind}"
 MANAGER_DOCKER_HOST="tcp://127.0.0.1:22375"
+MYSQL_CONTAINER="docklane-poc-mysql"
+API_URL="http://127.0.0.1:3001"
+AGENT_URL="http://127.0.0.1:9443"
+OPERATOR_TOKEN="docklane-poc-operator-00000001"
+VIEWER_TOKEN="docklane-poc-viewer-0000000001"
+DRAIN_SERVICE_NAME="docklane-poc-drain"
 
 cleanup() {
   bash "$ROOT_DIR/tests/functional-poc/cleanup.sh" || true
@@ -22,6 +28,77 @@ log() {
 fail() {
   printf '[functional-poc-3node] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+
+wait_http() {
+  local url="$1"
+  local expected="${2:-200}"
+  local attempts="${3:-90}"
+
+  for ((i = 1; i <= attempts; i++)); do
+    local code
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || true)"
+    if [[ "$code" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  fail "timed out waiting for $url (expected HTTP $expected)"
+}
+
+api_get() {
+  local path="$1"
+  curl -fsS -H "Authorization: Bearer $OPERATOR_TOKEN" "$API_URL$path"
+}
+
+api_post() {
+  local path="$1"
+  local body="$2"
+  curl -fsS     -X POST     -H "Authorization: Bearer $OPERATOR_TOKEN"     -H 'Content-Type: application/json'     --data "$body"     "$API_URL$path"
+}
+
+wait_node_operation_terminal() {
+  local operation_id="$1"
+  local expected="$2"
+  local output_file="$3"
+
+  for _ in {1..90}; do
+    local operation_json status
+    operation_json="$(api_get "/v1/clusters/default/node-operations/$operation_id")"
+    printf '%s\n' "$operation_json" >"$output_file"
+    status="$(jq -er '.status' <<<"$operation_json")"
+
+    case "$status" in
+      "$expected")
+        printf '%s\n' "$operation_json"
+        return 0
+        ;;
+      FAILED|NEEDS_ATTENTION)
+        fail "node operation $operation_id reached terminal status $status; expected $expected"
+        ;;
+    esac
+    sleep 1
+  done
+
+  fail "timed out waiting for node operation $operation_id to reach $expected"
+}
+
+wait_service_running_task() {
+  local service_id="$1"
+  local output_file="$2"
+
+  for _ in {1..120}; do
+    DOCKER_HOST="$MANAGER_DOCKER_HOST" docker service ps       --filter desired-state=running       --format '{{.ID}}|{{.Node}}|{{.CurrentState}}'       "$service_id" >"$output_file" 2>/dev/null || true
+
+    if grep -q '|Running ' "$output_file"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  fail "service $service_id did not obtain a running task"
 }
 
 preflight_absent_container() {
@@ -66,6 +143,7 @@ wait_three_nodes_ready() {
 preflight_absent_container "$MANAGER_CONTAINER"
 preflight_absent_container "$WORKER_01_CONTAINER"
 preflight_absent_container "$WORKER_02_CONTAINER"
+preflight_absent_container "$MYSQL_CONTAINER"
 preflight_absent_network
 
 mkdir -p "$LOG_DIR"
@@ -120,11 +198,134 @@ sort "$LOG_DIR/three-node-topology.txt" >"$LOG_DIR/three-node-topology.sorted.tx
 sort "$LOG_DIR/manager-api-node-ls.txt" >"$LOG_DIR/manager-api-node-ls.sorted.txt"
 cmp "$LOG_DIR/three-node-topology.sorted.txt" "$LOG_DIR/manager-api-node-ls.sorted.txt"   || fail "manager Docker API view differs between in-container and host-loopback access"
 
+log "starting MySQL for Docklane node-drain scenario"
+MYSQL_CONTAINER_ID="$(docker run -d   --name "$MYSQL_CONTAINER"   -e MYSQL_ROOT_PASSWORD=docklane   -e MYSQL_DATABASE=docklane   -p 33306:3306   mysql:8.4)"
+printf '%s\n' "$MYSQL_CONTAINER_ID" >"$OWNERSHIP_DIR/mysql.container-id"
+
+for _ in {1..90}; do
+  if docker exec "$MYSQL_CONTAINER" mysqladmin ping -uroot -pdocklane --silent >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+docker exec "$MYSQL_CONTAINER" mysqladmin ping -uroot -pdocklane --silent >/dev/null 2>&1   || fail "MySQL did not become ready"
+
+log "pre-pulling node-drain fixture image on all nested Docker daemons"
+docker exec "$MANAGER_CONTAINER" docker pull alpine:3.21 >"$LOG_DIR/manager-pull-alpine.log"
+docker exec "$WORKER_01_CONTAINER" docker pull alpine:3.21 >"$LOG_DIR/worker-01-pull-alpine.log"
+docker exec "$WORKER_02_CONTAINER" docker pull alpine:3.21 >"$LOG_DIR/worker-02-pull-alpine.log"
+
+log "creating worker-only fixture service"
+DRAIN_SERVICE_ID="$(DOCKER_HOST="$MANAGER_DOCKER_HOST" docker service create   --quiet   --name "$DRAIN_SERVICE_NAME"   --replicas 1   --constraint node.role==worker   alpine:3.21   sleep 3600)"
+printf '%s\n' "$DRAIN_SERVICE_ID" >"$LOG_DIR/drain-service.id"
+
+wait_service_running_task "$DRAIN_SERVICE_ID" "$LOG_DIR/drain-service-before.txt"
+DRAIN_TASK_BEFORE="$(grep '|Running ' "$LOG_DIR/drain-service-before.txt" | head -n1)"
+IFS='|' read -r DRAIN_TASK_BEFORE_ID DRAIN_NODE_NAME _ <<<"$DRAIN_TASK_BEFORE"
+[[ "$DRAIN_NODE_NAME" == "worker-01" || "$DRAIN_NODE_NAME" == "worker-02" ]]   || fail "fixture task was not scheduled on a worker: $DRAIN_NODE_NAME"
+
+log "building Docklane API and Agent for node-drain scenario"
+(
+  cd "$ROOT_DIR/agent"
+  go build -o bin/docklane-agent ./cmd/docklane-agent
+)
+(
+  cd "$ROOT_DIR"
+  pnpm --filter @docklane/api build
+)
+
+log "starting Docklane Agent against manager-01 Docker API"
+(
+  export DOCKER_HOST="$MANAGER_DOCKER_HOST"
+  export DOCKLANE_AGENT_INSECURE_DEV=true
+  export DOCKLANE_AGENT_ADDR=127.0.0.1:9443
+  exec "$ROOT_DIR/agent/bin/docklane-agent"
+) >"$LOG_DIR/agent.log" 2>&1 &
+echo "$!" >"$LOG_DIR/agent.pid"
+cp "$LOG_DIR/agent.pid" "$OWNERSHIP_DIR/agent.pid"
+
+wait_http "$AGENT_URL/v1/health" 200 60
+
+TOKENS_JSON="$(jq -cn   --arg operator "$OPERATOR_TOKEN"   --arg viewer "$VIEWER_TOKEN"   '[
+    {token: $operator, actorId: "functional-poc-operator", role: "OPERATOR", clusters: ["default"]},
+    {token: $viewer, actorId: "functional-poc-viewer", role: "VIEWER", clusters: ["default"]}
+  ]')"
+
+log "starting Docklane API"
+(
+  export PORT=3001
+  export DOCKLANE_CLUSTER_ID=default
+  export DOCKLANE_DATABASE_URL='mysql://root:docklane@127.0.0.1:33306/docklane'
+  export DOCKLANE_AGENT_INSECURE_DEV=true
+  export DOCKLANE_AGENT_URL="$AGENT_URL"
+  export DOCKLANE_API_TOKENS="$TOKENS_JSON"
+  export DOCKLANE_REGISTRY_PRIVATE_HOSTS='127.0.0.1:5000'
+  export DOCKLANE_REGISTRY_AUTH_JSON='{}'
+  exec node "$ROOT_DIR/apps/api/dist/main.js"
+) >"$LOG_DIR/api.log" 2>&1 &
+echo "$!" >"$LOG_DIR/api.pid"
+cp "$LOG_DIR/api.pid" "$OWNERSHIP_DIR/api.pid"
+
+wait_http "$API_URL/health" 200 90
+
+DRAIN_NODE_JSON="$(api_get "/v1/clusters/default/nodes/$DRAIN_NODE_NAME")"
+printf '%s\n' "$DRAIN_NODE_JSON" >"$LOG_DIR/drain-node-before.json"
+DRAIN_NODE_ID="$(jq -er '.node.id' <<<"$DRAIN_NODE_JSON")"
+DRAIN_NODE_VERSION="$(jq -er '.node.version' <<<"$DRAIN_NODE_JSON")"
+jq -e --arg serviceId "$DRAIN_SERVICE_ID" '.serviceIds | index($serviceId) != null' <<<"$DRAIN_NODE_JSON" >/dev/null   || fail "Docklane node detail did not observe fixture service before drain"
+
+DRAIN_OPERATION_ID="22222222-2222-4222-8222-222222222222"
+log "draining $DRAIN_NODE_NAME through Docklane API"
+DRAIN_OPERATION_JSON="$(api_post   "/v1/clusters/default/nodes/$DRAIN_NODE_ID/drain"   "$(jq -cn     --arg operationId "$DRAIN_OPERATION_ID"     --argjson expectedVersion "$DRAIN_NODE_VERSION"     '{operationId: $operationId, expectedVersion: $expectedVersion}')")"
+printf '%s\n' "$DRAIN_OPERATION_JSON" >"$LOG_DIR/drain-operation-initial.json"
+
+if [[ "$(jq -er '.status' <<<"$DRAIN_OPERATION_JSON")" != "SUCCESS" ]]; then
+  DRAIN_OPERATION_JSON="$(wait_node_operation_terminal     "$DRAIN_OPERATION_ID"     SUCCESS     "$LOG_DIR/drain-operation-status.json")"
+fi
+printf '%s\n' "$DRAIN_OPERATION_JSON" >"$LOG_DIR/drain-operation.json"
+
+jq -e '.type == "DRAIN" and .status == "SUCCESS" and .targetAvailability == "drain"'   <<<"$DRAIN_OPERATION_JSON" >/dev/null   || fail "Docklane drain operation did not finish SUCCESS"
+
+DRAIN_NODE_AFTER_JSON="$(api_get "/v1/clusters/default/nodes/$DRAIN_NODE_ID")"
+printf '%s\n' "$DRAIN_NODE_AFTER_JSON" >"$LOG_DIR/drain-node-after.json"
+jq -e '.node.availability == "drain"
+    and ([.tasks[] | select(.serviceId != "")] | length) == 0'   <<<"$DRAIN_NODE_AFTER_JSON" >/dev/null   || fail "drained node still has service tasks"
+
+wait_service_running_task "$DRAIN_SERVICE_ID" "$LOG_DIR/drain-service-after.txt"
+DRAIN_TASK_AFTER="$(grep '|Running ' "$LOG_DIR/drain-service-after.txt" | head -n1)"
+IFS='|' read -r DRAIN_TASK_AFTER_ID DRAIN_NODE_AFTER_NAME _ <<<"$DRAIN_TASK_AFTER"
+[[ "$DRAIN_TASK_AFTER_ID" != "$DRAIN_TASK_BEFORE_ID" ]]   || fail "drain did not replace the original service task"
+[[ "$DRAIN_NODE_AFTER_NAME" != "$DRAIN_NODE_NAME" ]]   || fail "replacement task remained on drained node $DRAIN_NODE_NAME"
+[[ "$DRAIN_NODE_AFTER_NAME" == "worker-01" || "$DRAIN_NODE_AFTER_NAME" == "worker-02" ]]   || fail "replacement task did not move to the other worker: $DRAIN_NODE_AFTER_NAME"
+
+ACTIVATE_NODE_VERSION="$(jq -er '.node.version' <<<"$DRAIN_NODE_AFTER_JSON")"
+ACTIVATE_OPERATION_ID="33333333-3333-4333-8333-333333333333"
+log "reactivating $DRAIN_NODE_NAME through Docklane API"
+ACTIVATE_OPERATION_JSON="$(api_post   "/v1/clusters/default/nodes/$DRAIN_NODE_ID/activate"   "$(jq -cn     --arg operationId "$ACTIVATE_OPERATION_ID"     --argjson expectedVersion "$ACTIVATE_NODE_VERSION"     '{operationId: $operationId, expectedVersion: $expectedVersion}')")"
+printf '%s\n' "$ACTIVATE_OPERATION_JSON" >"$LOG_DIR/activate-operation-initial.json"
+
+if [[ "$(jq -er '.status' <<<"$ACTIVATE_OPERATION_JSON")" != "SUCCESS" ]]; then
+  ACTIVATE_OPERATION_JSON="$(wait_node_operation_terminal     "$ACTIVATE_OPERATION_ID"     SUCCESS     "$LOG_DIR/activate-operation-status.json")"
+fi
+printf '%s\n' "$ACTIVATE_OPERATION_JSON" >"$LOG_DIR/activate-operation.json"
+
+ACTIVATE_NODE_JSON="$(api_get "/v1/clusters/default/nodes/$DRAIN_NODE_ID")"
+printf '%s\n' "$ACTIVATE_NODE_JSON" >"$LOG_DIR/activate-node-after.json"
+jq -e '.node.availability == "active"' <<<"$ACTIVATE_NODE_JSON" >/dev/null   || fail "drained node did not return to active"
+
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id IN ('$DRAIN_OPERATION_ID', '$ACTIVATE_OPERATION_ID') ORDER BY id"   >"$LOG_DIR/node-drain-audit-actions.txt" 2>/dev/null
+
+for action in NODE_DRAIN_STARTED NODE_DRAIN_SUCCEEDED NODE_ACTIVATE_STARTED NODE_ACTIVATE_SUCCEEDED; do
+  [[ "$(grep -c "^$action$" "$LOG_DIR/node-drain-audit-actions.txt" || true)" == "1" ]]     || fail "node drain scenario expected exactly one $action audit"
+done
+
 cat >"$LOG_DIR/three-node-summary.txt" <<EOF
 manager-01 Ready/Active/Leader: PASS
 worker-01 Ready/Active: PASS
 worker-02 Ready/Active: PASS
 manager Docker API loopback access: PASS
+Docklane node drain task relocation: PASS
+Docklane node activate recovery: PASS
 topology node count: 3
 EOF
 
