@@ -1,8 +1,9 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import mysql, { type Pool, type PoolConnection } from 'mysql2/promise';
+import { runDatabaseMigrations } from './migrations.js';
 
 @Injectable()
-export class Database implements OnModuleDestroy {
+export class Database implements OnModuleInit, OnModuleDestroy {
   readonly pool: Pool;
 
   constructor() {
@@ -16,6 +17,15 @@ export class Database implements OnModuleDestroy {
       enableKeepAlive: true,
       timezone: 'Z',
     });
+  }
+
+  async onModuleInit(): Promise<void> {
+    const connection = await this.getConnection();
+    try {
+      await runDatabaseMigrations(connection);
+    } finally {
+      connection.release();
+    }
   }
 
   async getConnection(): Promise<PoolConnection> {
