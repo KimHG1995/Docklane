@@ -4,9 +4,9 @@ import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { BootstrapTokenRecord } from './bootstrap.types.js';
 import { BootstrapService } from './bootstrap.service.js';
 
-test('bootstrap token is returned once while only its hash is persisted', async () => {
+test('bootstrap token is returned once while only its hash and TTL are persisted', async () => {
   let storedHash = '';
-  let storedExpiresAtMs = 0;
+  let storedTtlSeconds = 0;
   const repository = {
     create: async (input: {
       id: string;
@@ -15,17 +15,17 @@ test('bootstrap token is returned once while only its hash is persisted', async 
       nodeRole: 'manager' | 'worker';
       labels: Record<string, string>;
       createdBy: string;
-      expiresAt: Date;
+      ttlSeconds: number;
     }): Promise<BootstrapTokenRecord> => {
       storedHash = input.tokenHash;
-      storedExpiresAtMs = input.expiresAt.getTime();
+      storedTtlSeconds = input.ttlSeconds;
       return {
         id: input.id,
         clusterId: input.clusterId,
         nodeRole: input.nodeRole,
         labels: input.labels,
         createdBy: input.createdBy,
-        expiresAt: input.expiresAt.toISOString(),
+        expiresAt: '2026-09-30T00:10:00.000Z',
         usedAt: null,
         claimId: null,
         createdAt: new Date(0).toISOString(),
@@ -45,8 +45,7 @@ test('bootstrap token is returned once while only its hash is persisted', async 
     {} as never,
     {} as never,
   );
-  const before = Date.now();
-  const issued = await service.issue(
+   const issued = await service.issue(
     'cluster-1',
     {
       nodeRole: 'worker',
@@ -66,10 +65,8 @@ test('bootstrap token is returned once while only its hash is persisted', async 
   assert.equal(issued.clusterId, 'cluster-1');
   assert.equal(issued.nodeRole, 'worker');
   assert.deepEqual(issued.labels, { zone: 'a' });
-  assert.ok(
-    storedExpiresAtMs >= before + 599_000 &&
-      storedExpiresAtMs <= before + 601_000,
-  );
+  assert.equal(storedTtlSeconds, 600);
+  assert.equal(issued.expiresAt, '2026-09-30T00:10:00.000Z');
 });
 
 test('bootstrap claim replays only for the same claimId', async () => {
