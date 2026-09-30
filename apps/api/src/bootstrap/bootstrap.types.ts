@@ -22,4 +22,8 @@ export interface BootstrapClaimResponse extends BootstrapScope {
   tokenId: string;
   expiresAt: string;
   claimedAt: string;
+  swarmJoin: {
+    remoteAddr: string;
+    joinToken: string;
+  };
 }
