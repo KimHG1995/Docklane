@@ -23,6 +23,7 @@ interface BootstrapTokenRow extends RowDataPacket {
   expires_at: Date;
   used_at: Date | null;
   claim_id: string | null;
+  completed_node_id: string | null;
   created_at: Date;
 }
 
@@ -42,6 +43,7 @@ export class BootstrapRepository implements OnModuleInit {
         expires_at TIMESTAMP(6) NOT NULL,
         used_at TIMESTAMP(6) NULL,
         claim_id VARCHAR(64) NULL,
+        completed_node_id VARCHAR(128) NULL,
         created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
         UNIQUE KEY uq_bootstrap_token_hash (token_hash),
         INDEX idx_bootstrap_tokens_expiry (expires_at, used_at),
@@ -50,6 +52,7 @@ export class BootstrapRepository implements OnModuleInit {
     `);
 
     await this.ensureColumn('claim_id', 'VARCHAR(64) NULL');
+    await this.ensureColumn('completed_node_id', 'VARCHAR(128) NULL');
   }
 
   async create(input: {
@@ -218,6 +221,57 @@ export class BootstrapRepository implements OnModuleInit {
     }
   }
 
+  async bindCompletionNode(
+    tokenId: string,
+    claimId: string,
+    nodeId: string,
+  ): Promise<'BOUND' | 'REPLAY' | 'CONFLICT' | 'INACTIVE'> {
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const [rows] = await connection.query<BootstrapTokenRow[]>(
+        `SELECT * FROM bootstrap_tokens
+         WHERE id = ?
+           AND expires_at > UTC_TIMESTAMP(6)
+         LIMIT 1
+         FOR UPDATE`,
+        [tokenId],
+      );
+      const current = rows[0];
+      if (
+        !current ||
+        current.used_at === null ||
+        current.claim_id !== claimId
+      ) {
+        await connection.rollback();
+        return 'INACTIVE';
+      }
+
+      if (current.completed_node_id !== null) {
+        await connection.commit();
+        return current.completed_node_id === nodeId
+          ? 'REPLAY'
+          : 'CONFLICT';
+      }
+
+      await connection.execute(
+        `UPDATE bootstrap_tokens
+         SET completed_node_id = ?
+         WHERE id = ? AND completed_node_id IS NULL`,
+        [nodeId, tokenId],
+      );
+
+      await connection.commit();
+      return 'BOUND';
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   async recordCompletionAudit(
     record: BootstrapTokenRecord,
     input: {
@@ -232,11 +286,12 @@ export class BootstrapRepository implements OnModuleInit {
     try {
       await connection.beginTransaction();
 
-      const locked = await this.findByIdForUpdate(connection, record.id);
+      const locked = await this.findRowByIdForUpdate(connection, record.id);
       if (
         !locked ||
-        locked.claimId !== record.claimId ||
-        locked.usedAt === null
+        locked.claim_id !== record.claimId ||
+        locked.used_at === null ||
+        locked.completed_node_id !== input.nodeId
       ) {
         throw new Error(
           'Bootstrap token state changed before completion audit',
@@ -339,15 +394,15 @@ export class BootstrapRepository implements OnModuleInit {
     return rows[0] ? mapRow(rows[0]) : null;
   }
 
-  private async findByIdForUpdate(
+  private async findRowByIdForUpdate(
     connection: PoolConnection,
     id: string,
-  ): Promise<BootstrapTokenRecord | null> {
+  ): Promise<BootstrapTokenRow | null> {
     const [rows] = await connection.query<BootstrapTokenRow[]>(
       'SELECT * FROM bootstrap_tokens WHERE id = ? LIMIT 1 FOR UPDATE',
       [id],
     );
-    return rows[0] ? mapRow(rows[0]) : null;
+    return rows[0] ?? null;
   }
 
   private async findByHashWithConnection(
