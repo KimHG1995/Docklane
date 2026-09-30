@@ -149,6 +149,16 @@ worker-02
 
 필수 acceptance는 **실제 3-node Functional PoC 실행 결과**로만 체크한다. 단일-node harness 구현 여부와 분리한다.
 
+현재 3-node topology harness:
+
+- [x] manager-01 / worker-01 / worker-02 DinD Swarm bootstrap
+- [x] 3-node Ready/Active topology 검증
+- [x] manager Docker API host-loopback 접근 검증
+- [ ] node drain scenario
+- [ ] worker failure scenario
+- [ ] actual external LB traffic scenario
+- [ ] Swarm internal ports network exposure scenario
+
 현재 single-node harness 구현:
 
 - [x] normal digest deploy
