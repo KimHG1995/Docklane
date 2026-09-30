@@ -234,7 +234,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 최소 3 managers에서 별도 검증한다.
 
-- [ ] leader loss
+- [ ] leader loss — 3-manager harness implemented, acceptance pending
 - [ ] manager loss
 - [ ] quorum loss
 - [ ] network partition
