@@ -579,6 +579,266 @@ if grep -Eq 'DEPLOY_FAILED|DEPLOY_NEEDS_ATTENTION' "$LOG_DIR/response-loss-audit
   fail "response-loss deployment recorded failure/attention audit"
 fi
 
+log "scenario: Swarm automatic rollback after unhealthy update"
+docker service update \
+  --update-failure-action rollback \
+  --update-monitor 5s \
+  --update-max-failure-ratio 0 \
+  --health-cmd "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/health\", timeout=1)'" \
+  --health-interval 1s \
+  --health-timeout 1s \
+  --health-retries 2 \
+  --health-start-period 1s \
+  "$SERVICE_NAME" \
+  >"$LOG_DIR/automatic-rollback-policy-update.log"
+
+wait_for_body "$HEALTH_URL" "v4"
+wait_http "$HEALTH_URL/health" 200 60
+
+AUTO_ROLLBACK_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
+    "version":"vbroken-auto",
+    "imageRepository":"http://127.0.0.1:5000/docklane-poc",
+    "imageTag":"vbroken",
+    "gitCommit":"functional-poc-automatic-rollback",
+    "buildNumber":"manual-smoke-automatic-rollback"
+  }')"
+printf '%s\n' "$AUTO_ROLLBACK_RELEASE_JSON" >"$LOG_DIR/automatic-rollback-release.json"
+AUTO_ROLLBACK_RELEASE_ID="$(jq -er '.id' <<<"$AUTO_ROLLBACK_RELEASE_JSON")"
+AUTO_ROLLBACK_DIGEST="$(jq -er '.imageDigest' <<<"$AUTO_ROLLBACK_RELEASE_JSON")"
+AUTO_ROLLBACK_OPERATION_ID="functional-poc-deploy-automatic-rollback"
+
+AUTO_ROLLBACK_DEPLOY_JSON="$(api_post   "/v1/clusters/default/targets/$TARGET_ID/deploy"   "$(jq -cn     --arg releaseId "$AUTO_ROLLBACK_RELEASE_ID"     --argjson health "$HEALTH_JSON"     --arg operationId "$AUTO_ROLLBACK_OPERATION_ID"     '{
+      operationId: $operationId,
+      releaseId: $releaseId,
+      health: $health
+    }')")"
+printf '%s\n' "$AUTO_ROLLBACK_DEPLOY_JSON" >"$LOG_DIR/automatic-rollback-deploy-initial.json"
+AUTO_ROLLBACK_DEPLOYMENT_ID="$(jq -er '.id' <<<"$AUTO_ROLLBACK_DEPLOY_JSON")"
+
+AUTO_ROLLBACK_DEPLOY_JSON="$(wait_deployment_terminal   "$AUTO_ROLLBACK_DEPLOYMENT_ID"   FAILED   "$LOG_DIR/automatic-rollback-deploy-status.json"   120)"
+printf '%s\n' "$AUTO_ROLLBACK_DEPLOY_JSON" >"$LOG_DIR/automatic-rollback-deploy.json"
+
+AUTO_ROLLBACK_STATUS_JSON="$(api_get "/v1/clusters/default/deployments/$AUTO_ROLLBACK_DEPLOYMENT_ID/status")"
+printf '%s\n' "$AUTO_ROLLBACK_STATUS_JSON" >"$LOG_DIR/automatic-rollback-status.json"
+jq -e   '.deployment.status == "FAILED"
+    and .operation.status == "FAILED"
+    and .operation.errorCode == "CONVERGENCE_FAILED"
+    and .rollbackOperation == null'   <<<"$AUTO_ROLLBACK_STATUS_JSON" >/dev/null   || fail "automatic rollback was not observed as a failed deployment without a Docklane rollback operation"
+
+AUTO_ROLLBACK_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
+printf '%s\n' "$AUTO_ROLLBACK_SERVICE_JSON" >"$LOG_DIR/service-after-automatic-rollback.json"
+jq -e --arg digest "$LOSS_DIGEST"   '.service.image | contains("@" + $digest)
+    and .service.updateState == "rollback_completed"'   <<<"$AUTO_ROLLBACK_SERVICE_JSON" >/dev/null   || fail "Swarm automatic rollback did not restore the previous v4 digest/spec"
+
+wait_for_body "$HEALTH_URL" "v4"
+wait_http "$HEALTH_URL/health" 200 60
+assert_image_mutation_count "$AUTO_ROLLBACK_DIGEST" 1 "automatic rollback deployment"
+
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$AUTO_ROLLBACK_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/automatic-rollback-audit-actions.txt"
+
+[[ "$(grep -c '^DEPLOY_STARTED
+EXTERNAL_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
+    "version":"v5",
+    "imageRepository":"http://127.0.0.1:5000/docklane-poc",
+    "imageTag":"v5",
+    "gitCommit":"functional-poc-external-conflict",
+    "buildNumber":"manual-smoke-external-conflict"
+  }')"
+printf '%s\n' "$EXTERNAL_RELEASE_JSON" >"$LOG_DIR/external-conflict-release.json"
+EXTERNAL_RELEASE_ID="$(jq -er '.id' <<<"$EXTERNAL_RELEASE_JSON")"
+EXTERNAL_DIGEST="$(jq -er '.imageDigest' <<<"$EXTERNAL_RELEASE_JSON")"
+EXTERNAL_OPERATION_ID="functional-poc-deploy-external-conflict"
+
+EXTERNAL_HEALTH_JSON='{
+  "url":"http://127.0.0.1:18080/health",
+  "intervalMs":250,
+  "timeoutMs":1000,
+  "retries":10,
+  "stabilityWindowMs":10000,
+  "expectedStatus":200
+}'
+
+(
+  curl -sS     -X POST     -H "Authorization: Bearer $OPERATOR_TOKEN"     -H 'Content-Type: application/json'     --data "$(jq -cn       --arg releaseId "$EXTERNAL_RELEASE_ID"       --argjson health "$EXTERNAL_HEALTH_JSON"       --arg operationId "$EXTERNAL_OPERATION_ID"       '{
+        operationId: $operationId,
+        releaseId: $releaseId,
+        health: $health
+      }')"     "$API_URL/v1/clusters/default/targets/$TARGET_ID/deploy"     >"$LOG_DIR/external-conflict-deploy-post.json"     2>"$LOG_DIR/external-conflict-deploy-post.err" || true
+) &
+EXTERNAL_REQUEST_PID="$!"
+
+EXTERNAL_DEPLOYMENT_ID=""
+EXTERNAL_OPERATION_STATUS=""
+CURRENT_IMAGE=""
+for _ in {1..120}; do
+  EXTERNAL_OPERATION_STATUS="$(docker exec "$MYSQL_CONTAINER"     mysql -uroot -pdocklane docklane     --batch --skip-column-names     -e "SELECT status FROM operations WHERE id = '$EXTERNAL_OPERATION_ID' LIMIT 1"     2>/dev/null || true)"
+  EXTERNAL_DEPLOYMENT_ID="$(docker exec "$MYSQL_CONTAINER"     mysql -uroot -pdocklane docklane     --batch --skip-column-names     -e "SELECT id FROM deployments WHERE operation_id = '$EXTERNAL_OPERATION_ID' LIMIT 1"     2>/dev/null || true)"
+  CURRENT_IMAGE="$(docker service inspect "$SERVICE_NAME" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+
+  if [[ -n "$EXTERNAL_DEPLOYMENT_ID" ]] &&
+     [[ "$EXTERNAL_OPERATION_STATUS" == "RUNNING" || "$EXTERNAL_OPERATION_STATUS" == "VERIFYING" ]] &&
+     [[ "$CURRENT_IMAGE" == *"@$EXTERNAL_DIGEST"* ]]; then
+    break
+  fi
+  sleep 0.25
+done
+
+[[ -n "$EXTERNAL_DEPLOYMENT_ID" ]]   || fail "external conflict scenario did not persist deployment intent"
+[[ "$EXTERNAL_OPERATION_STATUS" == "RUNNING" || "$EXTERNAL_OPERATION_STATUS" == "VERIFYING" ]]   || fail "external conflict scenario operation became terminal before CLI mutation: $EXTERNAL_OPERATION_STATUS"
+[[ "$CURRENT_IMAGE" == *"@$EXTERNAL_DIGEST"* ]]   || fail "external conflict scenario target image was not observed before CLI mutation"
+
+docker service update   --label-add docklane.poc.external-conflict=1   "$SERVICE_NAME"   >"$LOG_DIR/external-conflict-cli-update.log"
+
+wait "$EXTERNAL_REQUEST_PID" 2>/dev/null || true
+
+EXTERNAL_DEPLOY_JSON="$(wait_deployment_terminal   "$EXTERNAL_DEPLOYMENT_ID"   NEEDS_ATTENTION   "$LOG_DIR/external-conflict-deploy-status.json"   120)"
+printf '%s\n' "$EXTERNAL_DEPLOY_JSON" >"$LOG_DIR/external-conflict-deploy.json"
+
+EXTERNAL_STATUS_JSON="$(api_get "/v1/clusters/default/deployments/$EXTERNAL_DEPLOYMENT_ID/status")"
+printf '%s\n' "$EXTERNAL_STATUS_JSON" >"$LOG_DIR/external-conflict-status.json"
+jq -e   '.deployment.status == "NEEDS_ATTENTION"
+    and .operation.status == "NEEDS_ATTENTION"
+    and .operation.errorCode == "EXTERNAL_SERVICE_CONFLICT"'   <<<"$EXTERNAL_STATUS_JSON" >/dev/null   || fail "external CLI spec change was not classified as EXTERNAL_SERVICE_CONFLICT"
+
+wait_for_body "$HEALTH_URL" "v5"
+wait_http "$HEALTH_URL/health" 200 60
+assert_image_mutation_count "$EXTERNAL_DIGEST" 1 "external CLI conflict deployment"
+
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$EXTERNAL_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/external-conflict-audit-actions.txt"
+
+[[ "$(grep -c '^DEPLOY_STARTED$' "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_STARTED audit"
+[[ "$(grep -c '^DEPLOY_NEEDS_ATTENTION$' "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_NEEDS_ATTENTION audit"
+if grep -Eq 'DEPLOY_SUCCEEDED|DEPLOY_FAILED' "$LOG_DIR/external-conflict-audit-actions.txt"; then
+  fail "external conflict deployment recorded success/failure instead of operator attention"
+fi
+
+log "scenario: audit completeness"
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
+
+for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
+  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
+done
+
+cat >"$LOG_DIR/summary.txt" <<EOF
+normal digest deploy: PASS
+same digest/spec no-op redeploy: PASS
+broken release manual rollback: PASS
+API restart during update: PASS
+Agent response loss: PASS
+Swarm automatic rollback: PASS
+external CLI conflict: PASS
+authorization rejection: PASS
+audit completeness: PASS
+release digest: $RELEASE_DIGEST
+service id: $SERVICE_ID
+EOF
+
+log "functional PoC smoke passed"
+cat "$LOG_DIR/summary.txt"
+ "$LOG_DIR/automatic-rollback-audit-actions.txt" || true)" == "1" ]]   || fail "automatic rollback deployment must have exactly one DEPLOY_STARTED audit"
+[[ "$(grep -c '^DEPLOY_FAILED
+EXTERNAL_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
+    "version":"v5",
+    "imageRepository":"http://127.0.0.1:5000/docklane-poc",
+    "imageTag":"v5",
+    "gitCommit":"functional-poc-external-conflict",
+    "buildNumber":"manual-smoke-external-conflict"
+  }')"
+printf '%s\n' "$EXTERNAL_RELEASE_JSON" >"$LOG_DIR/external-conflict-release.json"
+EXTERNAL_RELEASE_ID="$(jq -er '.id' <<<"$EXTERNAL_RELEASE_JSON")"
+EXTERNAL_DIGEST="$(jq -er '.imageDigest' <<<"$EXTERNAL_RELEASE_JSON")"
+EXTERNAL_OPERATION_ID="functional-poc-deploy-external-conflict"
+
+EXTERNAL_HEALTH_JSON='{
+  "url":"http://127.0.0.1:18080/health",
+  "intervalMs":250,
+  "timeoutMs":1000,
+  "retries":10,
+  "stabilityWindowMs":10000,
+  "expectedStatus":200
+}'
+
+(
+  curl -sS     -X POST     -H "Authorization: Bearer $OPERATOR_TOKEN"     -H 'Content-Type: application/json'     --data "$(jq -cn       --arg releaseId "$EXTERNAL_RELEASE_ID"       --argjson health "$EXTERNAL_HEALTH_JSON"       --arg operationId "$EXTERNAL_OPERATION_ID"       '{
+        operationId: $operationId,
+        releaseId: $releaseId,
+        health: $health
+      }')"     "$API_URL/v1/clusters/default/targets/$TARGET_ID/deploy"     >"$LOG_DIR/external-conflict-deploy-post.json"     2>"$LOG_DIR/external-conflict-deploy-post.err" || true
+) &
+EXTERNAL_REQUEST_PID="$!"
+
+EXTERNAL_DEPLOYMENT_ID=""
+EXTERNAL_OPERATION_STATUS=""
+CURRENT_IMAGE=""
+for _ in {1..120}; do
+  EXTERNAL_OPERATION_STATUS="$(docker exec "$MYSQL_CONTAINER"     mysql -uroot -pdocklane docklane     --batch --skip-column-names     -e "SELECT status FROM operations WHERE id = '$EXTERNAL_OPERATION_ID' LIMIT 1"     2>/dev/null || true)"
+  EXTERNAL_DEPLOYMENT_ID="$(docker exec "$MYSQL_CONTAINER"     mysql -uroot -pdocklane docklane     --batch --skip-column-names     -e "SELECT id FROM deployments WHERE operation_id = '$EXTERNAL_OPERATION_ID' LIMIT 1"     2>/dev/null || true)"
+  CURRENT_IMAGE="$(docker service inspect "$SERVICE_NAME" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+
+  if [[ -n "$EXTERNAL_DEPLOYMENT_ID" ]] &&
+     [[ "$EXTERNAL_OPERATION_STATUS" == "RUNNING" || "$EXTERNAL_OPERATION_STATUS" == "VERIFYING" ]] &&
+     [[ "$CURRENT_IMAGE" == *"@$EXTERNAL_DIGEST"* ]]; then
+    break
+  fi
+  sleep 0.25
+done
+
+[[ -n "$EXTERNAL_DEPLOYMENT_ID" ]]   || fail "external conflict scenario did not persist deployment intent"
+[[ "$EXTERNAL_OPERATION_STATUS" == "RUNNING" || "$EXTERNAL_OPERATION_STATUS" == "VERIFYING" ]]   || fail "external conflict scenario operation became terminal before CLI mutation: $EXTERNAL_OPERATION_STATUS"
+[[ "$CURRENT_IMAGE" == *"@$EXTERNAL_DIGEST"* ]]   || fail "external conflict scenario target image was not observed before CLI mutation"
+
+docker service update   --label-add docklane.poc.external-conflict=1   "$SERVICE_NAME"   >"$LOG_DIR/external-conflict-cli-update.log"
+
+wait "$EXTERNAL_REQUEST_PID" 2>/dev/null || true
+
+EXTERNAL_DEPLOY_JSON="$(wait_deployment_terminal   "$EXTERNAL_DEPLOYMENT_ID"   NEEDS_ATTENTION   "$LOG_DIR/external-conflict-deploy-status.json"   120)"
+printf '%s\n' "$EXTERNAL_DEPLOY_JSON" >"$LOG_DIR/external-conflict-deploy.json"
+
+EXTERNAL_STATUS_JSON="$(api_get "/v1/clusters/default/deployments/$EXTERNAL_DEPLOYMENT_ID/status")"
+printf '%s\n' "$EXTERNAL_STATUS_JSON" >"$LOG_DIR/external-conflict-status.json"
+jq -e   '.deployment.status == "NEEDS_ATTENTION"
+    and .operation.status == "NEEDS_ATTENTION"
+    and .operation.errorCode == "EXTERNAL_SERVICE_CONFLICT"'   <<<"$EXTERNAL_STATUS_JSON" >/dev/null   || fail "external CLI spec change was not classified as EXTERNAL_SERVICE_CONFLICT"
+
+wait_for_body "$HEALTH_URL" "v5"
+wait_http "$HEALTH_URL/health" 200 60
+assert_image_mutation_count "$EXTERNAL_DIGEST" 1 "external CLI conflict deployment"
+
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$EXTERNAL_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/external-conflict-audit-actions.txt"
+
+[[ "$(grep -c '^DEPLOY_STARTED$' "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_STARTED audit"
+[[ "$(grep -c '^DEPLOY_NEEDS_ATTENTION$' "$LOG_DIR/external-conflict-audit-actions.txt" || true)" == "1" ]]   || fail "external conflict deployment must have exactly one DEPLOY_NEEDS_ATTENTION audit"
+if grep -Eq 'DEPLOY_SUCCEEDED|DEPLOY_FAILED' "$LOG_DIR/external-conflict-audit-actions.txt"; then
+  fail "external conflict deployment recorded success/failure instead of operator attention"
+fi
+
+log "scenario: audit completeness"
+docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e 'SELECT action FROM audit_events ORDER BY id'   2>/dev/null >"$LOG_DIR/audit-actions.txt"
+
+for action in   APPLICATION_CREATED   DEPLOYMENT_TARGET_CREATED   RELEASE_CREATED   DEPLOY_STARTED   DEPLOY_SUCCEEDED   DEPLOY_NO_OP_STARTED   DEPLOY_NO_OP_SUCCEEDED   DEPLOY_FAILED   ROLLBACK_STARTED   ROLLBACK_SUCCEEDED; do
+  grep -qx "$action" "$LOG_DIR/audit-actions.txt"     || fail "missing audit action: $action"
+done
+
+cat >"$LOG_DIR/summary.txt" <<EOF
+normal digest deploy: PASS
+same digest/spec no-op redeploy: PASS
+broken release manual rollback: PASS
+API restart during update: PASS
+Agent response loss: PASS
+external CLI conflict: PASS
+authorization rejection: PASS
+audit completeness: PASS
+release digest: $RELEASE_DIGEST
+service id: $SERVICE_ID
+EOF
+
+log "functional PoC smoke passed"
+cat "$LOG_DIR/summary.txt"
+ "$LOG_DIR/automatic-rollback-audit-actions.txt" || true)" == "1" ]]   || fail "automatic rollback deployment must have exactly one DEPLOY_FAILED audit"
+if grep -Eq 'ROLLBACK_STARTED|ROLLBACK_SUCCEEDED|DEPLOY_SUCCEEDED|DEPLOY_NEEDS_ATTENTION' "$LOG_DIR/automatic-rollback-audit-actions.txt"; then
+  fail "automatic rollback deployment recorded an unexpected Docklane rollback/success/attention audit"
+fi
+
 log "scenario: external CLI service spec conflict during deployment verification"
 EXTERNAL_RELEASE_JSON="$(api_post   "/v1/applications/$APP_ID/releases"   '{
     "version":"v5",
