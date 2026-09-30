@@ -6,23 +6,23 @@ Docklane은 기능 수보다 **안전하게 복구 가능한 하나의 deploymen
 
 ## v0.0 — Foundation & Security Boundary
 
-- [ ] pnpm monorepo
-- [ ] Next.js web
-- [ ] NestJS API
-- [ ] shared contracts
+- [x] pnpm monorepo
+- [x] Next.js web
+- [x] NestJS API
+- [x] shared contracts
 - [ ] database/migration
-- [ ] authentication
-- [ ] VIEWER / OPERATOR / ADMIN 기본 RBAC
-- [ ] resource scope validation
-- [ ] mutation audit foundation
-- [ ] Docker Engine API read-only spike
-- [ ] Go agent module
-- [ ] OpenAPI agent contract
-- [ ] Docker Engine Go client read-only spike
-- [ ] Agent protocol skeleton (HTTPS + JSON)
-- [ ] systemd service definition
+- [x] authentication
+- [x] VIEWER / OPERATOR / ADMIN 기본 RBAC
+- [x] resource scope validation
+- [x] mutation audit foundation
+- [x] Docker Engine API read-only spike
+- [x] Go agent module
+- [x] OpenAPI agent contract
+- [x] Docker Engine Go client read-only spike
+- [x] Agent protocol skeleton (HTTPS + JSON)
+- [x] systemd service definition
 - [ ] Control Plane ↔ Go Agent mTLS PoC
-- [ ] lint / typecheck / test CI
+- [x] lint / typecheck / test CI
 - [ ] supported Docker Engine/API version 명시
 
 Exit criteria:
@@ -38,11 +38,11 @@ Exit criteria:
 
 - [ ] cluster registration
 - [ ] manager quorum
-- [ ] node list/detail
-- [ ] service list/detail
-- [ ] task status
-- [ ] desired/running replicas
-- [ ] service digest/spec 표시
+- [x] node list/detail
+- [x] service list/detail
+- [x] task status
+- [x] desired/running replicas
+- [x] service digest/spec 표시
 - [ ] dashboard
 
 Exit criteria:
@@ -55,14 +55,14 @@ Exit criteria:
 
 MVP application 모델을 고정한다.
 
-- [ ] logical Application
-- [ ] DeploymentTarget
-- [ ] single stateless replicated service binding
-- [ ] registry adapter
-- [ ] digest resolution
-- [ ] digest-required Release
-- [ ] git commit/build metadata
-- [ ] release history
+- [x] logical Application
+- [x] DeploymentTarget
+- [x] single stateless replicated service binding
+- [x] registry adapter
+- [x] digest resolution
+- [x] digest-required Release
+- [x] git commit/build metadata
+- [x] release history
 
 Exit criteria:
 
@@ -74,17 +74,17 @@ Exit criteria:
 
 Docklane의 핵심 단계다.
 
-- [ ] operation intent persistence
-- [ ] service-level mutation lock
-- [ ] beforeSpec / targetSpec / expected version 저장
-- [ ] rolling service update
-- [ ] target digest/spec convergence
-- [ ] task convergence verification
-- [ ] application health stability window
+- [x] operation intent persistence
+- [x] service-level mutation lock
+- [x] beforeSpec / targetSpec / expected version 저장
+- [x] rolling service update
+- [x] target digest/spec convergence
+- [x] task convergence verification
+- [x] application health stability window
 - [ ] SSE progress
-- [ ] deployment timeout
-- [ ] no-op deployment detection / verification
-- [ ] deployment history
+- [x] deployment timeout
+- [x] no-op deployment detection / verification
+- [x] deployment history
 
 Exit criteria:
 
@@ -100,15 +100,15 @@ Release
 
 ## v0.4 — Rollback & Reconciliation
 
-- [ ] Swarm rollback ownership detection
-- [ ] automatic rollback observation
-- [ ] Docklane-triggered rollback
-- [ ] ROLLBACK_VERIFYING
-- [ ] ROLLBACK_FAILED / NEEDS_ATTENTION
-- [ ] API restart reconciliation
-- [ ] Agent response-loss reconciliation
-- [ ] idempotent operationId
-- [ ] external CLI conflict detection
+- [x] Swarm rollback ownership detection
+- [x] automatic rollback observation
+- [x] Docklane-triggered rollback
+- [x] ROLLBACK_VERIFYING
+- [x] ROLLBACK_FAILED / NEEDS_ATTENTION
+- [x] API restart reconciliation
+- [x] Agent response-loss reconciliation
+- [x] idempotent operationId
+- [x] external CLI conflict detection
 - [x] historical image redeploy
 
 Exit criteria:
@@ -146,6 +146,21 @@ manager-01
 worker-01
 worker-02
 ```
+
+필수 acceptance는 **실제 3-node Functional PoC 실행 결과**로만 체크한다. 단일-node harness 구현 여부와 분리한다.
+
+현재 single-node harness 구현:
+
+- [x] normal digest deploy
+- [x] broken release + manual rollback
+- [x] external CLI conflict
+- [x] API restart during update
+- [x] Agent response loss
+- [x] authorization rejection
+- [x] audit completeness
+- [x] same digest/spec no-op redeploy
+- [ ] broken release + automatic rollback
+- [ ] capacity shortage
 
 필수:
 
