@@ -217,6 +217,7 @@ kill_owned_pid agent || true
 
 if command -v docker >/dev/null 2>&1; then
   remove_owned_service || true
+  remove_owned_container external-lb || true
   remove_owned_container worker-02 || true
   remove_owned_container worker-01 || true
   remove_owned_container manager-01 || true
