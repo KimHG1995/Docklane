@@ -304,12 +304,14 @@ bash tests/functional-poc/cleanup.sh
 
 실제 개발 서버나 운영 Swarm이 활성화된 호스트에서는 실행하지 않는다.
 
-## 아직 수동/후속 검증인 v0.6 항목
+## v0.6 acceptance 결과
 
-- API restart during update — harness implemented; acceptance pending an actual workflow run
-- Agent response loss — harness implemented; acceptance pending an actual workflow run
+2026-09-30 실제 GitHub Actions 실행으로 v0.6 acceptance를 완료했다.
 
-이 항목들은 단일-node smoke가 안정화된 뒤 별도 시나리오로 확장한다.
+- single-node run #36671264551: SUCCESS
+- 3-node run #36662265999: SUCCESS
+
+API restart, Agent response loss, automatic rollback, capacity shortage, external CLI conflict를 포함한 single-node 시나리오와 node drain, worker failure, external LB traffic, Swarm network exposure를 포함한 3-node 시나리오가 모두 통과했다.
 
 
 ## Asynchronous deployment polling
