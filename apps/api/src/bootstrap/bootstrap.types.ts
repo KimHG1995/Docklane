@@ -41,6 +41,7 @@ export interface BootstrapCompleteResponse extends BootstrapScope {
     role: string;
     state: string;
     availability: string;
+    labels: Record<string, string>;
   };
   verifiedAt: string;
 }
