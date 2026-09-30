@@ -84,6 +84,19 @@ GitHub runner
 
 이 시나리오는 Agent 요청을 다시 실행하지 않고 **응답 유실 후 관찰 기반 reconciliation**이 동작하는지 검증한다.
 
+### Broken release + Swarm automatic rollback
+
+1. v4가 정상 서비스 중인 상태에서 Swarm service에 health command와 `update-failure-action=rollback`을 설정한다.
+2. 동일한 `vbroken` digest를 별도 Release로 생성해 Docklane 배포를 시작한다.
+3. broken task의 container health가 실패해 Swarm이 자체적으로 rollback을 시작하도록 한다.
+4. Docklane은 `rollback_started` 동안 mutation protection을 유지하고, `rollback_completed`를 관찰한 뒤 원래 배포를 `FAILED`로 종결한다.
+5. 별도 Docklane rollback operation이 생성되지 않았는지 확인한다.
+6. 실제 service image가 이전 v4 digest로 복구되고 root 응답과 health가 정상인지 확인한다.
+7. broken digest에 대한 Docklane image mutation 전달이 정확히 한 번인지 확인한다.
+8. audit에는 `DEPLOY_STARTED`와 `DEPLOY_FAILED`만 남고 `ROLLBACK_STARTED` / `ROLLBACK_SUCCEEDED`가 없는지 확인한다.
+
+이 시나리오는 **Swarm 자체 rollback을 Docklane-triggered rollback으로 오인하지 않고, 기존 deployment intent를 기준으로 관찰 및 종결하는지** 검증한다.
+
 ### External CLI conflict
 
 1. healthy `v5` Release 배포를 시작하고 10초 health stability window에 진입시킨다.
@@ -150,6 +163,14 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `response-loss-deploy.json`
 - `service-after-response-loss.json`
 - `response-loss-audit-actions.txt`
+- `automatic-rollback-policy-update.log`
+- `automatic-rollback-release.json`
+- `automatic-rollback-deploy-initial.json`
+- `automatic-rollback-deploy-status.json`
+- `automatic-rollback-deploy.json`
+- `automatic-rollback-status.json`
+- `service-after-automatic-rollback.json`
+- `automatic-rollback-audit-actions.txt`
 - `external-conflict-release.json`
 - `external-conflict-deploy-post.json`
 - `external-conflict-deploy-post.err`
@@ -184,7 +205,6 @@ bash tests/functional-poc/cleanup.sh
 ## 아직 수동/후속 검증인 v0.6 항목
 
 - 3-node manager-01 / worker-01 / worker-02 topology
-- broken release + automatic rollback
 - API restart during update — harness implemented; acceptance pending an actual workflow run
 - Agent response loss — harness implemented; acceptance pending an actual workflow run
 - capacity shortage
