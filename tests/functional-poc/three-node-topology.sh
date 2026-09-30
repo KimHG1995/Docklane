@@ -362,6 +362,9 @@ for action in NODE_DRAIN_STARTED NODE_DRAIN_SUCCEEDED NODE_ACTIVATE_STARTED NODE
   [[ "$(grep -c "^$action$" "$LOG_DIR/node-drain-audit-actions.txt" || true)" == "1" ]]     || fail "node drain scenario expected exactly one $action audit"
 done
 
+log "scenario: external HAProxy traffic during Docklane restart rollout"
+bash "$ROOT_DIR/tests/functional-poc/three-node-external-lb.sh"
+
 log "scenario: worker failure reschedules service task"
 wait_service_running_task "$DRAIN_SERVICE_ID" "$LOG_DIR/worker-failure-service-before.txt"
 FAILURE_TASK_BEFORE="$(grep '|Running ' "$LOG_DIR/worker-failure-service-before.txt" | head -n1)"
@@ -410,6 +413,7 @@ worker-02 Ready/Active: PASS
 manager Docker API loopback access: PASS
 Docklane node drain task relocation: PASS
 Docklane node activate recovery: PASS
+external HAProxy traffic during Docklane rollout: PASS
 worker failure task reschedule: PASS
 Docklane failed-worker read model: PASS
 topology node count: 3
