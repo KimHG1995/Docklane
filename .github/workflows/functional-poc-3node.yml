@@ -1,4 +1,5 @@
 name: functional-poc-3node
+# one-time acceptance rerun trigger
 
 on:
   workflow_dispatch:
