@@ -38,3 +38,31 @@ sudo bash scripts/bootstrap-docker.sh --install
 - native Swarm join token은 Docklane bootstrap token과 별도 lifecycle로 관리한다.
 
 이 스크립트는 Docker daemon 설정, 기존 Swarm membership, 기존 workload를 자동 변경하지 않는다.
+
+
+## Native Swarm join credential boundary
+
+Docklane bootstrap token과 Docker native Swarm join token은 별도 credential이다.
+
+Control Plane은 native join token을 `DOCKLANE_SWARM_JOIN_JSON`에서 읽으며 bootstrap DB에 저장하지 않는다.
+
+```json
+[
+  {
+    "clusterId": "default",
+    "remoteAddr": "10.0.0.10:2377",
+    "managerToken": "SWMTKN-1-...",
+    "workerToken": "SWMTKN-1-..."
+  }
+]
+```
+
+동작:
+
+1. ADMIN이 bootstrap token을 발급할 때 해당 cluster/role native credential 구성이 있는지 먼저 확인한다.
+2. bootstrap client가 one-time token을 claim한다.
+3. Control Plane은 bootstrap scope의 node role에 맞는 manager/worker join token만 응답한다.
+4. native token 원문은 `bootstrap_tokens` 테이블에 저장하지 않는다.
+5. bootstrap token은 claim 직후 사용 처리되지만 Docker native token의 rotation/lifetime에는 영향을 주지 않는다.
+
+실제 `docker swarm join` 실행과 post-join verification은 다음 bootstrap 단계에서 처리한다.
