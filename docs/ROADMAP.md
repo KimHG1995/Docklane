@@ -157,7 +157,7 @@ worker-02
 - [x] node drain scenario
 - [x] worker failure scenario
 - [x] actual external LB traffic scenario
-- [ ] Swarm internal ports network exposure scenario
+- [x] Swarm internal ports network exposure scenario
 
 현재 single-node harness 구현:
 
