@@ -14,11 +14,19 @@ export class Database implements OnModuleDestroy {
       uri: url,
       connectionLimit: 10,
       enableKeepAlive: true,
+      timezone: 'Z',
     });
   }
 
-  getConnection(): Promise<PoolConnection> {
-    return this.pool.getConnection();
+  async getConnection(): Promise<PoolConnection> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.query("SET time_zone = '+00:00'");
+      return connection;
+    } catch (error) {
+      connection.release();
+      throw error;
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
