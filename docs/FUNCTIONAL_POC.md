@@ -43,7 +43,7 @@ GitHub runner Docker
 - manager Docker API가 host loopback `tcp://127.0.0.1:22375`에서 동일한 node view를 제공
 - cleanup은 이번 실행이 만든 DinD container/network ID만 제거
 
-현재 harness는 topology, Docklane node drain/activate, worker 간 task relocation과 worker failure recovery까지 검증한다. LB traffic 시나리오는 이 harness 위에 순차 추가한다.
+현재 harness는 topology, Docklane node drain/activate, worker failure recovery와 외부 LB traffic까지 검증한다.
 
 ### 3-node Docklane node drain
 
