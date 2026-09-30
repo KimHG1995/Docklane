@@ -4,6 +4,7 @@ set -Eeuo pipefail
 MIN_ENGINE_VERSION="${DOCKLANE_BOOTSTRAP_MIN_ENGINE_VERSION:-27.5.0}"
 MIN_API_VERSION="${DOCKLANE_BOOTSTRAP_MIN_API_VERSION:-1.47}"
 OS_RELEASE="${DOCKLANE_BOOTSTRAP_OS_RELEASE:-/etc/os-release}"
+DOCKER_BIN="${DOCKLANE_BOOTSTRAP_DOCKER_BIN:-docker}"
 MODE="validate"
 
 log() {
@@ -36,16 +37,16 @@ require_linux() {
 }
 
 docker_exists() {
-  command -v docker >/dev/null 2>&1
+  command -v "$DOCKER_BIN" >/dev/null 2>&1
 }
 
 validate_docker() {
   docker_exists || fail "Docker CLI is not installed; rerun with --install on a supported host or install Docker manually"
 
   local server_version api_version server_os
-  server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
-  api_version="$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null || true)"
-  server_os="$(docker info --format '{{.OSType}}' 2>/dev/null || true)"
+  server_version="$("$DOCKER_BIN" version --format '{{.Server.Version}}' 2>/dev/null || true)"
+  api_version="$("$DOCKER_BIN" version --format '{{.Server.APIVersion}}' 2>/dev/null || true)"
+  server_os="$("$DOCKER_BIN" info --format '{{.OSType}}' 2>/dev/null || true)"
 
   [[ -n "$server_version" ]] || fail "Docker daemon is not reachable"
   [[ -n "$api_version" ]] || fail "Docker daemon did not report an API version"
@@ -57,7 +58,7 @@ validate_docker() {
     fail "Docker API $api_version is below supported minimum $MIN_API_VERSION"
 
   local swarm_state
-  swarm_state="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
+  swarm_state="$("$DOCKER_BIN" info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
   [[ -n "$swarm_state" ]] || fail "Docker daemon did not report Swarm state"
 
   log "Docker Engine validation passed"
