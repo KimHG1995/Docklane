@@ -1,4 +1,4 @@
-import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type {
   PoolConnection,
   RowDataPacket,
@@ -8,10 +8,6 @@ import type {
   BootstrapNodeRole,
   BootstrapTokenRecord,
 } from './bootstrap.types.js';
-
-interface CountRow extends RowDataPacket {
-  count: number;
-}
 
 interface BootstrapTokenRow extends RowDataPacket {
   id: string;
@@ -28,32 +24,8 @@ interface BootstrapTokenRow extends RowDataPacket {
 }
 
 @Injectable()
-export class BootstrapRepository implements OnModuleInit {
+export class BootstrapRepository {
   constructor(@Inject(Database) private readonly db: Database) {}
-
-  async onModuleInit(): Promise<void> {
-    await this.db.pool.query(`
-      CREATE TABLE IF NOT EXISTS bootstrap_tokens (
-        id VARCHAR(64) PRIMARY KEY,
-        token_hash CHAR(64) NOT NULL,
-        cluster_id VARCHAR(128) NOT NULL,
-        node_role VARCHAR(16) NOT NULL,
-        labels_json JSON NOT NULL,
-        created_by VARCHAR(128) NOT NULL,
-        expires_at TIMESTAMP(6) NOT NULL,
-        used_at TIMESTAMP(6) NULL,
-        claim_id VARCHAR(64) NULL,
-        completed_node_id VARCHAR(128) NULL,
-        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        UNIQUE KEY uq_bootstrap_token_hash (token_hash),
-        INDEX idx_bootstrap_tokens_expiry (expires_at, used_at),
-        INDEX idx_bootstrap_tokens_cluster (cluster_id, created_at)
-      ) ENGINE=InnoDB
-    `);
-
-    await this.ensureColumn('claim_id', 'VARCHAR(64) NULL');
-    await this.ensureColumn('completed_node_id', 'VARCHAR(128) NULL');
-  }
 
   async create(input: {
     id: string;
@@ -358,28 +330,6 @@ export class BootstrapRepository implements OnModuleInit {
         input.action,
         JSON.stringify(input.afterJson),
       ],
-    );
-  }
-
-  private async ensureColumn(
-    columnName: string,
-    definition: string,
-  ): Promise<void> {
-    const [rows] = await this.db.pool.query<CountRow[]>(
-      `SELECT COUNT(*) AS count
-       FROM information_schema.columns
-       WHERE table_schema = DATABASE()
-         AND table_name = 'bootstrap_tokens'
-         AND column_name = ?`,
-      [columnName],
-    );
-    if ((rows[0]?.count ?? 0) > 0) return;
-
-    if (!/^[a-z_]+$/.test(columnName)) {
-      throw new Error('Unsafe bootstrap token column name');
-    }
-    await this.db.pool.query(
-      `ALTER TABLE bootstrap_tokens ADD COLUMN ${columnName} ${definition}`,
     );
   }
 
