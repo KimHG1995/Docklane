@@ -12,6 +12,7 @@ type BootstrapRow = {
   expires_at: Date;
   used_at: Date | null;
   claim_id: string | null;
+  completed_node_id: string | null;
   created_at: Date;
 };
 
@@ -26,6 +27,7 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
     expires_at: new Date(Date.now() + 60_000),
     used_at: null,
     claim_id: null,
+    completed_node_id: null,
     created_at: new Date(0),
     ...initial,
   };
@@ -96,6 +98,11 @@ function fakeDb(initial?: Partial<BootstrapRow>) {
         row.labels_json = labelsJson;
         row.created_by = createdBy;
         row.expires_at = new Date(Date.now() + ttlSeconds * 1000);
+        return [{ affectedRows: 1 }, []];
+      }
+      if (sql.includes('SET completed_node_id = ?')) {
+        const [nodeId] = params as [string, string];
+        row.completed_node_id = nodeId;
         return [{ affectedRows: 1 }, []];
       }
       if (sql.includes('SET used_at = UTC_TIMESTAMP')) {
@@ -232,6 +239,15 @@ test('bootstrap completion audit is exactly once for retries', async () => {
     verifiedAt: '2026-09-30T00:01:00.000Z',
   };
 
+  assert.equal(
+    await repository.bindCompletionNode(record.id, claimId, completion.nodeId),
+    'BOUND',
+  );
+  assert.equal(
+    await repository.bindCompletionNode(record.id, claimId, completion.nodeId),
+    'REPLAY',
+  );
+
   await repository.recordCompletionAudit(record, completion);
   await repository.recordCompletionAudit(record, completion);
 
@@ -272,5 +288,64 @@ test('bootstrap claimability and consume use UTC database clock', async () => {
     state.queriedSql.some((sql) =>
       sql.includes('expires_at > UTC_TIMESTAMP(6)'),
     ),
+  );
+});
+
+
+test('bootstrap completion node binding rejects a different node for the same claim', async () => {
+  const claimId = '55555555-5555-4555-8555-555555555555';
+  const state = fakeDb({
+    used_at: new Date('2026-09-30T00:00:00.000Z'),
+    claim_id: claimId,
+  });
+  const repository = new BootstrapRepository(state.db as never);
+
+  assert.equal(
+    await repository.bindCompletionNode(state.row.id, claimId, 'node-a'),
+    'BOUND',
+  );
+  assert.equal(state.row.completed_node_id, 'node-a');
+
+  assert.equal(
+    await repository.bindCompletionNode(state.row.id, claimId, 'node-a'),
+    'REPLAY',
+  );
+  assert.equal(
+    await repository.bindCompletionNode(state.row.id, claimId, 'node-b'),
+    'CONFLICT',
+  );
+  assert.equal(state.row.completed_node_id, 'node-a');
+});
+
+test('bootstrap completion audit requires the bound canonical node', async () => {
+  const claimId = '66666666-6666-4666-8666-666666666666';
+  const state = fakeDb({
+    used_at: new Date('2026-09-30T00:00:00.000Z'),
+    claim_id: claimId,
+    completed_node_id: 'node-a',
+  });
+  const repository = new BootstrapRepository(state.db as never);
+  const record = {
+    id: state.row.id,
+    clusterId: state.row.cluster_id,
+    nodeRole: state.row.node_role,
+    labels: { zone: 'a' },
+    createdBy: state.row.created_by,
+    expiresAt: state.row.expires_at.toISOString(),
+    usedAt: state.row.used_at!.toISOString(),
+    claimId,
+    createdAt: state.row.created_at.toISOString(),
+  };
+
+  await assert.rejects(
+    () =>
+      repository.recordCompletionAudit(record, {
+        nodeId: 'node-b',
+        hostname: 'worker-b',
+        role: 'worker',
+        labels: { zone: 'a' },
+        verifiedAt: '2026-09-30T00:01:00.000Z',
+      }),
+    /Bootstrap token state changed before completion audit/,
   );
 });
