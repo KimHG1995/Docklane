@@ -24,6 +24,14 @@ func taskSpecHash(spec swarm.TaskSpec) (string, error) {
 func taskRuntimeSpecHash(spec swarm.TaskSpec) (string, error) {
 	runtimeSpec := spec
 	runtimeSpec.Placement = nil
+
+	// Docker's Service API reports the default container runtime explicitly,
+	// while Task API responses may omit it. Canonicalize that API-only default
+	// without masking real runtime configuration such as env/config/secret changes.
+	if runtimeSpec.ContainerSpec != nil && runtimeSpec.Runtime == "" {
+		runtimeSpec.Runtime = swarm.RuntimeContainer
+	}
+
 	return specHash("task-runtime", runtimeSpec)
 }
 
