@@ -2,6 +2,10 @@ name: functional-poc-3node
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/functional-poc-3node.yml'
 
 concurrency:
   group: functional-poc-3node
@@ -12,6 +16,7 @@ permissions:
 
 jobs:
   topology:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-functional-poc-once]')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
