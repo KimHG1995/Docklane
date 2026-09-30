@@ -76,3 +76,59 @@ func TestTaskRuntimeSpecHashChangesForRuntimeConfig(t *testing.T) {
 		t.Fatal("expected runtime config change to change runtime hash")
 	}
 }
+
+
+func TestTaskRuntimeSpecHashCanonicalizesDefaultContainerRuntime(t *testing.T) {
+	implicit := swarm.TaskSpec{
+		ContainerSpec: &swarm.ContainerSpec{
+			Image: "registry.example.com/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Env:   []string{"APP_ENV=prod"},
+		},
+	}
+	explicit := implicit
+	explicit.Runtime = swarm.RuntimeContainer
+
+	implicitHash, err := taskRuntimeSpecHash(implicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitHash, err := taskRuntimeSpecHash(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if implicitHash != explicitHash {
+		t.Fatalf(
+			"expected implicit and explicit container runtime to match: implicit=%s explicit=%s",
+			implicitHash,
+			explicitHash,
+		)
+	}
+}
+
+func TestTaskRuntimeSpecHashStillDetectsRuntimeConfigDriftAfterCanonicalization(t *testing.T) {
+	target := swarm.TaskSpec{
+		ContainerSpec: &swarm.ContainerSpec{
+			Image: "registry.example.com/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Env:   []string{"APP_ENV=prod"},
+		},
+		Runtime: swarm.RuntimeContainer,
+	}
+	stale := target
+	stale.Runtime = ""
+	stale.ContainerSpec = &swarm.ContainerSpec{
+		Image: target.ContainerSpec.Image,
+		Env:   []string{"APP_ENV=staging"},
+	}
+
+	targetHash, err := taskRuntimeSpecHash(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleHash, err := taskRuntimeSpecHash(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetHash == staleHash {
+		t.Fatal("expected env drift to remain visible after runtime canonicalization")
+	}
+}
