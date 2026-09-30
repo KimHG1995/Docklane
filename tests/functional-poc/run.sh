@@ -123,15 +123,31 @@ assert_image_mutation_count() {
   local digest="$1"
   local expected="$2"
   local label="$3"
+  local target_spec_hash="${4:-}"
   local log_file="$LOG_DIR/agent-image-mutations.jsonl"
   local count=0
 
   if [[ -s "$log_file" ]]; then
-    count="$(jq -s       --arg digest "$digest"       '[.[] | select(.event == "forwarded" and ((.image // "") | endswith("@" + $digest)))] | length'       "$log_file")"
+    if [[ -n "$target_spec_hash" ]]; then
+      count="$(jq -s \
+        --arg digest "$digest" \
+        --arg targetSpecHash "$target_spec_hash" \
+        '[.[] | select(
+          .event == "forwarded"
+          and ((.image // "") | endswith("@" + $digest))
+          and ((.targetSpecHash // "") == $targetSpecHash)
+        )] | length' \
+        "$log_file")"
+    else
+      count="$(jq -s \
+        --arg digest "$digest" \
+        '[.[] | select(.event == "forwarded" and ((.image // "") | endswith("@" + $digest)))] | length' \
+        "$log_file")"
+    fi
   fi
 
   if [[ "$count" != "$expected" ]]; then
-    fail "$label forwarded image mutation count=$count; expected=$expected for digest=$digest"
+    fail "$label forwarded image mutation count=$count; expected=$expected for digest=$digest targetSpecHash=${target_spec_hash:-<any>}"
   fi
 }
 
@@ -630,6 +646,7 @@ printf '%s\n' "$AUTO_ROLLBACK_DEPLOY_JSON" >"$LOG_DIR/automatic-rollback-deploy.
 
 AUTO_ROLLBACK_STATUS_JSON="$(api_get "/v1/clusters/default/deployments/$AUTO_ROLLBACK_DEPLOYMENT_ID/status")"
 printf '%s\n' "$AUTO_ROLLBACK_STATUS_JSON" >"$LOG_DIR/automatic-rollback-status.json"
+AUTO_ROLLBACK_TARGET_SPEC_HASH="$(jq -er '.operation.targetSpecHash' <<<"$AUTO_ROLLBACK_STATUS_JSON")"
 jq -e   '.deployment.status == "FAILED"
     and .operation.status == "FAILED"
     and .operation.errorCode == "CONVERGENCE_FAILED"
@@ -643,7 +660,7 @@ jq -e --arg digest "$LOSS_DIGEST"   '(.service.image | contains("@" + $digest))
 
 wait_for_body "$HEALTH_URL" "v4"
 wait_http "$HEALTH_URL/health" 200 60
-assert_image_mutation_count "$AUTO_ROLLBACK_DIGEST" 1 "automatic rollback deployment"
+assert_image_mutation_count "$AUTO_ROLLBACK_DIGEST" 1 "automatic rollback deployment" "$AUTO_ROLLBACK_TARGET_SPEC_HASH"
 
 docker exec "$MYSQL_CONTAINER"   mysql -uroot -pdocklane docklane   --batch --skip-column-names   -e "SELECT action FROM audit_events WHERE operation_id = '$AUTO_ROLLBACK_OPERATION_ID' ORDER BY id"   2>/dev/null >"$LOG_DIR/automatic-rollback-audit-actions.txt"
 
