@@ -43,7 +43,20 @@ GitHub runner Docker
 - manager Docker API가 host loopback `tcp://127.0.0.1:22375`에서 동일한 node view를 제공
 - cleanup은 이번 실행이 만든 DinD container/network ID만 제거
 
-현재 단계는 topology 기반만 검증하며, node drain / worker failure / LB traffic 시나리오는 이 harness 위에 순차 추가한다.
+현재 harness는 topology 기반에 더해 Docklane node drain/activate와 worker 간 task relocation까지 검증한다. worker failure / LB traffic 시나리오는 이 harness 위에 순차 추가한다.
+
+### 3-node Docklane node drain
+
+1. manager/worker 3-node Swarm을 구성하고 manager Docker API를 host loopback으로 노출한다.
+2. MySQL, Docklane Agent, API를 기동하고 Agent는 manager-01 Docker API를 사용한다.
+3. worker 전용 Alpine service 1 replica를 생성해 실제 task가 worker-01 또는 worker-02에서 Running인지 확인한다.
+4. 해당 worker의 현재 node version을 읽고 Docklane drain API를 호출한다.
+5. node operation이 SUCCESS이고 availability가 drain인지 확인한다.
+6. drained node의 service task가 0이 되고 기존 task ID가 종료되며 다른 worker에서 replacement task가 Running인지 확인한다.
+7. Docklane activate API로 node를 다시 active 상태로 복구한다.
+8. NODE_DRAIN_STARTED, NODE_DRAIN_SUCCEEDED, NODE_ACTIVATE_STARTED, NODE_ACTIVATE_SUCCEEDED audit가 각각 한 번인지 확인한다.
+
+이 시나리오는 node availability 변경뿐 아니라 실제 Swarm task relocation과 Docklane audit/recovery 경로를 함께 검증한다.
 
 ## 현재 자동 검증 시나리오
 
