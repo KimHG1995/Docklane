@@ -39,6 +39,33 @@ GitHub runner Docker
 - `leader-restart.log`
 - `summary.txt`
 
+
+
+### Acceptance
+
+2026-09-30 GitHub Actions run #36680739108: **SUCCESS**
+
+관찰 결과:
+
+```text
+before
+manager-01 | Ready   | Active | Leader
+manager-02 | Ready   | Active | Reachable
+manager-03 | Ready   | Active | Reachable
+
+leader loss
+manager-01 | Unknown | Active | Unreachable
+manager-02 | Ready   | Active | Reachable
+manager-03 | Ready   | Active | Leader
+
+recovery
+manager-01 | Ready   | Active | Reachable
+manager-02 | Ready   | Active | Reachable
+manager-03 | Ready   | Active | Leader
+```
+
+현재 leader를 중지한 뒤 2/3 manager quorum에서 새 leader가 선출됐고, former leader 재기동 후 3/3 manager 상태가 복구됐다.
+
 ## Safety
 
 operational readiness harness는 기존 Docker resource를 이름만 보고 삭제하지 않는다.
