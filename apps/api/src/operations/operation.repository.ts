@@ -1,7 +1,7 @@
 import {
   Inject,
-  Injectable,
-  type OnModuleInit,
+  Injectable
+
 } from '@nestjs/common';
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
@@ -34,95 +34,9 @@ interface OperationRow extends RowDataPacket {
   updated_at: Date;
 }
 
-interface CountRow extends RowDataPacket {
-  count: number;
-}
-
 @Injectable()
-export class OperationRepository implements OnModuleInit {
+export class OperationRepository {
   constructor(@Inject(Database) private readonly db: Database) {}
-
-  async onModuleInit(): Promise<void> {
-    await this.initialize();
-  }
-
-  async initialize(): Promise<void> {
-    await this.db.pool.query(`
-      CREATE TABLE IF NOT EXISTS operations (
-        id VARCHAR(64) PRIMARY KEY,
-        cluster_id VARCHAR(128) NOT NULL,
-        service_id VARCHAR(128) NOT NULL,
-        type VARCHAR(32) NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        actor_id VARCHAR(128) NOT NULL,
-        expected_version BIGINT UNSIGNED NOT NULL,
-        before_spec_hash VARCHAR(64) NOT NULL DEFAULT '',
-        target_spec_hash VARCHAR(64) NOT NULL DEFAULT '',
-        target_force_update BIGINT UNSIGNED NOT NULL DEFAULT 0,
-        target_replicas INT NULL,
-        target_image VARCHAR(1024) NULL,
-        target_task_spec_hash VARCHAR(64) NULL,
-        target_runtime_spec_hash VARCHAR(64) NULL,
-        result_version BIGINT UNSIGNED NULL,
-        error_code VARCHAR(64) NULL,
-        error_message TEXT NULL,
-        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-          ON UPDATE CURRENT_TIMESTAMP(6),
-        INDEX idx_operations_service (cluster_id, service_id, created_at),
-        INDEX idx_operations_status (status, updated_at)
-      ) ENGINE=InnoDB
-    `);
-
-    await this.ensureColumn(
-      'before_spec_hash',
-      "VARCHAR(64) NOT NULL DEFAULT ''",
-    );
-    await this.ensureColumn(
-      'target_spec_hash',
-      "VARCHAR(64) NOT NULL DEFAULT ''",
-    );
-    await this.ensureColumn(
-      'target_force_update',
-      'BIGINT UNSIGNED NOT NULL DEFAULT 0',
-    );
-    await this.ensureColumn('target_image', 'VARCHAR(1024) NULL');
-    await this.ensureColumn('target_task_spec_hash', 'VARCHAR(64) NULL');
-    await this.ensureColumn('target_runtime_spec_hash', 'VARCHAR(64) NULL');
-
-    await this.db.pool.query(`
-      CREATE TABLE IF NOT EXISTS audit_events (
-        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        operation_id VARCHAR(64) NOT NULL,
-        actor_id VARCHAR(128) NOT NULL,
-        cluster_id VARCHAR(128) NOT NULL,
-        service_id VARCHAR(128) NOT NULL,
-        resource_type VARCHAR(32) NOT NULL DEFAULT 'service',
-        resource_id VARCHAR(128) NOT NULL DEFAULT '',
-        action VARCHAR(64) NOT NULL,
-        before_json JSON NULL,
-        after_json JSON NULL,
-        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-        INDEX idx_audit_operation (operation_id),
-        INDEX idx_audit_resource (cluster_id, service_id, created_at)
-      ) ENGINE=InnoDB
-    `);
-
-    await this.ensureAuditColumn(
-      'resource_type',
-      "VARCHAR(32) NOT NULL DEFAULT 'service'",
-    );
-    await this.ensureAuditColumn(
-      'resource_id',
-      "VARCHAR(128) NOT NULL DEFAULT ''",
-    );
-    await this.db.pool.query(
-      `UPDATE audit_events
-       SET resource_type = 'service',
-           resource_id = service_id
-       WHERE resource_id = ''`,
-    );
-  }
 
   async find(id: string): Promise<OperationRecord | null> {
     const [rows] = await this.db.pool.query<OperationRow[]>(
@@ -329,53 +243,7 @@ export class OperationRepository implements OnModuleInit {
     );
   }
 
-  private async ensureAuditColumn(
-    columnName: string,
-    definition: string,
-  ): Promise<void> {
-    const [rows] = await this.db.pool.query<CountRow[]>(
-      `SELECT COUNT(*) AS count
-       FROM information_schema.columns
-       WHERE table_schema = DATABASE()
-         AND table_name = 'audit_events'
-         AND column_name = ?`,
-      [columnName],
-    );
-    if ((rows[0]?.count ?? 0) > 0) {
-      return;
-    }
 
-    if (!/^[a-z_]+$/.test(columnName)) {
-      throw new Error('Unsafe audit column name');
-    }
-    await this.db.pool.query(
-      `ALTER TABLE audit_events ADD COLUMN ${columnName} ${definition}`,
-    );
-  }
-
-  private async ensureColumn(
-    columnName: string,
-    definition: string,
-  ): Promise<void> {
-    const [rows] = await this.db.pool.query<CountRow[]>(
-      `SELECT COUNT(*) AS count
-       FROM information_schema.columns
-       WHERE table_schema = DATABASE()
-         AND table_name = 'operations'
-         AND column_name = ?`,
-      [columnName],
-    );
-    if ((rows[0]?.count ?? 0) > 0) {
-      return;
-    }
-
-    if (!/^[a-z_]+$/.test(columnName)) {
-      throw new Error('Unsafe operation column name');
-    }
-    await this.db.pool.query(
-      `ALTER TABLE operations ADD COLUMN ${columnName} ${definition}`,
-    );
-  }
 }
 
 function mapOperation(row: OperationRow): OperationRecord {
