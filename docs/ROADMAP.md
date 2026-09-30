@@ -225,8 +225,8 @@ worker-02
 - [x] native Swarm join token handling
 - [x] retry/partial failure protocol
 - [x] post-join node/role verification
-- [ ] label application
-- [ ] bootstrap audit
+- [x] label application
+- [x] bootstrap audit
 
 Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
