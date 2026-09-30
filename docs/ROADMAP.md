@@ -10,7 +10,7 @@ Docklane은 기능 수보다 **안전하게 복구 가능한 하나의 deploymen
 - [x] Next.js web
 - [x] NestJS API
 - [x] shared contracts
-- [ ] database/migration
+- [x] database/migration — ordered schema_migrations + MySQL migration PoC
 - [x] authentication
 - [x] VIEWER / OPERATOR / ADMIN 기본 RBAC
 - [x] resource scope validation
