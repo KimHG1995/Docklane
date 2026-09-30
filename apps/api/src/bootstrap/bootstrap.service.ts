@@ -72,20 +72,24 @@ export class BootstrapService {
     );
 
     const consumed = await this.repository.consume(hash, input.claimId);
-    if (!consumed || !consumed.record.usedAt) {
+    if (!consumed) {
       throw new UnauthorizedException(
         'Invalid, expired, or claimed by another bootstrap request',
       );
     }
 
     const record = consumed.record;
+    const claimedAt = record.usedAt;
+    if (!claimedAt) {
+      throw new Error('Consumed bootstrap claim is missing usedAt');
+    }
     return {
       tokenId: record.id,
       clusterId: record.clusterId,
       nodeRole: record.nodeRole,
       labels: record.labels,
       expiresAt: record.expiresAt,
-      claimedAt: record.usedAt,
+      claimedAt,
       claimId: input.claimId,
       replayed: consumed.replayed,
       swarmJoin,
