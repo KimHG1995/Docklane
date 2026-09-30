@@ -21,7 +21,7 @@ Docklane은 기능 수보다 **안전하게 복구 가능한 하나의 deploymen
 - [x] Docker Engine Go client read-only spike
 - [x] Agent protocol skeleton (HTTPS + JSON)
 - [x] systemd service definition
-- [ ] Control Plane ↔ Go Agent mTLS PoC
+- [x] Control Plane ↔ Go Agent mTLS PoC
 - [x] lint / typecheck / test CI
 - [ ] supported Docker Engine/API version 명시
 
