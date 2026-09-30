@@ -6,10 +6,11 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/operational-readiness-leader-loss.yml'
-      - 'tests/operational-readiness/**'
+      - 'tests/operational-readiness/leader-loss.sh'
+      - 'tests/operational-readiness/cleanup.sh'
 
 concurrency:
-  group: operational-readiness-leader-loss
+  group: operational-readiness-three-manager
   cancel-in-progress: false
 
 permissions:
