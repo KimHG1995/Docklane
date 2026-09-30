@@ -219,8 +219,8 @@ worker-02
 
 핵심 deployment path가 검증된 후 자동화한다.
 
-- [ ] Docklane one-time bootstrap token
-- [ ] TTL / scope
+- [x] Docklane one-time bootstrap token
+- [x] TTL / scope
 - [ ] Docker install/validate
 - [ ] native Swarm join token handling
 - [ ] retry/partial failure protocol
