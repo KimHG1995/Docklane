@@ -24,6 +24,7 @@ jobs:
       poc: ${{ steps.filter.outputs.poc }}
       bootstrap: ${{ steps.filter.outputs.bootstrap }}
       operational: ${{ steps.filter.outputs.operational }}
+      db_migration: ${{ steps.filter.outputs.db_migration }}
       any_runtime: ${{ steps.filter.outputs.any_runtime }}
     steps:
       - uses: actions/checkout@v4
@@ -57,12 +58,17 @@ jobs:
           poc=false
           bootstrap=false
           operational=false
+          db_migration=false
           unknown=false
 
           while IFS= read -r file; do
             [[ -z "$file" ]] && continue
 
             case "$file" in
+              apps/api/src/db/*|tests/database-migration-poc.sh)
+                api=true
+                db_migration=true
+                ;;
               apps/api/*)
                 api=true
                 ;;
@@ -130,6 +136,7 @@ jobs:
             echo "poc=$poc"
             echo "bootstrap=$bootstrap"
             echo "operational=$operational"
+            echo "db_migration=$db_migration"
             echo "any_runtime=$any_runtime"
           } >> "$GITHUB_OUTPUT"
 
@@ -148,6 +155,24 @@ jobs:
       - run: pnpm --filter @docklane/api typecheck
       - run: pnpm --filter @docklane/api test
       - run: pnpm --filter @docklane/api build
+
+  database-migration-poc:
+    needs: changes
+    if: needs.changes.outputs.db_migration == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @docklane/api build
+      - name: Verify database migration PoC syntax
+        run: bash -n tests/database-migration-poc.sh
+      - name: Run MySQL database migration PoC
+        run: bash tests/database-migration-poc.sh
 
   web:
     needs: changes
@@ -277,7 +302,7 @@ jobs:
 
   validation-gate:
     if: always()
-    needs: [changes, api, web, go-agent, agent-mtls-poc, functional-poc-lint, operational-readiness-lint, bootstrap-docker, docs-only]
+    needs: [changes, api, database-migration-poc, web, go-agent, agent-mtls-poc, functional-poc-lint, operational-readiness-lint, bootstrap-docker, docs-only]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -291,7 +316,7 @@ jobs:
             exit 1
           fi
 
-          for result in             "${{ needs.api.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.agent-mtls-poc.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.operational-readiness-lint.result }}"             "${{ needs.bootstrap-docker.result }}"             "${{ needs.docs-only.result }}"; do
+          for result in             "${{ needs.api.result }}"             "${{ needs.database-migration-poc.result }}"             "${{ needs.web.result }}"             "${{ needs.go-agent.result }}"             "${{ needs.agent-mtls-poc.result }}"             "${{ needs.functional-poc-lint.result }}"             "${{ needs.operational-readiness-lint.result }}"             "${{ needs.bootstrap-docker.result }}"             "${{ needs.docs-only.result }}"; do
             if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
               echo "A required validation job failed or was cancelled"
               exit 1
