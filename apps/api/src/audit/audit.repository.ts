@@ -1,6 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import type { PoolConnection } from 'mysql2/promise';
-import { Database } from '../db/database.js';
 
 export interface DomainAuditEvent {
   eventId: string;
@@ -15,8 +14,6 @@ export interface DomainAuditEvent {
 
 @Injectable()
 export class AuditRepository {
-  constructor(@Inject(Database) private readonly db: Database) {}
-
   async record(
     connection: PoolConnection,
     input: DomainAuditEvent,
