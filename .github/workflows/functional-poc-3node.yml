@@ -1,0 +1,44 @@
+name: functional-poc-3node
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: functional-poc-3node
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  topology:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify disposable Docker host
+        run: |
+          docker version
+          docker info
+          test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive"
+
+      - name: Run three-node Swarm topology PoC
+        env:
+          DOCKLANE_POC_LOG_DIR: ${{ runner.temp }}/docklane-poc-3node
+        run: bash tests/functional-poc/three-node-topology.sh
+
+      - name: Upload three-node topology evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-functional-poc-3node-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-poc-3node
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup three-node PoC
+        if: always()
+        env:
+          DOCKLANE_POC_LOG_DIR: ${{ runner.temp }}/docklane-poc-3node
+        run: bash tests/functional-poc/cleanup.sh
