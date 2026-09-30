@@ -637,7 +637,7 @@ jq -e   '.deployment.status == "FAILED"
 
 AUTO_ROLLBACK_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$SERVICE_ID")"
 printf '%s\n' "$AUTO_ROLLBACK_SERVICE_JSON" >"$LOG_DIR/service-after-automatic-rollback.json"
-jq -e --arg digest "$LOSS_DIGEST"   '.service.image | contains("@" + $digest)
+jq -e --arg digest "$LOSS_DIGEST"   '(.service.image | contains("@" + $digest))
     and .service.updateState == "rollback_completed"'   <<<"$AUTO_ROLLBACK_SERVICE_JSON" >/dev/null   || fail "Swarm automatic rollback did not restore the previous v4 digest/spec"
 
 wait_for_body "$HEALTH_URL" "v4"
