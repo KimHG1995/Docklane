@@ -48,7 +48,6 @@ export class BootstrapService {
     this.requireSwarmJoinCredentials(clusterId, input.nodeRole);
 
     const token = `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
-    const expiresAt = new Date(Date.now() + input.ttlSeconds * 1000);
 
     const record = await this.repository.create({
       id: randomUUID(),
@@ -57,7 +56,7 @@ export class BootstrapService {
       nodeRole: input.nodeRole,
       labels: input.labels,
       createdBy: principal.actorId,
-      expiresAt,
+      ttlSeconds: input.ttlSeconds,
     });
 
     return {
