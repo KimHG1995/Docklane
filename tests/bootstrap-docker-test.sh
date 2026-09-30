@@ -91,6 +91,7 @@ cat >"$TMP/os-release-unsupported" <<'EOF'
 ID=rocky
 EOF
 if DOCKLANE_BOOTSTRAP_OS_RELEASE="$TMP/os-release-unsupported" \
+  DOCKLANE_BOOTSTRAP_DOCKER_BIN=docklane-test-missing-docker \
   PATH="$BIN4:/usr/bin:/bin" bash "$SCRIPT" --install >"$TMP/unsupported.log" 2>&1; then
   fail "unsupported OS automatic install unexpectedly succeeded"
 fi
@@ -109,8 +110,8 @@ cat >"$BIN5/apt-get" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${DOCKLANE_TEST_APT_LOG}"
 if [[ "$1" == "install" ]]; then
-  cp "${DOCKLANE_TEST_DOCKER_TEMPLATE}" "${DOCKLANE_TEST_BIN}/docker"
-  chmod +x "${DOCKLANE_TEST_BIN}/docker"
+  cp "${DOCKLANE_TEST_DOCKER_TEMPLATE}" "${DOCKLANE_TEST_BIN}/docklane-test-docker"
+  chmod +x "${DOCKLANE_TEST_BIN}/docklane-test-docker"
 fi
 EOF
 chmod +x "$BIN5/apt-get"
@@ -137,6 +138,7 @@ cat >"$TMP/os-release-debian" <<'EOF'
 ID=debian
 EOF
 DOCKLANE_BOOTSTRAP_OS_RELEASE="$TMP/os-release-debian" \
+DOCKLANE_BOOTSTRAP_DOCKER_BIN=docklane-test-docker \
 DOCKLANE_TEST_APT_LOG="$TMP/apt.log" \
 DOCKLANE_TEST_SYSTEMCTL_LOG="$TMP/systemctl.log" \
 DOCKLANE_TEST_DOCKER_TEMPLATE="$TMP/docker-template" \
