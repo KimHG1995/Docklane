@@ -246,6 +246,7 @@ jobs:
       - name: Verify operational readiness harness syntax
         run: |
           bash -n tests/operational-readiness/leader-loss.sh
+          bash -n tests/operational-readiness/manager-loss.sh
           bash -n tests/operational-readiness/cleanup.sh
 
   bootstrap-docker:
