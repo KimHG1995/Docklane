@@ -2505,8 +2505,7 @@ export function classifyDeploymentSnapshot(
       (task) =>
         task.slot > 0 &&
         imageContainsDigest(task.image, digest) &&
-        task.forceUpdate === plan.targetForceUpdate &&
-        task.runtimeSpecHash === plan.targetRuntimeSpecHash,
+        task.forceUpdate === plan.targetForceUpdate,
     )
   ) {
     return 'PENDING';
@@ -2552,8 +2551,7 @@ export function classifyRollbackSnapshot(
       (task) =>
         task.slot > 0 &&
         imageContainsDigest(task.image, digest) &&
-        task.forceUpdate === plan.targetForceUpdate &&
-        task.runtimeSpecHash === plan.targetRuntimeSpecHash,
+        task.forceUpdate === plan.targetForceUpdate,
     )
   ) {
     return 'PENDING';
