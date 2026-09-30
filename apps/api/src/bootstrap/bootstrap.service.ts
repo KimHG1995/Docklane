@@ -1,19 +1,24 @@
 import {
+  BadGatewayException,
+  ConflictException,
   Inject,
   Injectable,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { AGENT_CLIENT, type AgentClient } from '../agent/agent-client.js';
 import type { Principal } from '../auth/auth.types.js';
 import type {
   BootstrapClaimRequest,
+  BootstrapCompleteRequest,
   CreateBootstrapTokenRequest,
 } from './bootstrap.dto.js';
 import { BootstrapRepository } from './bootstrap.repository.js';
 import { SwarmJoinCredentialProvider } from './swarm-join-credential.provider.js';
 import type {
   BootstrapClaimResponse,
+  BootstrapCompleteResponse,
   BootstrapTokenIssueResponse,
 } from './bootstrap.types.js';
 
@@ -26,6 +31,8 @@ export class BootstrapService {
     private readonly repository: BootstrapRepository,
     @Inject(SwarmJoinCredentialProvider)
     private readonly swarmJoin: SwarmJoinCredentialProvider,
+    @Inject(AGENT_CLIENT)
+    private readonly agentClient: AgentClient,
   ) {}
 
   async issue(
@@ -93,6 +100,61 @@ export class BootstrapService {
       claimId: input.claimId,
       replayed: consumed.replayed,
       swarmJoin,
+    };
+  }
+
+  async complete(
+    input: BootstrapCompleteRequest,
+  ): Promise<BootstrapCompleteResponse> {
+    const record = await this.repository.findClaimableByHash(
+      tokenHash(input.token),
+      input.claimId,
+    );
+    if (
+      !record ||
+      !record.usedAt ||
+      record.claimId !== input.claimId
+    ) {
+      throw new UnauthorizedException(
+        'Bootstrap claim is not active for this claimId',
+      );
+    }
+
+    let observed;
+    try {
+      observed = await this.agentClient.inspectNode(input.nodeId);
+    } catch {
+      throw new BadGatewayException(
+        'Joined node could not be verified through the cluster Agent',
+      );
+    }
+
+    const expectedManager = record.nodeRole === 'manager';
+    if (
+      observed.node.state !== 'ready' ||
+      observed.node.availability !== 'active' ||
+      observed.node.role !== record.nodeRole ||
+      observed.node.manager !== expectedManager
+    ) {
+      throw new ConflictException(
+        'Joined node state or role does not match bootstrap scope',
+      );
+    }
+
+    return {
+      tokenId: record.id,
+      claimId: input.claimId,
+      clusterId: record.clusterId,
+      nodeRole: record.nodeRole,
+      labels: record.labels,
+      node: {
+        id: observed.node.id,
+        hostname: observed.node.hostname,
+        role: observed.node.role,
+        state: observed.node.state,
+        availability: observed.node.availability,
+      },
+      verifiedAt: new Date().toISOString(),
     };
   }
 
