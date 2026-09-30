@@ -76,3 +76,30 @@ operational readiness harness는 기존 Docker resource를 이름만 보고 삭�
 - cleanup 실패 시 marker를 남겨 동일 cleanup script로 재시도할 수 있게 한다.
 
 현재 leader-loss harness는 leader failover와 former leader recovery만 검증한다. manager loss, quorum loss, network partition은 별도 작업 단위로 추가한다.
+
+
+## Manager loss
+
+Leader가 아닌 `Reachable` manager 1대를 중지해 단일 manager 장애 시 quorum과 leader continuity를 검증한다.
+
+검증 순서:
+
+1. 3-manager Swarm을 구성해 1 Leader + 2 Reachable 상태를 확인한다.
+2. 현재 leader가 아닌 Reachable manager를 동적으로 선택한다.
+3. 해당 manager의 DinD container를 중지한다.
+4. 기존 leader가 그대로 유지되는지 확인한다.
+5. surviving manager 2개가 Ready/Active이고 quorum control이 유지되는지 확인한다.
+6. 중지했던 manager가 Unreachable 상태로 관찰되는지 확인한다.
+7. manager를 재기동한다.
+8. 3개 manager가 Ready/Active로 복구되고 기존 leader가 유지되는지 확인한다.
+
+주요 evidence:
+
+- `topology-before-loss.txt`
+- `topology-after-manager-loss.txt`
+- `topology-after-recovery.txt`
+- `manager-stop.log`
+- `manager-restart.log`
+- `manager-loss-summary.txt`
+
+Leader loss와 manager loss workflow는 동일한 `operational-readiness-three-manager` concurrency group을 사용해 같은 Docker resource 이름을 동시에 사용하지 않는다.
