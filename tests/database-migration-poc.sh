@@ -9,9 +9,19 @@ DATABASE_URL="mysql://root:${MYSQL_PASSWORD}@127.0.0.1:${MYSQL_PORT}/docklane"
 container_id=""
 
 cleanup() {
+  local status="$?"
+  trap - EXIT
+
+  if [[ "$status" != "0" && -n "$container_id" ]]; then
+    echo "database migration PoC MySQL logs:" >&2
+    docker logs "$container_id" >&2 || true
+  fi
+
   if [[ -n "$container_id" ]]; then
     docker rm -f "$container_id" >/dev/null 2>&1 || true
   fi
+
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -23,11 +33,16 @@ fi
 container_id="$(docker run -d   --name "$CONTAINER_NAME"   -e MYSQL_ROOT_PASSWORD="$MYSQL_PASSWORD"   -e MYSQL_DATABASE=docklane   -p "127.0.0.1:${MYSQL_PORT}:3306"   mysql:8.4)"
 
 for _ in {1..90}; do
-  if docker exec "$container_id" mysqladmin ping -uroot -p"$MYSQL_PASSWORD" --silent >/dev/null 2>&1; then
+  pid_one="$(docker exec "$container_id" sh -c 'cat /proc/1/comm' 2>/dev/null || true)"
+  if [[ "$pid_one" == "mysqld" ]] &&
+     docker exec "$container_id" mysqladmin ping -uroot -p"$MYSQL_PASSWORD" --silent >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
+
+pid_one="$(docker exec "$container_id" sh -c 'cat /proc/1/comm' 2>/dev/null || true)"
+[[ "$pid_one" == "mysqld" ]] || { echo "MySQL entrypoint did not reach final mysqld process" >&2; exit 1; }
 
 docker exec "$container_id" mysqladmin ping -uroot -p"$MYSQL_PASSWORD" --silent >/dev/null 2>&1   || { echo "MySQL did not become ready" >&2; exit 1; }
 
