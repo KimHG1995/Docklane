@@ -56,7 +56,10 @@ export class BootstrapService {
 
   async claim(input: BootstrapClaimRequest): Promise<BootstrapClaimResponse> {
     const hash = tokenHash(input.token);
-    const pending = await this.repository.findValidByHash(hash);
+    const pending = await this.repository.findClaimableByHash(
+      hash,
+      input.claimId,
+    );
     if (!pending) {
       throw new UnauthorizedException(
         'Invalid, expired, or already used bootstrap token',
@@ -68,13 +71,14 @@ export class BootstrapService {
       pending.nodeRole,
     );
 
-    const record = await this.repository.consume(hash);
-    if (!record || !record.usedAt) {
+    const consumed = await this.repository.consume(hash, input.claimId);
+    if (!consumed || !consumed.record.usedAt) {
       throw new UnauthorizedException(
-        'Invalid, expired, or already used bootstrap token',
+        'Invalid, expired, or claimed by another bootstrap request',
       );
     }
 
+    const record = consumed.record;
     return {
       tokenId: record.id,
       clusterId: record.clusterId,
@@ -82,6 +86,8 @@ export class BootstrapService {
       labels: record.labels,
       expiresAt: record.expiresAt,
       claimedAt: record.usedAt,
+      claimId: input.claimId,
+      replayed: consumed.replayed,
       swarmJoin,
     };
   }
