@@ -1,7 +1,6 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import type {
   PoolConnection,
-  ResultSetHeader,
   RowDataPacket,
 } from 'mysql2/promise';
 import { Database } from '../db/database.js';
@@ -9,6 +8,10 @@ import type {
   BootstrapNodeRole,
   BootstrapTokenRecord,
 } from './bootstrap.types.js';
+
+interface CountRow extends RowDataPacket {
+  count: number;
+}
 
 interface BootstrapTokenRow extends RowDataPacket {
   id: string;
@@ -19,6 +22,7 @@ interface BootstrapTokenRow extends RowDataPacket {
   created_by: string;
   expires_at: Date;
   used_at: Date | null;
+  claim_id: string | null;
   created_at: Date;
 }
 
@@ -37,12 +41,15 @@ export class BootstrapRepository implements OnModuleInit {
         created_by VARCHAR(128) NOT NULL,
         expires_at TIMESTAMP(6) NOT NULL,
         used_at TIMESTAMP(6) NULL,
+        claim_id VARCHAR(64) NULL,
         created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
         UNIQUE KEY uq_bootstrap_token_hash (token_hash),
         INDEX idx_bootstrap_tokens_expiry (expires_at, used_at),
         INDEX idx_bootstrap_tokens_cluster (cluster_id, created_at)
       ) ENGINE=InnoDB
     `);
+
+    await this.ensureColumn('claim_id', 'VARCHAR(64) NULL');
   }
 
   async create(input: {
@@ -77,55 +84,104 @@ export class BootstrapRepository implements OnModuleInit {
     return record;
   }
 
-  async findValidByHash(
+  async findClaimableByHash(
     tokenHash: string,
+    claimId: string,
   ): Promise<BootstrapTokenRecord | null> {
     const [rows] = await this.db.pool.query<BootstrapTokenRow[]>(
       `SELECT * FROM bootstrap_tokens
        WHERE token_hash = ?
-         AND used_at IS NULL
          AND expires_at > CURRENT_TIMESTAMP(6)
+         AND (used_at IS NULL OR claim_id = ?)
        LIMIT 1`,
-      [tokenHash],
+      [tokenHash, claimId],
     );
     return rows[0] ? mapRow(rows[0]) : null;
   }
 
-  async consume(tokenHash: string): Promise<BootstrapTokenRecord | null> {
+  async consume(
+    tokenHash: string,
+    claimId: string,
+  ): Promise<{ record: BootstrapTokenRecord; replayed: boolean } | null> {
     const connection = await this.db.getConnection();
     try {
       await connection.beginTransaction();
 
-      const [result] = await connection.execute<ResultSetHeader>(
-        `UPDATE bootstrap_tokens
-         SET used_at = CURRENT_TIMESTAMP(6)
+      const [rows] = await connection.query<BootstrapTokenRow[]>(
+        `SELECT * FROM bootstrap_tokens
          WHERE token_hash = ?
-           AND used_at IS NULL
-           AND expires_at > CURRENT_TIMESTAMP(6)`,
+           AND expires_at > CURRENT_TIMESTAMP(6)
+         LIMIT 1
+         FOR UPDATE`,
         [tokenHash],
       );
-
-      if (result.affectedRows !== 1) {
+      const current = rows[0];
+      if (!current) {
         await connection.rollback();
         return null;
       }
+
+      if (current.used_at !== null) {
+        if (current.claim_id !== claimId) {
+          await connection.rollback();
+          return null;
+        }
+
+        await connection.commit();
+        return {
+          record: mapRow(current),
+          replayed: true,
+        };
+      }
+
+      await connection.execute(
+        `UPDATE bootstrap_tokens
+         SET used_at = CURRENT_TIMESTAMP(6), claim_id = ?
+         WHERE id = ? AND used_at IS NULL`,
+        [claimId, current.id],
+      );
 
       const record = await this.findByHashWithConnection(
         connection,
         tokenHash,
       );
-      if (!record) {
-        throw new Error('Consumed bootstrap token disappeared');
+      if (!record || !record.usedAt || record.claimId !== claimId) {
+        throw new Error('Consumed bootstrap token state is inconsistent');
       }
 
       await connection.commit();
-      return record;
+      return {
+        record,
+        replayed: false,
+      };
     } catch (error) {
       await connection.rollback();
       throw error;
     } finally {
       connection.release();
     }
+  }
+
+  private async ensureColumn(
+    columnName: string,
+    definition: string,
+  ): Promise<void> {
+    const [rows] = await this.db.pool.query<CountRow[]>(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE()
+         AND table_name = 'bootstrap_tokens'
+         AND column_name = ?`,
+      [columnName],
+    );
+    if ((rows[0]?.count ?? 0) > 0) return;
+
+    if (!/^[a-z_]+$/.test(columnName)) {
+      throw new Error('Unsafe bootstrap token column name');
+    }
+    await this.db.pool.query(
+      `ALTER TABLE bootstrap_tokens ADD COLUMN ${columnName} ${definition}`,
+    );
   }
 
   private async find(id: string): Promise<BootstrapTokenRecord | null> {
@@ -160,6 +216,7 @@ function mapRow(row: BootstrapTokenRow): BootstrapTokenRecord {
     createdBy: row.created_by,
     expiresAt: row.expires_at.toISOString(),
     usedAt: row.used_at?.toISOString() ?? null,
+    claimId: row.claim_id,
     createdAt: row.created_at.toISOString(),
   };
 }
