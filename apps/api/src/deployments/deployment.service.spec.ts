@@ -273,7 +273,7 @@ test('rollback convergence remains pending while rollback is running', () => {
   );
 });
 
-test('rollback convergence accepts API-normalized task fingerprint drift', () => {
+test('rollback convergence accepts task spec drift when runtime fingerprint matches', () => {
   const rollbackDigest = `sha256:${'b'.repeat(64)}`;
   const rollbackImage =
     `registry.example.com/team/api@${rollbackDigest}`;
@@ -299,7 +299,7 @@ test('rollback convergence accepts API-normalized task fingerprint drift', () =>
   );
   for (const task of current.tasks) {
     task.specHash = 'docker-api-normalized-task-spec';
-    task.runtimeSpecHash = 'docker-api-normalized-runtime-spec';
+    task.runtimeSpecHash = 'previous-runtime-spec';
   }
 
   assert.equal(
@@ -312,7 +312,7 @@ test('rollback convergence accepts API-normalized task fingerprint drift', () =>
   );
 });
 
-test('rollback convergence accepts Swarm-materialized task runtime hashes', () => {
+test('rollback convergence waits on Swarm-materialized runtime fingerprint drift', () => {
   const rollbackDigest = `sha256:${'b'.repeat(64)}`;
   const rollbackImage =
     `registry.example.com/team/api@${rollbackDigest}`;
@@ -346,7 +346,7 @@ test('rollback convergence accepts Swarm-materialized task runtime hashes', () =
       rollbackPlan,
       rollbackDigest,
     ),
-    'SUCCESS',
+    'PENDING',
   );
 });
 
