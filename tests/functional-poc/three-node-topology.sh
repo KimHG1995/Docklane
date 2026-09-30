@@ -124,6 +124,30 @@ wait_worker_failure_relocation() {
   fail "service $service_id was not relocated away from failed worker $failed_node_name"
 }
 
+wait_docklane_service_converged() {
+  local service_id="$1"
+  local expected_replicas="$2"
+  local output_file="$3"
+
+  for _ in {1..150}; do
+    local body
+    body="$(api_get "/v1/clusters/default/services/$service_id" 2>/dev/null || true)"
+    if [[ -n "$body" ]]; then
+      printf '%s\n' "$body" >"$output_file"
+      if jq -e --argjson replicas "$expected_replicas" '
+        .service.desiredReplicas == $replicas
+        and .service.runningReplicas == $replicas
+        and ([.tasks[] | select(.desiredState == "running" and .state == "running")] | length) == $replicas
+      ' <<<"$body" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+
+  fail "Docklane service read model did not converge to $expected_replicas/$expected_replicas for $service_id"
+}
+
 wait_docklane_node_not_ready() {
   local node_id="$1"
   local output_file="$2"
@@ -401,11 +425,9 @@ IFS='|' read -r FAILURE_TASK_AFTER_ID FAILURE_NODE_AFTER_NAME _ <<<"$FAILURE_TAS
 [[ "$FAILURE_TASK_AFTER_ID" != "$FAILURE_TASK_BEFORE_ID" ]]   || fail "worker failure did not create a replacement task"
 [[ "$FAILURE_NODE_AFTER_NAME" != "$FAILURE_NODE_NAME" ]]   || fail "replacement task remained on failed worker $FAILURE_NODE_NAME"
 
-FAILURE_SERVICE_JSON="$(api_get "/v1/clusters/default/services/$DRAIN_SERVICE_ID")"
-printf '%s\n' "$FAILURE_SERVICE_JSON" >"$LOG_DIR/worker-failure-service.json"
-jq -e '.service.desiredReplicas == 1
-    and .service.runningReplicas == 1
-    and ([.tasks[] | select(.desiredState == "running" and .state == "running")] | length) == 1'   <<<"$FAILURE_SERVICE_JSON" >/dev/null   || fail "Docklane service read model did not converge after worker failure"
+wait_docklane_service_converged   "$DRAIN_SERVICE_ID"   1   "$LOG_DIR/worker-failure-service.json"
+
+FAILURE_SERVICE_JSON="$(cat "$LOG_DIR/worker-failure-service.json")"
 
 FAILURE_NODE_AFTER_JSON="$(cat "$LOG_DIR/worker-failure-node-after.json")"
 jq -e '.node.state != "ready"' <<<"$FAILURE_NODE_AFTER_JSON" >/dev/null   || fail "Docklane still reports failed worker as ready"
