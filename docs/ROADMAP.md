@@ -139,6 +139,15 @@ Exit criteria:
 
 ## v0.6 — Functional PoC Acceptance
 
+체크박스는 실제 Functional PoC run에서 해당 시나리오가 끝까지 통과한 경우에만 완료 처리한다.
+Harness 구현 여부와 acceptance 통과 여부를 구분한다.
+
+2026-09-30 acceptance run:
+
+- single-node run #36651728867: **FAILED** — normal digest deploy가 Docker mutation 이후 `VERIFYING`에서 수렴하지 않음
+- 3-node run #36651728844: **PARTIAL** — node drain, external LB traffic, network exposure 통과 후 worker failure read-model 검증에서 실패
+- 다음 수정 순서: single-node convergence → worker-failure read model → automatic rollback → capacity shortage
+
 Topology:
 
 ```text
@@ -174,19 +183,19 @@ worker-02
 
 필수:
 
-- [ ] normal digest deploy
+- [ ] normal digest deploy — acceptance run reached VERIFYING but did not converge
 - [ ] broken release rollback
-- [ ] external CLI conflict
-- [ ] API restart during update
-- [ ] Agent response loss
+- [ ] external CLI conflict — harness implemented, single-node acceptance blocked earlier
+- [ ] API restart during update — harness implemented, single-node acceptance blocked earlier
+- [ ] Agent response loss — harness implemented, single-node acceptance blocked earlier
 - [ ] capacity shortage
-- [ ] actual external LB traffic during rollout
-- [ ] worker failure
-- [ ] node drain
-- [ ] authorization rejection
+- [x] actual external LB traffic during rollout
+- [ ] worker failure — Swarm reschedule succeeded; Docklane read model reported desired=1/running=2 during shutdown overlap
+- [x] node drain
+- [x] authorization rejection
 - [ ] audit completeness
 - [ ] same digest/spec no-op redeploy
-- [ ] Swarm internal ports blocked from untrusted/public networks
+- [x] Swarm internal ports blocked from untrusted/public networks
 
 이 단계까지가 **기능 MVP**다.
 
