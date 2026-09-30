@@ -159,7 +159,7 @@ worker-02
 - [x] authorization rejection
 - [x] audit completeness
 - [x] same digest/spec no-op redeploy
-- [ ] broken release + automatic rollback
+- [x] broken release + automatic rollback
 - [ ] capacity shortage
 
 필수:
