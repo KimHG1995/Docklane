@@ -61,27 +61,52 @@ export class BootstrapRepository implements OnModuleInit {
     createdBy: string;
     expiresAt: Date;
   }): Promise<BootstrapTokenRecord> {
-    await this.db.pool.execute(
-      `INSERT INTO bootstrap_tokens
-       (
-         id, token_hash, cluster_id, node_role, labels_json,
-         created_by, expires_at
-       )
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        input.id,
-        input.tokenHash,
-        input.clusterId,
-        input.nodeRole,
-        JSON.stringify(input.labels),
-        input.createdBy,
-        input.expiresAt,
-      ],
-    );
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.execute(
+        `INSERT INTO bootstrap_tokens
+         (
+           id, token_hash, cluster_id, node_role, labels_json,
+           created_by, expires_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.id,
+          input.tokenHash,
+          input.clusterId,
+          input.nodeRole,
+          JSON.stringify(input.labels),
+          input.createdBy,
+          input.expiresAt,
+        ],
+      );
 
-    const record = await this.find(input.id);
-    if (!record) throw new Error('Bootstrap token disappeared after insert');
-    return record;
+      const record = await this.findByIdWithConnection(connection, input.id);
+      if (!record) {
+        throw new Error('Bootstrap token disappeared after insert');
+      }
+
+      await this.insertAuditOnce(connection, {
+        tokenId: record.id,
+        actorId: input.createdBy,
+        clusterId: record.clusterId,
+        action: 'BOOTSTRAP_TOKEN_ISSUED',
+        afterJson: {
+          nodeRole: record.nodeRole,
+          labels: record.labels,
+          expiresAt: record.expiresAt,
+        },
+      });
+
+      await connection.commit();
+      return record;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
 
   async findClaimableByHash(
@@ -127,9 +152,22 @@ export class BootstrapRepository implements OnModuleInit {
           return null;
         }
 
+        const record = mapRow(current);
+        await this.insertAuditOnce(connection, {
+          tokenId: record.id,
+          actorId: `bootstrap:${record.id}`,
+          clusterId: record.clusterId,
+          action: 'BOOTSTRAP_TOKEN_CLAIMED',
+          afterJson: {
+            claimId,
+            nodeRole: record.nodeRole,
+            labels: record.labels,
+            claimedAt: record.usedAt,
+          },
+        });
         await connection.commit();
         return {
-          record: mapRow(current),
+          record,
           replayed: true,
         };
       }
@@ -149,6 +187,19 @@ export class BootstrapRepository implements OnModuleInit {
         throw new Error('Consumed bootstrap token state is inconsistent');
       }
 
+      await this.insertAuditOnce(connection, {
+        tokenId: record.id,
+        actorId: `bootstrap:${record.id}`,
+        clusterId: record.clusterId,
+        action: 'BOOTSTRAP_TOKEN_CLAIMED',
+        afterJson: {
+          claimId,
+          nodeRole: record.nodeRole,
+          labels: record.labels,
+          claimedAt: record.usedAt,
+        },
+      });
+
       await connection.commit();
       return {
         record,
@@ -160,6 +211,94 @@ export class BootstrapRepository implements OnModuleInit {
     } finally {
       connection.release();
     }
+  }
+
+  async recordCompletionAudit(
+    record: BootstrapTokenRecord,
+    input: {
+      nodeId: string;
+      hostname: string;
+      role: string;
+      labels: Record<string, string>;
+      verifiedAt: string;
+    },
+  ): Promise<void> {
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const locked = await this.findByIdForUpdate(connection, record.id);
+      if (
+        !locked ||
+        locked.claimId !== record.claimId ||
+        locked.usedAt === null
+      ) {
+        throw new Error(
+          'Bootstrap token state changed before completion audit',
+        );
+      }
+
+      await this.insertAuditOnce(connection, {
+        tokenId: record.id,
+        actorId: `bootstrap:${record.id}`,
+        clusterId: record.clusterId,
+        action: 'BOOTSTRAP_COMPLETED',
+        afterJson: {
+          claimId: record.claimId,
+          nodeId: input.nodeId,
+          hostname: input.hostname,
+          role: input.role,
+          labels: input.labels,
+          verifiedAt: input.verifiedAt,
+        },
+      });
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  private async insertAuditOnce(
+    connection: PoolConnection,
+    input: {
+      tokenId: string;
+      actorId: string;
+      clusterId: string;
+      action: string;
+      afterJson: unknown;
+    },
+  ): Promise<void> {
+    const [existing] = await connection.query<Array<RowDataPacket & { id: number }>>(
+      `SELECT id FROM audit_events
+       WHERE operation_id = ? AND action = ?
+       LIMIT 1`,
+      [input.tokenId, input.action],
+    );
+    if (existing.length > 0) {
+      return;
+    }
+
+    await connection.execute(
+      `INSERT INTO audit_events
+       (
+         operation_id, actor_id, cluster_id, service_id,
+         resource_type, resource_id, action, before_json, after_json
+       )
+       VALUES (?, ?, ?, ?, 'bootstrap_token', ?, ?, NULL, ?)`,
+      [
+        input.tokenId,
+        input.actorId,
+        input.clusterId,
+        input.tokenId,
+        input.tokenId,
+        input.action,
+        JSON.stringify(input.afterJson),
+      ],
+    );
   }
 
   private async ensureColumn(
@@ -184,9 +323,23 @@ export class BootstrapRepository implements OnModuleInit {
     );
   }
 
-  private async find(id: string): Promise<BootstrapTokenRecord | null> {
-    const [rows] = await this.db.pool.query<BootstrapTokenRow[]>(
+  private async findByIdWithConnection(
+    connection: PoolConnection,
+    id: string,
+  ): Promise<BootstrapTokenRecord | null> {
+    const [rows] = await connection.query<BootstrapTokenRow[]>(
       'SELECT * FROM bootstrap_tokens WHERE id = ? LIMIT 1',
+      [id],
+    );
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+
+  private async findByIdForUpdate(
+    connection: PoolConnection,
+    id: string,
+  ): Promise<BootstrapTokenRecord | null> {
+    const [rows] = await connection.query<BootstrapTokenRow[]>(
+      'SELECT * FROM bootstrap_tokens WHERE id = ? LIMIT 1 FOR UPDATE',
       [id],
     );
     return rows[0] ? mapRow(rows[0]) : null;
