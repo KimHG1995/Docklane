@@ -13,9 +13,24 @@ permissions:
 jobs:
   topology:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install workspace dependencies
+        run: pnpm install --no-frozen-lockfile
 
       - name: Verify disposable Docker host
         run: |
@@ -23,12 +38,12 @@ jobs:
           docker info
           test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive"
 
-      - name: Run three-node Swarm topology PoC
+      - name: Run three-node Functional PoC
         env:
           DOCKLANE_POC_LOG_DIR: ${{ runner.temp }}/docklane-poc-3node
         run: bash tests/functional-poc/three-node-topology.sh
 
-      - name: Upload three-node topology evidence
+      - name: Upload three-node Functional PoC evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
