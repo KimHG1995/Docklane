@@ -297,6 +297,44 @@ test('rollback convergence accepts API-normalized task fingerprint drift', () =>
   );
 });
 
+test('rollback convergence accepts Swarm-materialized task runtime hashes', () => {
+  const rollbackDigest = `sha256:${'b'.repeat(64)}`;
+  const rollbackImage =
+    `registry.example.com/team/api@${rollbackDigest}`;
+  const rollbackPlan: ServiceMutationPlan = {
+    serviceId: 'service-1',
+    version: 12,
+    beforeSpecHash: 'failed-spec',
+    targetSpecHash: 'previous-spec',
+    targetForceUpdate: 0,
+    targetReplicas: 2,
+    targetImage: rollbackImage,
+    targetTaskSpecHash: 'previous-task-spec',
+    targetRuntimeSpecHash: 'previous-runtime-spec',
+  };
+  const current = snapshot(
+    {
+      version: 13,
+      specHash: 'previous-spec',
+      image: rollbackImage,
+      updateState: 'rollback_completed',
+    },
+    rollbackImage,
+  );
+  for (const task of current.tasks) {
+    task.runtimeSpecHash = 'swarm-materialized-runtime-spec';
+  }
+
+  assert.equal(
+    classifyRollbackSnapshot(
+      current,
+      rollbackPlan,
+      rollbackDigest,
+    ),
+    'SUCCESS',
+  );
+});
+
 test('rollback convergence rejects desired-shutdown restored tasks', () => {
   const rollbackDigest = `sha256:${'b'.repeat(64)}`;
   const rollbackImage =
