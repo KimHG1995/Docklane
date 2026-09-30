@@ -11,6 +11,7 @@ export interface BootstrapTokenRecord extends BootstrapScope {
   createdBy: string;
   expiresAt: string;
   usedAt: string | null;
+  claimId: string | null;
   createdAt: string;
 }
 
@@ -22,6 +23,8 @@ export interface BootstrapClaimResponse extends BootstrapScope {
   tokenId: string;
   expiresAt: string;
   claimedAt: string;
+  claimId: string;
+  replayed: boolean;
   swarmJoin: {
     remoteAddr: string;
     joinToken: string;
