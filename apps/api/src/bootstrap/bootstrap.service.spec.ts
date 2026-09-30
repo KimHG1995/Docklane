@@ -177,7 +177,7 @@ test('bootstrap issue fails before persistence when Swarm credentials are missin
   await assert.rejects(
     () =>
       service.issue(
-        'cluster-missing',
+        'cluster-1',
         {
           nodeRole: 'worker',
           labels: {},
@@ -186,7 +186,7 @@ test('bootstrap issue fails before persistence when Swarm credentials are missin
         {
           actorId: 'admin-1',
           role: 'ADMIN',
-          clusters: ['cluster-missing'],
+          clusters: ['cluster-1'],
         },
       ),
     /Swarm join credentials are not configured/,
