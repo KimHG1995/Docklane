@@ -193,10 +193,23 @@ func (r *Reader) Service(ctx context.Context, serviceID string) (model.ServiceDe
 		return model.ServiceDetailResponse{}, err
 	}
 
+	serviceSummary := toServiceSummary(*found)
+	serviceSummary.RunningReplicas = countDesiredRunningTasks(tasks)
+
 	return model.ServiceDetailResponse{
-		Service: toServiceSummary(*found),
+		Service: serviceSummary,
 		Tasks:   tasks,
 	}, nil
+}
+
+func countDesiredRunningTasks(tasks []model.TaskSummary) uint64 {
+	var running uint64
+	for _, task := range tasks {
+		if task.DesiredState == "running" && task.State == "running" {
+			running++
+		}
+	}
+	return running
 }
 
 func (r *Reader) ServiceTasks(ctx context.Context, serviceID string) ([]model.TaskSummary, error) {
