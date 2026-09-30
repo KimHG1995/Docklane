@@ -1,0 +1,151 @@
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import type {
+  PoolConnection,
+  ResultSetHeader,
+  RowDataPacket,
+} from 'mysql2/promise';
+import { Database } from '../db/database.js';
+import type {
+  BootstrapNodeRole,
+  BootstrapTokenRecord,
+} from './bootstrap.types.js';
+
+interface BootstrapTokenRow extends RowDataPacket {
+  id: string;
+  token_hash: string;
+  cluster_id: string;
+  node_role: BootstrapNodeRole;
+  labels_json: string | Record<string, string>;
+  created_by: string;
+  expires_at: Date;
+  used_at: Date | null;
+  created_at: Date;
+}
+
+@Injectable()
+export class BootstrapRepository implements OnModuleInit {
+  constructor(@Inject(Database) private readonly db: Database) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.db.pool.query(`
+      CREATE TABLE IF NOT EXISTS bootstrap_tokens (
+        id VARCHAR(64) PRIMARY KEY,
+        token_hash CHAR(64) NOT NULL,
+        cluster_id VARCHAR(128) NOT NULL,
+        node_role VARCHAR(16) NOT NULL,
+        labels_json JSON NOT NULL,
+        created_by VARCHAR(128) NOT NULL,
+        expires_at TIMESTAMP(6) NOT NULL,
+        used_at TIMESTAMP(6) NULL,
+        created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        UNIQUE KEY uq_bootstrap_token_hash (token_hash),
+        INDEX idx_bootstrap_tokens_expiry (expires_at, used_at),
+        INDEX idx_bootstrap_tokens_cluster (cluster_id, created_at)
+      ) ENGINE=InnoDB
+    `);
+  }
+
+  async create(input: {
+    id: string;
+    tokenHash: string;
+    clusterId: string;
+    nodeRole: BootstrapNodeRole;
+    labels: Record<string, string>;
+    createdBy: string;
+    expiresAt: Date;
+  }): Promise<BootstrapTokenRecord> {
+    await this.db.pool.execute(
+      `INSERT INTO bootstrap_tokens
+       (
+         id, token_hash, cluster_id, node_role, labels_json,
+         created_by, expires_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.id,
+        input.tokenHash,
+        input.clusterId,
+        input.nodeRole,
+        JSON.stringify(input.labels),
+        input.createdBy,
+        input.expiresAt,
+      ],
+    );
+
+    const record = await this.find(input.id);
+    if (!record) throw new Error('Bootstrap token disappeared after insert');
+    return record;
+  }
+
+  async consume(tokenHash: string): Promise<BootstrapTokenRecord | null> {
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const [result] = await connection.execute<ResultSetHeader>(
+        `UPDATE bootstrap_tokens
+         SET used_at = CURRENT_TIMESTAMP(6)
+         WHERE token_hash = ?
+           AND used_at IS NULL
+           AND expires_at > CURRENT_TIMESTAMP(6)`,
+        [tokenHash],
+      );
+
+      if (result.affectedRows !== 1) {
+        await connection.rollback();
+        return null;
+      }
+
+      const record = await this.findByHashWithConnection(
+        connection,
+        tokenHash,
+      );
+      if (!record) {
+        throw new Error('Consumed bootstrap token disappeared');
+      }
+
+      await connection.commit();
+      return record;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  private async find(id: string): Promise<BootstrapTokenRecord | null> {
+    const [rows] = await this.db.pool.query<BootstrapTokenRow[]>(
+      'SELECT * FROM bootstrap_tokens WHERE id = ? LIMIT 1',
+      [id],
+    );
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+
+  private async findByHashWithConnection(
+    connection: PoolConnection,
+    tokenHash: string,
+  ): Promise<BootstrapTokenRecord | null> {
+    const [rows] = await connection.query<BootstrapTokenRow[]>(
+      'SELECT * FROM bootstrap_tokens WHERE token_hash = ? LIMIT 1',
+      [tokenHash],
+    );
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+}
+
+function mapRow(row: BootstrapTokenRow): BootstrapTokenRecord {
+  return {
+    id: row.id,
+    clusterId: row.cluster_id,
+    nodeRole: row.node_role,
+    labels:
+      typeof row.labels_json === 'string'
+        ? JSON.parse(row.labels_json) as Record<string, string>
+        : row.labels_json,
+    createdBy: row.created_by,
+    expiresAt: row.expires_at.toISOString(),
+    usedAt: row.used_at?.toISOString() ?? null,
+    createdAt: row.created_at.toISOString(),
+  };
+}
