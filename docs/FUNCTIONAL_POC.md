@@ -233,6 +233,14 @@ workflow는 성공/실패와 무관하게 runner의 PoC evidence를 artifact로 
 - `three-node-topology.txt`
 - `manager-api-node-ls.txt`
 - `manager-docker-info.txt`
+- `drain-service-before.txt`
+- `drain-service-after.txt`
+- `drain-node-before.json`
+- `drain-operation.json`
+- `drain-node-after.json`
+- `activate-operation.json`
+- `activate-node-after.json`
+- `node-drain-audit-actions.txt`
 - Docker build/push/swarm 생성 로그
 
 artifact retention은 14일이다.
@@ -261,7 +269,6 @@ bash tests/functional-poc/cleanup.sh
 - Agent response loss — harness implemented; acceptance pending an actual workflow run
 - actual external LB traffic during rollout
 - worker failure
-- node drain
 - Swarm internal ports network exposure 검증
 
 이 항목들은 단일-node smoke가 안정화된 뒤 별도 시나리오로 확장한다.
