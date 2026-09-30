@@ -43,7 +43,7 @@ GitHub runner Docker
 - manager Docker API가 host loopback `tcp://127.0.0.1:22375`에서 동일한 node view를 제공
 - cleanup은 이번 실행이 만든 DinD container/network ID만 제거
 
-현재 harness는 topology, Docklane node drain/activate, worker failure recovery와 외부 LB traffic까지 검증한다.
+현재 harness는 topology, Docklane node drain/activate, worker failure recovery, 외부 LB traffic과 Swarm 내부 포트 외부 노출 차단까지 검증한다.
 
 ### 3-node Docklane node drain
 
@@ -77,6 +77,16 @@ GitHub runner Docker
 - 최소 20건 이상 요청에서 non-200 응답이 없는지 확인한다.
 
 이 시나리오는 실제 외부 LB 경로의 트래픽을 유지한 상태에서 Docklane rollout의 무중단성을 검증한다.
+
+### 3-node Swarm internal port exposure
+
+- manager/worker DinD 컨테이너의 outer-host port binding을 직접 검사한다.
+- 2377/tcp, 7946/tcp+udp, 4789/udp가 outer host에 publish되지 않았는지 확인한다.
+- 테스트용 manager Docker API 2375는 127.0.0.1에만 bind됐는지 확인한다.
+- worker Docker API 2375/2376은 outer host에 publish되지 않았는지 확인한다.
+- 3-node topology network가 local bridge network인지 확인한다.
+
+이 시나리오는 Swarm 내부 통신 포트가 테스트 topology 내부에서만 사용되고 outer/public 경계로 노출되지 않는지 검증한다.
 
 ## 현재 자동 검증 시나리오
 
