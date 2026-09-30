@@ -363,7 +363,8 @@ for action in NODE_DRAIN_STARTED NODE_DRAIN_SUCCEEDED NODE_ACTIVATE_STARTED NODE
 done
 
 log "scenario: worker failure reschedules service task"
-FAILURE_TASK_BEFORE="$(grep '|Running ' "$LOG_DIR/drain-service-after.txt" | head -n1)"
+wait_service_running_task "$DRAIN_SERVICE_ID" "$LOG_DIR/worker-failure-service-before.txt"
+FAILURE_TASK_BEFORE="$(grep '|Running ' "$LOG_DIR/worker-failure-service-before.txt" | head -n1)"
 IFS='|' read -r FAILURE_TASK_BEFORE_ID FAILURE_NODE_NAME _ <<<"$FAILURE_TASK_BEFORE"
 
 case "$FAILURE_NODE_NAME" in
