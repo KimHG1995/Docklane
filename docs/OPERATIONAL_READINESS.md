@@ -103,3 +103,29 @@ Leader가 아닌 `Reachable` manager 1대를 중지해 단일 manager 장애 시
 - `manager-loss-summary.txt`
 
 Leader loss와 manager loss workflow는 동일한 `operational-readiness-three-manager` concurrency group을 사용해 같은 Docker resource 이름을 동시에 사용하지 않는다.
+
+
+### Manager loss acceptance
+
+2026-09-30 GitHub Actions run #36681425236: **SUCCESS**
+
+관찰 결과:
+
+```text
+before
+manager-01 | Ready | Active | Leader
+manager-02 | Ready | Active | Reachable
+manager-03 | Ready | Active | Reachable
+
+manager loss
+manager-01 | Ready | Active | Leader
+manager-02 | Down  | Active | Unreachable
+manager-03 | Ready | Active | Reachable
+
+recovery
+manager-01 | Ready | Active | Leader
+manager-02 | Ready | Active | Reachable
+manager-03 | Ready | Active | Reachable
+```
+
+non-leader manager 한 대의 장애와 복구 동안 leader continuity와 2/3 quorum control이 유지됐다.
