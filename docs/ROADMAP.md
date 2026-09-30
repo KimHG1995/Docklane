@@ -23,7 +23,7 @@ Docklane은 기능 수보다 **안전하게 복구 가능한 하나의 deploymen
 - [x] systemd service definition
 - [x] Control Plane ↔ Go Agent mTLS PoC
 - [x] lint / typecheck / test CI
-- [ ] supported Docker Engine/API version 명시
+- [x] supported Docker Engine/API version 명시 — Docker Engine 27.5 / API 1.47 이상
 
 Exit criteria:
 
@@ -237,7 +237,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] leader loss — run #36680739108
 - [x] manager loss — run #36681425236
 - [x] quorum loss — run #36682067172
-- [ ] network partition — 3-manager harness implemented, acceptance pending
+- [x] network partition — run #36682848436
 - [ ] manager별 Go Agent 배포
 - [ ] Agent reconnect/failover
 - [ ] manager resource contention
