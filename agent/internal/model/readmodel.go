@@ -2,6 +2,14 @@ package model
 
 import "time"
 
+type AgentIdentityResponse struct {
+	Component string `json:"component"`
+	NodeID    string `json:"nodeId"`
+	Hostname  string `json:"hostname"`
+	Manager   bool   `json:"manager"`
+	Leader    bool   `json:"leader"`
+}
+
 type ManagerQuorum struct {
 	Total       int  `json:"total"`
 	Reachable   int  `json:"reachable"`
