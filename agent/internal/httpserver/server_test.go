@@ -16,6 +16,16 @@ type fakeReader struct {
 	serviceErr error
 }
 
+func (fakeReader) Identity(context.Context) (model.AgentIdentityResponse, error) {
+	return model.AgentIdentityResponse{
+		Component: "docklane-agent",
+		NodeID:    "node-1",
+		Hostname:  "manager-01",
+		Manager:   true,
+		Leader:    true,
+	}, nil
+}
+
 func (fakeReader) Cluster(context.Context) (model.ClusterResponse, error) {
 	return model.ClusterResponse{
 		Cluster: model.ClusterSummary{ID: "cluster-1"},
@@ -307,6 +317,21 @@ func TestHealth(t *testing.T) {
 
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}
+
+func TestIdentity(t *testing.T) {
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	req := httptest.NewRequest(http.MethodGet, "/v1/identity", nil)
+	res := httptest.NewRecorder()
+
+	s.server.Handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+	if !strings.Contains(res.Body.String(), "\"nodeId\":\"node-1\"") {
+		t.Fatalf("expected local node identity, got %s", res.Body.String())
 	}
 }
 
