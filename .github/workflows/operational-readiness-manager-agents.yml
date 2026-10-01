@@ -1,0 +1,63 @@
+name: operational-readiness-manager-agents
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/operational-readiness-manager-agents.yml'
+      - 'agent/**'
+      - 'contracts/agent.openapi.yaml'
+      - 'tests/operational-readiness/manager-agents.sh'
+      - 'tests/operational-readiness/cleanup.sh'
+
+concurrency:
+  group: operational-readiness-three-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  manager-agents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Verify disposable Docker host
+        run: |
+          docker version
+          docker info
+          test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive"
+
+      - name: Build static Go Agent
+        working-directory: agent
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o "${RUNNER_TEMP}/docklane-agent" ./cmd/docklane-agent
+
+      - name: Run manager-specific Agent deployment scenario
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+          DOCKLANE_MANAGER_AGENT_BINARY: ${{ runner.temp }}/docklane-agent
+        run: bash tests/operational-readiness/manager-agents.sh
+
+      - name: Upload manager Agent evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-operational-readiness-manager-agents-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-operational-readiness
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup operational readiness topology
+        if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+        run: bash tests/operational-readiness/cleanup.sh
