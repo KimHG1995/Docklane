@@ -8,6 +8,9 @@ NETWORK_NAME="docklane-or-manager-net"
 MANAGER_01_CONTAINER="docklane-or-manager-01"
 MANAGER_02_CONTAINER="docklane-or-manager-02"
 MANAGER_03_CONTAINER="docklane-or-manager-03"
+MANAGER_01_AGENT_PORT="19443"
+MANAGER_02_AGENT_PORT="19444"
+MANAGER_03_AGENT_PORT="19445"
 DIND_IMAGE="${DOCKLANE_OR_DIND_IMAGE:-docker:28-dind}"
 AGENT_BINARY="${DOCKLANE_MANAGER_AGENT_BINARY:-}"
 CERT_DIR="$LOG_DIR/manager-agent-certs"
@@ -150,20 +153,21 @@ start_agent() {
   docker cp "$CERT_DIR/$manager.crt" "$container:/tmp/docklane-agent.crt"
   docker cp "$CERT_DIR/$manager.key" "$container:/tmp/docklane-agent.key"
   docker exec "$container" chmod 0755 /usr/local/bin/docklane-agent
-  docker exec -d \
-    -e DOCKER_HOST=unix:///var/run/docker.sock \
-    -e DOCKLANE_AGENT_ADDR=0.0.0.0:9443 \
-    -e DOCKLANE_AGENT_TLS_CERT_FILE=/tmp/docklane-agent.crt \
-    -e DOCKLANE_AGENT_TLS_KEY_FILE=/tmp/docklane-agent.key \
-    -e DOCKLANE_AGENT_TLS_CA_FILE=/tmp/docklane-agent-ca.crt \
-    "$container" \
-    /usr/local/bin/docklane-agent
+  docker exec "$container" sh -c '
+    DOCKER_HOST=unix:///var/run/docker.sock \
+    DOCKLANE_AGENT_ADDR=0.0.0.0:9443 \
+    DOCKLANE_AGENT_TLS_CERT_FILE=/tmp/docklane-agent.crt \
+    DOCKLANE_AGENT_TLS_KEY_FILE=/tmp/docklane-agent.key \
+    DOCKLANE_AGENT_TLS_CA_FILE=/tmp/docklane-agent-ca.crt \
+    /usr/local/bin/docklane-agent >/tmp/docklane-agent.log 2>&1 &
+  '
 }
 
 wait_identity() {
   local manager="$1"
-  local ip="$2"
-  local output="$3"
+  local container="$2"
+  local port="$3"
+  local output="$4"
 
   for _ in {1..60}; do
     if curl -fsS \
@@ -172,7 +176,7 @@ wait_identity() {
       --cacert "$CA_CERT" \
       --cert "$CLIENT_CERT" \
       --key "$CLIENT_KEY" \
-      "https://$ip:9443/v1/identity" \
+      "https://127.0.0.1:$port/v1/identity" \
       >"$output" 2>/dev/null; then
       if python3 - "$output" <<'PY'
 import json
@@ -194,6 +198,7 @@ PY
     sleep 1
   done
 
+  docker exec "$container" sh -c 'cat /tmp/docklane-agent.log 2>/dev/null || true' >&2 || true
   fail "Agent identity did not become ready for $manager"
 }
 
@@ -235,11 +240,11 @@ NETWORK_ID="$(docker network create "$NETWORK_NAME")"
 printf '%s\n' "$NETWORK_ID" >"$OWNERSHIP_DIR/manager-network.network-id"
 
 log "starting three Docker-in-Docker managers"
-MANAGER_01_ID="$(docker run -d --privileged --name "$MANAGER_01_CONTAINER" --hostname manager-01 --network "$NETWORK_NAME" -e DOCKER_TLS_CERTDIR= "$DIND_IMAGE")"
+MANAGER_01_ID="$(docker run -d --privileged --name "$MANAGER_01_CONTAINER" --hostname manager-01 --network "$NETWORK_NAME" -p "127.0.0.1:$MANAGER_01_AGENT_PORT:9443" -e DOCKER_TLS_CERTDIR= "$DIND_IMAGE")"
 printf '%s\n' "$MANAGER_01_ID" >"$OWNERSHIP_DIR/manager-01.container-id"
-MANAGER_02_ID="$(docker run -d --privileged --name "$MANAGER_02_CONTAINER" --hostname manager-02 --network "$NETWORK_NAME" -e DOCKER_TLS_CERTDIR= "$DIND_IMAGE")"
+MANAGER_02_ID="$(docker run -d --privileged --name "$MANAGER_02_CONTAINER" --hostname manager-02 --network "$NETWORK_NAME" -p "127.0.0.1:$MANAGER_02_AGENT_PORT:9443" -e DOCKER_TLS_CERTDIR= "$DIND_IMAGE")"
 printf '%s\n' "$MANAGER_02_ID" >"$OWNERSHIP_DIR/manager-02.container-id"
-MANAGER_03_ID="$(docker run -d --privileged --name "$MANAGER_03_CONTAINER" --hostname manager-03 --network "$NETWORK_NAME" -e DOCKER_TLS_CERTDIR= "$DIND_IMAGE")"
+MANAGER_03_ID="$(docker run -d --privileged --name "$MANAGER_03_CONTAINER" --hostname manager-03 --network "$NETWORK_NAME" -p "127.0.0.1:$MANAGER_03_AGENT_PORT:9443" -e DOCKER_TLS_CERTDIR= "$DIND_IMAGE")"
 printf '%s\n' "$MANAGER_03_ID" >"$OWNERSHIP_DIR/manager-03.container-id"
 
 wait_dind "$MANAGER_01_CONTAINER"
@@ -255,9 +260,9 @@ MANAGER_03_IP="$(docker inspect --format "{{with index .NetworkSettings.Networks
 
 log "creating manager Agent mTLS material"
 setup_mtls
-issue_server_cert manager-01 "$MANAGER_01_IP"
-issue_server_cert manager-02 "$MANAGER_02_IP"
-issue_server_cert manager-03 "$MANAGER_03_IP"
+issue_server_cert manager-01 "127.0.0.1"
+issue_server_cert manager-02 "127.0.0.1"
+issue_server_cert manager-03 "127.0.0.1"
 
 log "initializing three-manager Swarm"
 docker exec "$MANAGER_01_CONTAINER" docker swarm init --advertise-addr "$MANAGER_01_IP" >"$LOG_DIR/swarm-init.log"
@@ -274,9 +279,9 @@ start_agent "$MANAGER_01_CONTAINER" manager-01
 start_agent "$MANAGER_02_CONTAINER" manager-02
 start_agent "$MANAGER_03_CONTAINER" manager-03
 
-wait_identity manager-01 "$MANAGER_01_IP" "$LOG_DIR/manager-01-identity.json"
-wait_identity manager-02 "$MANAGER_02_IP" "$LOG_DIR/manager-02-identity.json"
-wait_identity manager-03 "$MANAGER_03_IP" "$LOG_DIR/manager-03-identity.json"
+wait_identity manager-01 "$MANAGER_01_CONTAINER" "$MANAGER_01_AGENT_PORT" "$LOG_DIR/manager-01-identity.json"
+wait_identity manager-02 "$MANAGER_02_CONTAINER" "$MANAGER_02_AGENT_PORT" "$LOG_DIR/manager-02-identity.json"
+wait_identity manager-03 "$MANAGER_03_CONTAINER" "$MANAGER_03_AGENT_PORT" "$LOG_DIR/manager-03-identity.json"
 
 cluster_id=""
 leader_count=0
@@ -325,7 +330,7 @@ unique_nodes="$(printf '%s\n' "${node_ids[@]}" | sort -u | wc -l | tr -d ' ')"
   || fail "expected exactly one Agent to observe itself as leader, got $leader_count"
 
 log "verifying Control Plane Agent failover after primary Agent loss"
-DOCKLANE_MANAGER_AGENT_URLS="$(printf '[{"id":"manager-01","baseUrl":"https://%s:9443"},{"id":"manager-02","baseUrl":"https://%s:9443"},{"id":"manager-03","baseUrl":"https://%s:9443"}]' "$MANAGER_01_IP" "$MANAGER_02_IP" "$MANAGER_03_IP")" \
+DOCKLANE_MANAGER_AGENT_URLS="$(printf '[{"id":"manager-01","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-02","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-03","baseUrl":"https://127.0.0.1:%s"}]' "$MANAGER_01_AGENT_PORT" "$MANAGER_02_AGENT_PORT" "$MANAGER_03_AGENT_PORT")" \
 DOCKLANE_AGENT_CA_FILE="$CA_CERT" \
 DOCKLANE_AGENT_CERT_FILE="$CLIENT_CERT" \
 DOCKLANE_AGENT_KEY_FILE="$CLIENT_KEY" \
