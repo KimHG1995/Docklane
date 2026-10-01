@@ -1,10 +1,14 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import mysql, { type Pool, type PoolConnection } from 'mysql2/promise';
+import mysql, {
+  type Pool,
+  type PoolConnection,
+  type QueryResult,
+} from 'mysql2/promise';
 import { runDatabaseMigrations } from './migrations.js';
 
 @Injectable()
 export class Database implements OnModuleInit, OnModuleDestroy {
-  readonly pool: Pool;
+  private readonly pool: Pool;
 
   constructor() {
     const url = process.env.DOCKLANE_DATABASE_URL;
@@ -23,6 +27,20 @@ export class Database implements OnModuleInit, OnModuleDestroy {
     const connection = await this.getConnection();
     try {
       await runDatabaseMigrations(connection);
+    } finally {
+      connection.release();
+    }
+  }
+
+  async query<T extends QueryResult>(
+    sql: string,
+    values?: unknown[],
+  ) {
+    const connection = await this.getConnection();
+    try {
+      return values === undefined
+        ? await connection.query<T>(sql)
+        : await connection.query<T>(sql, values);
     } finally {
       connection.release();
     }

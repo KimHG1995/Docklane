@@ -79,14 +79,14 @@ export class ReleaseRepository {
   }
 
   async listApplications(): Promise<ApplicationRecord[]> {
-    const [rows] = await this.db.pool.query<ApplicationRow[]>(
+    const [rows] = await this.db.query<ApplicationRow[]>(
       'SELECT * FROM applications ORDER BY name ASC',
     );
     return rows.map(mapApplication);
   }
 
   async findApplication(id: string): Promise<ApplicationRecord | null> {
-    const [rows] = await this.db.pool.query<ApplicationRow[]>(
+    const [rows] = await this.db.query<ApplicationRow[]>(
       'SELECT * FROM applications WHERE id = ? LIMIT 1',
       [id],
     );
@@ -135,7 +135,7 @@ export class ReleaseRepository {
   async findDeploymentTarget(
     id: string,
   ): Promise<DeploymentTargetRecord | null> {
-    const [rows] = await this.db.pool.query<DeploymentTargetRow[]>(
+    const [rows] = await this.db.query<DeploymentTargetRow[]>(
       'SELECT * FROM deployment_targets WHERE id = ? LIMIT 1',
       [id],
     );
@@ -146,7 +146,7 @@ export class ReleaseRepository {
     applicationId: string,
     clusterId: string,
   ): Promise<DeploymentTargetRecord[]> {
-    const [rows] = await this.db.pool.query<DeploymentTargetRow[]>(
+    const [rows] = await this.db.query<DeploymentTargetRow[]>(
       `SELECT * FROM deployment_targets
        WHERE application_id = ? AND cluster_id = ?
        ORDER BY environment ASC`,
@@ -193,7 +193,7 @@ export class ReleaseRepository {
   }
 
   async findRelease(id: string): Promise<ReleaseRecord | null> {
-    const [rows] = await this.db.pool.query<ReleaseRow[]>(
+    const [rows] = await this.db.query<ReleaseRow[]>(
       'SELECT * FROM releases WHERE id = ? LIMIT 1',
       [id],
     );
@@ -201,7 +201,7 @@ export class ReleaseRepository {
   }
 
   async listReleases(applicationId: string): Promise<ReleaseRecord[]> {
-    const [rows] = await this.db.pool.query<ReleaseRow[]>(
+    const [rows] = await this.db.query<ReleaseRow[]>(
       `SELECT * FROM releases
        WHERE application_id = ?
        ORDER BY created_at DESC`,

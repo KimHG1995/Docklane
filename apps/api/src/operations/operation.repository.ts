@@ -35,7 +35,7 @@ export class OperationRepository {
   constructor(@Inject(Database) private readonly db: Database) {}
 
   async find(id: string): Promise<OperationRecord | null> {
-    const [rows] = await this.db.pool.query<OperationRow[]>(
+    const [rows] = await this.db.query<OperationRow[]>(
       'SELECT * FROM operations WHERE id = ? LIMIT 1',
       [id],
     );
@@ -54,7 +54,7 @@ export class OperationRepository {
   }
 
   async listNonTerminal(): Promise<OperationRecord[]> {
-    const [rows] = await this.db.pool.query<OperationRow[]>(
+    const [rows] = await this.db.query<OperationRow[]>(
       `SELECT * FROM operations
        WHERE status IN ('PENDING', 'RUNNING', 'VERIFYING', 'NEEDS_ATTENTION')
        ORDER BY created_at ASC`,
