@@ -117,7 +117,7 @@ export class DeploymentRepository {
     targetId: string,
     releaseId: string,
   ): Promise<DeploymentRecord | null> {
-    const [rows] = await this.db.pool.query<DeploymentRow[]>(
+    const [rows] = await this.db.query<DeploymentRow[]>(
       `SELECT * FROM deployments
        WHERE deployment_target_id = ?
          AND release_id = ?
@@ -130,7 +130,7 @@ export class DeploymentRepository {
   }
 
   async listForTarget(targetId: string): Promise<DeploymentRecord[]> {
-    const [rows] = await this.db.pool.query<DeploymentRow[]>(
+    const [rows] = await this.db.query<DeploymentRow[]>(
       `SELECT * FROM deployments
        WHERE deployment_target_id = ?
        ORDER BY created_at DESC`,
@@ -142,7 +142,7 @@ export class DeploymentRepository {
   async findByOperation(
     operationId: string,
   ): Promise<DeploymentRecord | null> {
-    const [rows] = await this.db.pool.query<DeploymentRow[]>(
+    const [rows] = await this.db.query<DeploymentRow[]>(
       'SELECT * FROM deployments WHERE operation_id = ? LIMIT 1',
       [operationId],
     );
@@ -150,7 +150,7 @@ export class DeploymentRepository {
   }
 
   async find(id: string): Promise<DeploymentRecord | null> {
-    const [rows] = await this.db.pool.query<DeploymentRow[]>(
+    const [rows] = await this.db.query<DeploymentRow[]>(
       'SELECT * FROM deployments WHERE id = ? LIMIT 1',
       [id],
     );

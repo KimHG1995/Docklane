@@ -33,7 +33,7 @@ export class NodeOperationRepository {
   constructor(@Inject(Database) private readonly db: Database) {}
 
   async find(id: string): Promise<NodeOperationRecord | null> {
-    const [rows] = await this.db.pool.query<NodeOperationRow[]>(
+    const [rows] = await this.db.query<NodeOperationRow[]>(
       'SELECT * FROM node_operations WHERE id = ? LIMIT 1',
       [id],
     );
@@ -52,7 +52,7 @@ export class NodeOperationRepository {
   }
 
   async listNonTerminal(): Promise<NodeOperationRecord[]> {
-    const [rows] = await this.db.pool.query<NodeOperationRow[]>(
+    const [rows] = await this.db.query<NodeOperationRow[]>(
       `SELECT * FROM node_operations
        WHERE status IN ('PENDING', 'RUNNING', 'VERIFYING', 'NEEDS_ATTENTION')
        ORDER BY created_at ASC`,
@@ -81,7 +81,7 @@ export class NodeOperationRepository {
     clusterId: string,
     nodeId: string,
   ): Promise<NodeOperationRecord | null> {
-    const [rows] = await this.db.pool.query<NodeOperationRow[]>(
+    const [rows] = await this.db.query<NodeOperationRow[]>(
       `SELECT * FROM node_operations
        WHERE cluster_id = ?
          AND node_id = ?

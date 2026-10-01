@@ -84,7 +84,7 @@ export class OperationLock {
 
   async assertAvailable(): Promise<void> {
     try {
-      await this.db.pool.query('SELECT 1');
+      await this.db.query('SELECT 1');
     } catch (error) {
       throw new InternalServerErrorException(
         `Database unavailable: ${String(error)}`,
