@@ -16,6 +16,7 @@ import type {
   CapacityCheckResponse,
 } from './capacity-model.js';
 import {
+  AgentIdentityResponseSchema,
   ClusterResponseSchema,
   HealthResponseSchema,
   NodeDetailResponseSchema,
@@ -28,6 +29,7 @@ import {
   ServiceMutationResponseSchema,
   ServiceSummarySchema,
   TaskSummarySchema,
+  type AgentIdentityResponse,
   type ClusterResponse,
   type HealthResponse,
   type NodeDetailResponse,
@@ -51,6 +53,14 @@ export class HttpAgentClient implements AgentClient {
 
   health(): Promise<HealthResponse> {
     return this.request('GET', '/v1/health', HealthResponseSchema);
+  }
+
+  identity(): Promise<AgentIdentityResponse> {
+    return this.request(
+      'GET',
+      '/v1/identity',
+      AgentIdentityResponseSchema,
+    );
   }
 
   inspectCluster(): Promise<ClusterResponse> {
