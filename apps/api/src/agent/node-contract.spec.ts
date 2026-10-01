@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  AgentIdentityResponseSchema,
   NodeLabelMutationPlanSchema,
   NodeMutationPlanSchema,
 } from './read-model.js';
@@ -45,6 +46,30 @@ test('Agent label plans reject a missing target label field', () => {
     NodeLabelMutationPlanSchema.parse({
       ...base,
       affectedServiceIds: [],
+    }),
+  );
+});
+
+
+test('Agent identity requires a local manager node identity', () => {
+  const parsed = AgentIdentityResponseSchema.parse({
+    component: 'docklane-agent',
+    nodeId: 'node-manager-01',
+    hostname: 'manager-01',
+    manager: true,
+    leader: false,
+  });
+  assert.equal(parsed.nodeId, 'node-manager-01');
+});
+
+test('Agent identity rejects worker identities', () => {
+  assert.throws(() =>
+    AgentIdentityResponseSchema.parse({
+      component: 'docklane-agent',
+      nodeId: 'node-worker-01',
+      hostname: 'worker-01',
+      manager: false,
+      leader: false,
     }),
   );
 });
