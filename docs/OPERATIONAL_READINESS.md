@@ -219,3 +219,70 @@ manager-03 | Ready | Active | Reachable
 - `network-partition-summary.txt`
 
 이 시나리오는 프로세스 종료가 아닌 통신 단절에서 Raft majority가 새 leader를 유지하고, minority manager가 control-plane mutation을 수행하지 못하는지 검증한다.
+
+
+## Manager-specific Go Agent deployment
+
+각 Swarm manager에 동일한 Go Agent 바이너리를 1개씩 배포하고, Agent가 반드시 해당 host의 local Docker daemon에 연결되도록 한다.
+
+Control Plane 설정은 두 모드를 지원한다.
+
+Legacy single endpoint:
+
+```text
+DOCKLANE_AGENT_URL=https://manager-01:9443
+```
+
+Manager registry:
+
+```json
+DOCKLANE_MANAGER_AGENTS=[
+  {"id":"manager-01","baseUrl":"https://manager-01:9443"},
+  {"id":"manager-02","baseUrl":"https://manager-02:9443"},
+  {"id":"manager-03","baseUrl":"https://manager-03:9443"}
+]
+DOCKLANE_AGENT_PRIMARY_ID=manager-01
+```
+
+현재 단계에서는 명시적으로 선택한 primary Agent를 기존 `AGENT_CLIENT`로 사용한다. health 기반 자동 재선택과 reconnect/failover는 다음 Operational Readiness 작업에서 구현한다.
+
+Agent `GET /v1/identity`는 다음을 반환한다.
+
+- Swarm cluster ID
+- local Swarm manager node ID
+- hostname
+- manager 여부
+- 현재 local node의 leader 여부
+
+전용 workflow:
+
+`operational-readiness-manager-agents`
+
+Acceptance topology:
+
+```text
+manager-01 ─ docklane-agent ─ local Docker daemon
+manager-02 ─ docklane-agent ─ local Docker daemon
+manager-03 ─ docklane-agent ─ local Docker daemon
+```
+
+검증 순서:
+
+1. 3-manager DinD Swarm을 구성한다.
+2. 정적 Go Agent 바이너리를 각 manager container에 복사한다.
+3. 각 Agent를 해당 manager의 local Docker socket에 연결해 실행한다.
+4. 각 Agent의 `/v1/identity`를 manager 내부 loopback에서 조회한다.
+5. Agent가 보고한 node ID가 해당 Docker daemon의 `Swarm.NodeID`와 일치하는지 확인한다.
+6. 세 Agent가 서로 다른 manager node ID를 보고하는지 확인한다.
+7. 세 Agent가 동일한 Swarm cluster ID를 보고하는지 확인한다.
+8. 정확히 한 Agent만 자신의 local node를 leader로 관찰하는지 확인한다.
+
+주요 evidence:
+
+- `topology.txt`
+- `manager-01-identity.json`
+- `manager-02-identity.json`
+- `manager-03-identity.json`
+- `manager-agents-summary.txt`
+
+이 workflow도 다른 3-manager readiness workflow와 동일한 `operational-readiness-three-manager` concurrency group을 사용한다.
