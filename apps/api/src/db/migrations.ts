@@ -35,6 +35,12 @@ export const DATABASE_MIGRATIONS: readonly Migration[] = [
     signature: '2026-10-01-baseline-current-schema-v1',
     up: migrateBaselineCurrentSchema,
   },
+  {
+    version: 2,
+    name: 'backfill-bootstrap-completed-node-id',
+    signature: '2026-10-01-backfill-bootstrap-completed-node-id-v1',
+    up: backfillBootstrapCompletedNodeId,
+  },
 ];
 
 export async function runDatabaseMigrations(
@@ -429,6 +435,43 @@ async function migrateBaselineCurrentSchema(
     'completed_node_id',
     'VARCHAR(128) NULL',
   );
+}
+
+
+async function backfillBootstrapCompletedNodeId(
+  connection: PoolConnection,
+): Promise<void> {
+  await connection.query(`
+    UPDATE bootstrap_tokens AS token
+    JOIN (
+      SELECT operation_id
+      FROM audit_events
+      WHERE resource_type = 'bootstrap_token'
+        AND action = 'BOOTSTRAP_COMPLETED'
+      GROUP BY operation_id
+      HAVING COUNT(*) = 1
+    ) AS unique_completion
+      ON unique_completion.operation_id = token.id
+    JOIN audit_events AS audit
+      ON audit.operation_id = unique_completion.operation_id
+     AND audit.resource_type = 'bootstrap_token'
+     AND audit.action = 'BOOTSTRAP_COMPLETED'
+     AND audit.resource_id = token.id
+     AND audit.cluster_id = token.cluster_id
+    SET token.completed_node_id =
+      JSON_UNQUOTE(JSON_EXTRACT(audit.after_json, '$.nodeId'))
+    WHERE token.completed_node_id IS NULL
+      AND token.used_at IS NOT NULL
+      AND token.claim_id IS NOT NULL
+      AND audit.after_json IS NOT NULL
+      AND JSON_TYPE(JSON_EXTRACT(audit.after_json, '$.claimId')) = 'STRING'
+      AND JSON_UNQUOTE(JSON_EXTRACT(audit.after_json, '$.claimId')) = token.claim_id
+      AND JSON_TYPE(JSON_EXTRACT(audit.after_json, '$.nodeId')) = 'STRING'
+      AND CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(audit.after_json, '$.nodeId')))
+        BETWEEN 1 AND 128
+      AND JSON_UNQUOTE(JSON_EXTRACT(audit.after_json, '$.nodeId')) =
+        TRIM(JSON_UNQUOTE(JSON_EXTRACT(audit.after_json, '$.nodeId')))
+  `);
 }
 
 async function ensureColumn(

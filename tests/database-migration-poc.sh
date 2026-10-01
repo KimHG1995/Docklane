@@ -56,15 +56,135 @@ const db = new Database();
 
 try {
   await db.onModuleInit();
+
+  const legacyTokens = [
+    {
+      id: 'legacy-valid',
+      tokenHash: '1'.repeat(64),
+      claimId: 'claim-valid',
+    },
+    {
+      id: 'legacy-wrong-claim',
+      tokenHash: '2'.repeat(64),
+      claimId: 'claim-current',
+    },
+    {
+      id: 'legacy-duplicate-audit',
+      tokenHash: '3'.repeat(64),
+      claimId: 'claim-duplicate',
+    },
+    {
+      id: 'legacy-wrong-cluster',
+      tokenHash: '4'.repeat(64),
+      claimId: 'claim-cluster',
+    },
+  ];
+
+  for (const token of legacyTokens) {
+    await db.pool.execute(
+      `INSERT INTO bootstrap_tokens
+       (
+         id, token_hash, cluster_id, node_role, labels_json, created_by,
+         expires_at, used_at, claim_id, completed_node_id
+       )
+       VALUES (?, ?, 'cluster-1', 'worker', JSON_OBJECT(), 'admin-1',
+               DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 1 DAY),
+               UTC_TIMESTAMP(6), ?, NULL)`,
+      [token.id, token.tokenHash, token.claimId],
+    );
+  }
+
+  const insertCompletionAudit = async ({
+    tokenId,
+    clusterId = 'cluster-1',
+    claimId,
+    nodeId,
+  }) => {
+    await db.pool.execute(
+      `INSERT INTO audit_events
+       (
+         operation_id, actor_id, cluster_id, service_id,
+         resource_type, resource_id, action, before_json, after_json
+       )
+       VALUES (?, ?, ?, ?, 'bootstrap_token', ?, 'BOOTSTRAP_COMPLETED', NULL, ?)`,
+      [
+        tokenId,
+        `bootstrap:${tokenId}`,
+        clusterId,
+        tokenId,
+        tokenId,
+        JSON.stringify({
+          claimId,
+          nodeId,
+          hostname: `${nodeId}.example`,
+          role: 'worker',
+          labels: {},
+          verifiedAt: '2026-09-30T00:01:00.000Z',
+        }),
+      ],
+    );
+  };
+
+  await insertCompletionAudit({
+    tokenId: 'legacy-valid',
+    claimId: 'claim-valid',
+    nodeId: 'node-valid',
+  });
+  await insertCompletionAudit({
+    tokenId: 'legacy-wrong-claim',
+    claimId: 'claim-stale',
+    nodeId: 'node-stale',
+  });
+  await insertCompletionAudit({
+    tokenId: 'legacy-duplicate-audit',
+    claimId: 'claim-duplicate',
+    nodeId: 'node-a',
+  });
+  await insertCompletionAudit({
+    tokenId: 'legacy-duplicate-audit',
+    claimId: 'claim-duplicate',
+    nodeId: 'node-b',
+  });
+  await insertCompletionAudit({
+    tokenId: 'legacy-wrong-cluster',
+    clusterId: 'cluster-2',
+    claimId: 'claim-cluster',
+    nodeId: 'node-cluster',
+  });
+
+  await db.pool.execute('DELETE FROM schema_migrations WHERE version = 2');
+
   await db.onModuleInit();
+  await db.onModuleInit();
+
+  const [legacyRows] = await db.pool.query(
+    `SELECT id, completed_node_id
+     FROM bootstrap_tokens
+     WHERE id LIKE 'legacy-%'
+     ORDER BY id`,
+  );
+  const completedNodeByToken = new Map(
+    legacyRows.map((row) => [row.id, row.completed_node_id]),
+  );
+  assert.equal(completedNodeByToken.get('legacy-valid'), 'node-valid');
+  assert.equal(completedNodeByToken.get('legacy-wrong-claim'), null);
+  assert.equal(completedNodeByToken.get('legacy-duplicate-audit'), null);
+  assert.equal(completedNodeByToken.get('legacy-wrong-cluster'), null);
 
   const [migrationRows] = await db.pool.query(
     'SELECT version, name, checksum FROM schema_migrations ORDER BY version',
   );
-  assert.equal(migrationRows.length, 1);
-  assert.equal(Number(migrationRows[0].version), 1);
-  assert.equal(migrationRows[0].name, 'baseline-current-schema');
-  assert.match(migrationRows[0].checksum, /^[a-f0-9]{64}$/);
+  assert.equal(migrationRows.length, 2);
+  assert.deepEqual(
+    migrationRows.map((row) => [Number(row.version), row.name]),
+    [
+      [1, 'baseline-current-schema'],
+      [2, 'backfill-bootstrap-completed-node-id'],
+    ],
+  );
+  for (const row of migrationRows) {
+    assert.match(row.checksum, /^[a-f0-9]{64}$/);
+  }
 
   const expectedTables = [
     'applications',

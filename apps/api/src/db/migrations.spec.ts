@@ -60,26 +60,26 @@ function fakeConnection(options?: {
   return { connection, applied, queries, executes };
 }
 
-test('database migrations apply the baseline once and skip it on replay', async () => {
+test('database migrations apply all known migrations once and skip them on replay', async () => {
   const state = fakeConnection();
 
   await runDatabaseMigrations(state.connection as never);
   assert.deepEqual(
     state.applied.map((row) => row.version),
-    [1],
+    [1, 2],
   );
 
   const insertsAfterFirst = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterFirst, 1);
+  assert.equal(insertsAfterFirst, 2);
 
   await runDatabaseMigrations(state.connection as never);
 
   const insertsAfterReplay = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterReplay, 1);
+  assert.equal(insertsAfterReplay, 2);
 });
 
 test('database migrations reject metadata drift for an applied migration', async () => {
@@ -126,15 +126,47 @@ test('database migrations fail when the advisory lock cannot be acquired', async
   );
 });
 
-test('migration checksum is deterministic and catalog metadata is stable', () => {
-  const migration = DATABASE_MIGRATIONS[0]!;
-  const first = migrationChecksum(migration);
-  const second = migrationChecksum(migration);
+test('migration checksums are deterministic and catalog metadata is stable', () => {
+  const baseline = DATABASE_MIGRATIONS[0]!;
+  const backfill = DATABASE_MIGRATIONS[1]!;
 
-  assert.equal(first, second);
-  assert.match(first, /^[a-f0-9]{64}$/);
-  assert.equal(migration.version, 1);
-  assert.equal(migration.name, 'baseline-current-schema');
+  assert.equal(migrationChecksum(baseline), migrationChecksum(baseline));
+  assert.equal(migrationChecksum(backfill), migrationChecksum(backfill));
+  assert.match(migrationChecksum(baseline), /^[a-f0-9]{64}$/);
+  assert.match(migrationChecksum(backfill), /^[a-f0-9]{64}$/);
+  assert.deepEqual(
+    DATABASE_MIGRATIONS.map((migration) => [migration.version, migration.name]),
+    [
+      [1, 'baseline-current-schema'],
+      [2, 'backfill-bootstrap-completed-node-id'],
+    ],
+  );
+});
+
+test('bootstrap completion backfill validates claim, node and audit uniqueness', async () => {
+  const state = fakeConnection();
+
+  await runDatabaseMigrations(state.connection as never);
+
+  const backfillQuery = state.queries.find((sql) =>
+    sql.includes('UPDATE bootstrap_tokens AS token'),
+  );
+  assert.ok(backfillQuery);
+  assert.ok(backfillQuery.includes("action = 'BOOTSTRAP_COMPLETED'"));
+  assert.ok(backfillQuery.includes("resource_type = 'bootstrap_token'"));
+  assert.ok(backfillQuery.includes('HAVING COUNT(*) = 1'));
+  assert.ok(
+    backfillQuery.includes(
+      "JSON_UNQUOTE(JSON_EXTRACT(audit.after_json, '$.claimId')) = token.claim_id",
+    ),
+  );
+  assert.ok(
+    backfillQuery.includes(
+      "JSON_TYPE(JSON_EXTRACT(audit.after_json, '$.nodeId')) = 'STRING'",
+    ),
+  );
+  assert.ok(backfillQuery.includes('audit.cluster_id = token.cluster_id'));
+  assert.ok(backfillQuery.includes('audit.resource_id = token.id'));
 });
 
 
