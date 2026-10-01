@@ -29,6 +29,33 @@ func (r *Reader) Close() error {
 	return r.client.Close()
 }
 
+func (r *Reader) Identity(ctx context.Context) (model.AgentIdentityResponse, error) {
+	infoResult, err := r.client.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return model.AgentIdentityResponse{}, fmt.Errorf("read docker info: %w", err)
+	}
+	nodeID := infoResult.Info.Swarm.NodeID
+	if nodeID == "" {
+		return model.AgentIdentityResponse{}, fmt.Errorf("docker daemon is not joined to a Swarm")
+	}
+
+	node, err := r.resolveNode(ctx, nodeID)
+	if err != nil {
+		return model.AgentIdentityResponse{}, err
+	}
+	if node.Spec.Role != swarm.NodeRoleManager {
+		return model.AgentIdentityResponse{}, fmt.Errorf("local Swarm node %s is not a manager", nodeID)
+	}
+
+	return model.AgentIdentityResponse{
+		Component: "docklane-agent",
+		NodeID:    node.ID,
+		Hostname:  node.Description.Hostname,
+		Manager:   true,
+		Leader:    node.ManagerStatus != nil && node.ManagerStatus.Leader,
+	}, nil
+}
+
 func (r *Reader) Cluster(ctx context.Context) (model.ClusterResponse, error) {
 	server, err := r.client.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
