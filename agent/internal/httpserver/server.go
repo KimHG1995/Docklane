@@ -19,6 +19,7 @@ import (
 )
 
 type DockerReader interface {
+	Identity(context.Context) (model.AgentIdentityResponse, error)
 	Cluster(context.Context) (model.ClusterResponse, error)
 	Services(context.Context) ([]model.ServiceSummary, error)
 	Service(context.Context, string) (model.ServiceDetailResponse, error)
@@ -52,6 +53,7 @@ func New(cfg config.Config, reader DockerReader) *Server {
 	s := &Server{cfg: cfg, reader: reader}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", s.health)
+	mux.HandleFunc("GET /v1/identity", s.identity)
 	mux.HandleFunc("GET /v1/cluster", s.cluster)
 	mux.HandleFunc("GET /v1/services", s.services)
 	mux.HandleFunc("GET /v1/services/{serviceId}", s.service)
@@ -124,6 +126,15 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		"status":    "ok",
 		"component": "docklane-agent",
 	})
+}
+
+func (s *Server) identity(w http.ResponseWriter, r *http.Request) {
+	data, err := s.reader.Identity(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
 }
 
 func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
