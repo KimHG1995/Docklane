@@ -238,7 +238,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager loss — run #36681425236
 - [x] quorum loss — run #36682067172
 - [x] network partition — run #36682848436
-- [ ] manager별 Go Agent 배포
+- [ ] manager별 Go Agent 배포 — harness implemented, acceptance pending
 - [ ] Agent reconnect/failover
 - [ ] manager resource contention
 - [ ] Swarm backup/restore drill
