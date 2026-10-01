@@ -26,6 +26,8 @@ export interface ManagerAgentConfig {
   agents: AgentConfig[];
 }
 
+export const MANAGER_AGENT_CONFIG = Symbol('MANAGER_AGENT_CONFIG');
+
 function optionalFile(path: string | undefined): Buffer | undefined {
   return path ? readFileSync(path) : undefined;
 }
