@@ -96,7 +96,7 @@ export class HttpAgentClient implements AgentClient {
   }
 
   health(): Promise<HealthResponse> {
-    return this.safeRequest('GET', '/v1/health', HealthResponseSchema);
+    return this.healthWithFailover();
   }
 
   identity(): Promise<AgentIdentityResponse> {
@@ -362,6 +362,31 @@ export class HttpAgentClient implements AgentClient {
       ServiceMutationResponseSchema,
       input,
     );
+  }
+
+  private async healthWithFailover(): Promise<HealthResponse> {
+    let lastError: unknown = new Error('No manager Agent is available');
+
+    for (const config of this.candidateAgents()) {
+      try {
+        const value = await this.requestTo(
+          config,
+          'GET',
+          '/v1/health',
+          HealthResponseSchema,
+        );
+        this.markActive(config);
+        return value;
+      } catch (error) {
+        if (!isRetryableAgentFailure(error)) {
+          throw error;
+        }
+        lastError = error;
+        this.markUnavailable(config);
+      }
+    }
+
+    throw normalizeError(lastError);
   }
 
   private async safeRequest<T>(
