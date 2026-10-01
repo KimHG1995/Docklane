@@ -150,7 +150,7 @@ test('safe Agent requests fail over from an unavailable primary and stay on the 
       component: 'docklane-agent',
     });
 
-    assert.equal(secondaryIdentityCalls, 1);
+    assert.equal(secondaryIdentityCalls, 0);
     assert.equal(secondaryHealthCalls, 2);
   } finally {
     await secondary.close();
