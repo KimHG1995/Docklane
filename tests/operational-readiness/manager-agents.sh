@@ -148,18 +148,23 @@ start_agent() {
   local container="$1"
   local manager="$2"
 
+  docker exec "$container" mkdir -p /etc/docklane
   docker cp "$AGENT_BINARY" "$container:/usr/local/bin/docklane-agent"
-  docker cp "$CA_CERT" "$container:/tmp/docklane-agent-ca.crt"
-  docker cp "$CERT_DIR/$manager.crt" "$container:/tmp/docklane-agent.crt"
-  docker cp "$CERT_DIR/$manager.key" "$container:/tmp/docklane-agent.key"
+  docker cp "$CA_CERT" "$container:/etc/docklane/agent-ca.crt"
+  docker cp "$CERT_DIR/$manager.crt" "$container:/etc/docklane/agent.crt"
+  docker cp "$CERT_DIR/$manager.key" "$container:/etc/docklane/agent.key"
   docker exec "$container" chmod 0755 /usr/local/bin/docklane-agent
+  docker exec "$container" chmod 0600 /etc/docklane/agent.key
+  docker exec "$container" test -s /etc/docklane/agent-ca.crt
+  docker exec "$container" test -s /etc/docklane/agent.crt
+  docker exec "$container" test -s /etc/docklane/agent.key
   docker exec "$container" sh -c '
     DOCKER_HOST=unix:///var/run/docker.sock \
     DOCKLANE_AGENT_ADDR=0.0.0.0:9443 \
-    DOCKLANE_AGENT_TLS_CERT_FILE=/tmp/docklane-agent.crt \
-    DOCKLANE_AGENT_TLS_KEY_FILE=/tmp/docklane-agent.key \
-    DOCKLANE_AGENT_TLS_CA_FILE=/tmp/docklane-agent-ca.crt \
-    /usr/local/bin/docklane-agent >/tmp/docklane-agent.log 2>&1 &
+    DOCKLANE_AGENT_TLS_CERT_FILE=/etc/docklane/agent.crt \
+    DOCKLANE_AGENT_TLS_KEY_FILE=/etc/docklane/agent.key \
+    DOCKLANE_AGENT_TLS_CA_FILE=/etc/docklane/agent-ca.crt \
+    /usr/local/bin/docklane-agent >/var/log/docklane-agent.log 2>&1 &
   '
 }
 
@@ -198,7 +203,7 @@ PY
     sleep 1
   done
 
-  docker exec "$container" sh -c 'cat /tmp/docklane-agent.log 2>/dev/null || true' >&2 || true
+  docker exec "$container" sh -c 'cat /var/log/docklane-agent.log 2>/dev/null || true' >&2 || true
   fail "Agent identity did not become ready for $manager"
 }
 
