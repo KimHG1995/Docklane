@@ -5,6 +5,14 @@ export const HealthResponseSchema = z.object({
   component: z.literal('docklane-agent'),
 });
 
+export const AgentIdentityResponseSchema = z.object({
+  component: z.literal('docklane-agent'),
+  nodeId: z.string().min(1),
+  hostname: z.string().min(1),
+  manager: z.literal(true),
+  leader: z.boolean(),
+});
+
 export const ManagerQuorumSchema = z.object({
   total: z.number().int().nonnegative(),
   reachable: z.number().int().nonnegative(),
@@ -111,6 +119,7 @@ export const ServiceMutationResponseSchema = z.object({
 });
 
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
+export type AgentIdentityResponse = z.infer<typeof AgentIdentityResponseSchema>;
 export type ClusterResponse = z.infer<typeof ClusterResponseSchema>;
 export type ServiceSummary = z.infer<typeof ServiceSummarySchema>;
 export type TaskSummary = z.infer<typeof TaskSummarySchema>;
