@@ -39,6 +39,11 @@ func (r *Reader) Identity(ctx context.Context) (model.AgentIdentityResponse, err
 		return model.AgentIdentityResponse{}, fmt.Errorf("docker daemon is not joined to a Swarm")
 	}
 
+	swarmResult, err := r.client.SwarmInspect(ctx, client.SwarmInspectOptions{})
+	if err != nil {
+		return model.AgentIdentityResponse{}, fmt.Errorf("inspect swarm: %w", err)
+	}
+
 	node, err := r.resolveNode(ctx, nodeID)
 	if err != nil {
 		return model.AgentIdentityResponse{}, err
@@ -49,6 +54,7 @@ func (r *Reader) Identity(ctx context.Context) (model.AgentIdentityResponse, err
 
 	return model.AgentIdentityResponse{
 		Component: "docklane-agent",
+		ClusterID: swarmResult.Swarm.ID,
 		NodeID:    node.ID,
 		Hostname:  node.Description.Hostname,
 		Manager:   true,
