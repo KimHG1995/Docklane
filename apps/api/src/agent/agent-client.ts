@@ -3,6 +3,7 @@ import type {
   CapacityCheckResponse,
 } from './capacity-model.js';
 import type {
+  AgentIdentityResponse,
   ClusterResponse,
   HealthResponse,
   NodeDetailResponse,
@@ -19,6 +20,7 @@ import type {
 
 export interface AgentClient {
   health(): Promise<HealthResponse>;
+  identity(): Promise<AgentIdentityResponse>;
   inspectCluster(): Promise<ClusterResponse>;
   listServices(): Promise<ServiceSummary[]>;
   inspectService(serviceId: string): Promise<ServiceDetailResponse>;
