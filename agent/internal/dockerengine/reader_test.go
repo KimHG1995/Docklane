@@ -38,7 +38,6 @@ func TestCountDesiredRunningTasksExcludesShutdownOverlap(t *testing.T) {
 	}
 }
 
-
 func TestIdentityInspectsCanonicalNodeIDWithoutHostnameFallback(t *testing.T) {
 	var nodeListCalls int
 	var nodeInspectCalls int
