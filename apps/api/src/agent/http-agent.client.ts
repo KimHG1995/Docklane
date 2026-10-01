@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { AgentRequestError, type AgentClient } from './agent-client.js';
 import {
   MANAGER_AGENT_CONFIG,
+  loadManagerAgentConfig,
   type AgentConfig,
   type ManagerAgentConfig,
 } from './agent-config.js';
@@ -57,7 +58,7 @@ export class HttpAgentClient implements AgentClient {
 
   constructor(
     @Inject(MANAGER_AGENT_CONFIG)
-    registry: ManagerAgentConfig,
+    registry: ManagerAgentConfig = loadManagerAgentConfig(),
   ) {
     const primary = registry.agents.find(
       (agent) => agent.id === registry.primaryId,
