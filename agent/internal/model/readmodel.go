@@ -4,6 +4,7 @@ import "time"
 
 type AgentIdentityResponse struct {
 	Component string `json:"component"`
+	ClusterID string `json:"clusterId"`
 	NodeID    string `json:"nodeId"`
 	Hostname  string `json:"hostname"`
 	Manager   bool   `json:"manager"`
