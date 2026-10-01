@@ -44,9 +44,17 @@ func (r *Reader) Identity(ctx context.Context) (model.AgentIdentityResponse, err
 		return model.AgentIdentityResponse{}, fmt.Errorf("inspect swarm: %w", err)
 	}
 
-	node, err := r.resolveNode(ctx, nodeID)
+	nodeResult, err := r.client.NodeInspect(ctx, nodeID, client.NodeInspectOptions{})
 	if err != nil {
-		return model.AgentIdentityResponse{}, err
+		return model.AgentIdentityResponse{}, fmt.Errorf("inspect local swarm node %s: %w", nodeID, err)
+	}
+	node := nodeResult.Node
+	if node.ID != nodeID {
+		return model.AgentIdentityResponse{}, fmt.Errorf(
+			"local Swarm node identity mismatch: docker info reported %s, inspect returned %s",
+			nodeID,
+			node.ID,
+		)
 	}
 	if node.Spec.Role != swarm.NodeRoleManager {
 		return model.AgentIdentityResponse{}, fmt.Errorf("local Swarm node %s is not a manager", nodeID)
