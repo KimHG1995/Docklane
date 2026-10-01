@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.11.0
+  version: 0.12.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -19,6 +19,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+
+  /v1/identity:
+    get:
+      operationId: identity
+      responses:
+        '200':
+          description: Local Swarm manager identity for this Agent process.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentIdentityResponse'
+        '502':
+          description: Local Docker daemon is unavailable or is not a Swarm manager.
 
   /v1/cluster:
     get:
@@ -457,6 +470,26 @@ components:
         component:
           type: string
           const: docklane-agent
+
+    AgentIdentityResponse:
+      type: object
+      additionalProperties: false
+      required: [component, nodeId, hostname, manager, leader]
+      properties:
+        component:
+          type: string
+          const: docklane-agent
+        nodeId:
+          type: string
+          minLength: 1
+        hostname:
+          type: string
+          minLength: 1
+        manager:
+          type: boolean
+          const: true
+        leader:
+          type: boolean
 
     ManagerQuorum:
       type: object
