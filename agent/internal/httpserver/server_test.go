@@ -19,6 +19,7 @@ type fakeReader struct {
 func (fakeReader) Identity(context.Context) (model.AgentIdentityResponse, error) {
 	return model.AgentIdentityResponse{
 		Component: "docklane-agent",
+		ClusterID: "cluster-1",
 		NodeID:    "node-1",
 		Hostname:  "manager-01",
 		Manager:   true,
