@@ -2,11 +2,26 @@ name: operational-readiness-manager-agents
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/operational-readiness-manager-agents.yml'
+      - 'agent/**'
+      - 'apps/api/src/agent/**'
+      - 'apps/api/package.json'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'contracts/agent.openapi.yaml'
+      - 'tests/operational-readiness/manager-agents.sh'
+      - 'tests/operational-readiness/cleanup.sh'
   push:
     branches: [main]
     paths:
       - '.github/workflows/operational-readiness-manager-agents.yml'
       - 'agent/**'
+      - 'apps/api/src/agent/**'
+      - 'apps/api/package.json'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
       - 'contracts/agent.openapi.yaml'
       - 'tests/operational-readiness/manager-agents.sh'
       - 'tests/operational-readiness/cleanup.sh'
@@ -28,6 +43,12 @@ jobs:
         with:
           go-version: '1.27.1'
           cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @docklane/api build
 
       - name: Verify disposable Docker host
         run: |
