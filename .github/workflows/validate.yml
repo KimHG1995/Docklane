@@ -276,6 +276,7 @@ jobs:
           bash -n tests/operational-readiness/manager-loss.sh
           bash -n tests/operational-readiness/quorum-loss.sh
           bash -n tests/operational-readiness/network-partition.sh
+          bash -n tests/operational-readiness/manager-agents.sh
           bash -n tests/operational-readiness/cleanup.sh
 
   bootstrap-docker:
