@@ -54,6 +54,7 @@ test('Agent label plans reject a missing target label field', () => {
 test('Agent identity requires a local manager node identity', () => {
   const parsed = AgentIdentityResponseSchema.parse({
     component: 'docklane-agent',
+    clusterId: 'cluster-1',
     nodeId: 'node-manager-01',
     hostname: 'manager-01',
     manager: true,
@@ -66,6 +67,7 @@ test('Agent identity rejects worker identities', () => {
   assert.throws(() =>
     AgentIdentityResponseSchema.parse({
       component: 'docklane-agent',
+      clusterId: 'cluster-1',
       nodeId: 'node-worker-01',
       hostname: 'worker-01',
       manager: false,
