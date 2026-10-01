@@ -244,7 +244,9 @@ DOCKLANE_MANAGER_AGENTS=[
 DOCKLANE_AGENT_PRIMARY_ID=manager-01
 ```
 
-현재 단계에서는 명시적으로 선택한 primary Agent를 기존 `AGENT_CLIENT`로 사용한다. health 기반 자동 재선택과 reconnect/failover는 다음 Operational Readiness 작업에서 구현한다.
+Control Plane은 명시적으로 선택한 primary Agent를 먼저 사용한다. read/plan 요청에서 transport 오류 또는 Agent 5xx가 발생하면 다른 manager Agent의 `/v1/identity`를 확인하고, 기준 Swarm cluster ID와 일치하는 Agent로 전환한다. 선택된 Agent는 유지하며 실패한 endpoint는 짧은 cooldown 동안 우선순위에서 제외해 즉시 failback이 반복되지 않도록 한다.
+
+실제 Docker mutation 요청은 다른 Agent에 자동 재전송하지 않는다. mutation 전송 결과가 불명확한 경우 해당 Agent를 일시적으로 제외하고 오류를 상위 coordinator에 전달하며, 기존 operation reconciliation이 다른 정상 Agent의 read path를 사용해 실제 Docker 상태를 확인한 뒤 결과를 확정한다. `/v1/health`는 Swarm 미가입 상태에서도 사용할 수 있도록 identity 검증과 독립적으로 failover한다.
 
 Agent `GET /v1/identity`는 다음을 반환한다.
 
@@ -276,6 +278,10 @@ manager-03 ─ docklane-agent ─ local Docker daemon
 6. 세 Agent가 서로 다른 manager node ID를 보고하는지 확인한다.
 7. 세 Agent가 동일한 Swarm cluster ID를 보고하는지 확인한다.
 8. 정확히 한 Agent만 자신의 local node를 leader로 관찰하는지 확인한다.
+9. Control Plane `HttpAgentClient`가 manager-01을 primary로 선택한 상태에서 identity를 확인한다.
+10. manager-01의 Agent 프로세스만 종료하고 Swarm manager 자체는 유지한다.
+11. 같은 `HttpAgentClient` 인스턴스의 다음 identity 요청이 manager-02 또는 manager-03으로 전환되는지 확인한다.
+12. failover 전후의 Swarm cluster ID가 동일하고 node ID가 달라졌는지 확인한다.
 
 주요 evidence:
 
@@ -283,6 +289,9 @@ manager-03 ─ docklane-agent ─ local Docker daemon
 - `manager-01-identity.json`
 - `manager-02-identity.json`
 - `manager-03-identity.json`
+- `manager-agent-failover.json`
 - `manager-agents-summary.txt`
 
 이 workflow도 다른 3-manager readiness workflow와 동일한 `operational-readiness-three-manager` concurrency group을 사용한다.
+
+2026-10-02 acceptance run #36941789676에서 3-manager mTLS Agent 구성, 동일 cluster identity 검증, primary Agent 프로세스 종료 후 Control Plane read failover를 확인했다.

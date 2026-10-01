@@ -51,10 +51,35 @@ import {
 
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const AGENT_FAILURE_COOLDOWN_MS = 5_000;
+
+class AgentTransportError extends Error {
+  constructor(
+    readonly agentId: string,
+    message: string,
+    cause?: unknown,
+  ) {
+    super(`Agent ${agentId} transport failed: ${message}`, { cause });
+  }
+}
+
+class AgentIdentityError extends Error {
+  constructor(
+    readonly agentId: string,
+    message: string,
+    cause?: unknown,
+  ) {
+    super(`Agent ${agentId} identity validation failed: ${message}`, { cause });
+  }
+}
 
 @Injectable()
 export class HttpAgentClient implements AgentClient {
-  private readonly config: AgentConfig;
+  private readonly registry: ManagerAgentConfig;
+  private activeId: string;
+  private referenceClusterId: string | null = null;
+  private readonly verifiedClusters = new Map<string, string>();
+  private readonly unavailableUntil = new Map<string, number>();
 
   constructor(
     @Inject(MANAGER_AGENT_CONFIG)
@@ -66,31 +91,28 @@ export class HttpAgentClient implements AgentClient {
     if (!primary) {
       throw new Error('Primary manager Agent configuration disappeared');
     }
-    this.config = primary;
+    this.registry = registry;
+    this.activeId = primary.id;
   }
 
   health(): Promise<HealthResponse> {
-    return this.request('GET', '/v1/health', HealthResponseSchema);
+    return this.healthWithFailover();
   }
 
   identity(): Promise<AgentIdentityResponse> {
-    return this.request(
-      'GET',
-      '/v1/identity',
-      AgentIdentityResponseSchema,
-    );
+    return this.identityWithFailover();
   }
 
   inspectCluster(): Promise<ClusterResponse> {
-    return this.request('GET', '/v1/cluster', ClusterResponseSchema);
+    return this.safeRequest('GET', '/v1/cluster', ClusterResponseSchema);
   }
 
   listServices(): Promise<ServiceSummary[]> {
-    return this.request('GET', '/v1/services', z.array(ServiceSummarySchema));
+    return this.safeRequest('GET', '/v1/services', z.array(ServiceSummarySchema));
   }
 
   inspectService(serviceId: string): Promise<ServiceDetailResponse> {
-    return this.request(
+    return this.safeRequest(
       'GET',
       `/v1/services/${encodeURIComponent(serviceId)}`,
       ServiceDetailResponseSchema,
@@ -98,7 +120,7 @@ export class HttpAgentClient implements AgentClient {
   }
 
   listServiceTasks(serviceId: string): Promise<TaskSummary[]> {
-    return this.request(
+    return this.safeRequest(
       'GET',
       `/v1/services/${encodeURIComponent(serviceId)}/tasks`,
       z.array(TaskSummarySchema),
@@ -106,7 +128,7 @@ export class HttpAgentClient implements AgentClient {
   }
 
   checkServicePlacement(serviceId: string): Promise<ServicePlacementResponse> {
-    return this.request(
+    return this.safeRequest(
       'GET',
       `/v1/services/${encodeURIComponent(serviceId)}/placement-check`,
       ServicePlacementResponseSchema,
@@ -117,7 +139,7 @@ export class HttpAgentClient implements AgentClient {
     serviceId: string,
     input: CapacityCheckRequest,
   ): Promise<CapacityCheckResponse> {
-    return this.request(
+    return this.safeRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/capacity-check`,
       CapacityCheckResponseSchema,
@@ -127,7 +149,7 @@ export class HttpAgentClient implements AgentClient {
 
 
   inspectNode(nodeId: string): Promise<NodeDetailResponse> {
-    return this.request(
+    return this.safeRequest(
       'GET',
       `/v1/nodes/${encodeURIComponent(nodeId)}`,
       NodeDetailResponseSchema,
@@ -138,7 +160,7 @@ export class HttpAgentClient implements AgentClient {
     nodeId: string,
     expectedVersion: number,
   ): Promise<NodeMutationPlan> {
-    return this.request(
+    return this.safeRequest(
       'POST',
       `/v1/nodes/${encodeURIComponent(nodeId)}/plan-drain`,
       NodeMutationPlanSchema,
@@ -155,7 +177,7 @@ export class HttpAgentClient implements AgentClient {
       expectedServiceIds?: string[];
     },
   ): Promise<NodeMutationResponse> {
-    return this.request(
+    return this.mutationRequest(
       'POST',
       `/v1/nodes/${encodeURIComponent(nodeId)}/drain`,
       NodeMutationResponseSchema,
@@ -167,7 +189,7 @@ export class HttpAgentClient implements AgentClient {
     nodeId: string,
     expectedVersion: number,
   ): Promise<NodeMutationPlan> {
-    return this.request(
+    return this.safeRequest(
       'POST',
       `/v1/nodes/${encodeURIComponent(nodeId)}/plan-activate`,
       NodeMutationPlanSchema,
@@ -184,7 +206,7 @@ export class HttpAgentClient implements AgentClient {
       expectedServiceIds?: string[];
     },
   ): Promise<NodeMutationResponse> {
-    return this.request(
+    return this.mutationRequest(
       'POST',
       `/v1/nodes/${encodeURIComponent(nodeId)}/activate`,
       NodeMutationResponseSchema,
@@ -200,7 +222,7 @@ export class HttpAgentClient implements AgentClient {
       remove: string[];
     },
   ): Promise<NodeLabelMutationPlan> {
-    return this.request(
+    return this.safeRequest(
       'POST',
       `/v1/nodes/${encodeURIComponent(nodeId)}/plan-labels`,
       NodeLabelMutationPlanSchema,
@@ -218,7 +240,7 @@ export class HttpAgentClient implements AgentClient {
       targetLabels: Record<string, string>;
     },
   ): Promise<NodeMutationResponse> {
-    return this.request(
+    return this.mutationRequest(
       'POST',
       `/v1/nodes/${encodeURIComponent(nodeId)}/labels`,
       NodeMutationResponseSchema,
@@ -231,7 +253,7 @@ export class HttpAgentClient implements AgentClient {
     expectedVersion: number,
     replicas: number,
   ): Promise<ServiceMutationPlan> {
-    return this.request(
+    return this.safeRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/plan-scale`,
       ServiceMutationPlanSchema,
@@ -243,7 +265,7 @@ export class HttpAgentClient implements AgentClient {
     serviceId: string,
     expectedVersion: number,
   ): Promise<ServiceMutationPlan> {
-    return this.request(
+    return this.safeRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/plan-restart`,
       ServiceMutationPlanSchema,
@@ -256,7 +278,7 @@ export class HttpAgentClient implements AgentClient {
     expectedVersion: number,
     image: string,
   ): Promise<ServiceImageMutationPlan> {
-    return this.request(
+    return this.safeRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/plan-image-update`,
       ServiceImageMutationPlanSchema,
@@ -268,7 +290,7 @@ export class HttpAgentClient implements AgentClient {
     serviceId: string,
     expectedVersion: number,
   ): Promise<ServiceImageMutationPlan> {
-    return this.request(
+    return this.safeRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/plan-rollback`,
       ServiceImageMutationPlanSchema,
@@ -285,7 +307,7 @@ export class HttpAgentClient implements AgentClient {
       replicas: number;
     },
   ): Promise<ServiceMutationResponse> {
-    return this.request(
+    return this.mutationRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/scale`,
       ServiceMutationResponseSchema,
@@ -301,7 +323,7 @@ export class HttpAgentClient implements AgentClient {
       targetSpecHash: string;
     },
   ): Promise<ServiceMutationResponse> {
-    return this.request(
+    return this.mutationRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/restart`,
       ServiceMutationResponseSchema,
@@ -318,7 +340,7 @@ export class HttpAgentClient implements AgentClient {
       image: string;
     },
   ): Promise<ServiceMutationResponse> {
-    return this.request(
+    return this.mutationRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/image`,
       ServiceMutationResponseSchema,
@@ -334,7 +356,7 @@ export class HttpAgentClient implements AgentClient {
       targetSpecHash: string;
     },
   ): Promise<ServiceMutationResponse> {
-    return this.request(
+    return this.mutationRequest(
       'POST',
       `/v1/services/${encodeURIComponent(serviceId)}/rollback`,
       ServiceMutationResponseSchema,
@@ -342,23 +364,212 @@ export class HttpAgentClient implements AgentClient {
     );
   }
 
-  private async request<T>(
+  private async healthWithFailover(): Promise<HealthResponse> {
+    let lastError: unknown = new Error('No manager Agent is available');
+
+    for (const config of this.candidateAgents()) {
+      try {
+        const value = await this.requestTo(
+          config,
+          'GET',
+          '/v1/health',
+          HealthResponseSchema,
+        );
+        this.markActive(config);
+        return value;
+      } catch (error) {
+        if (!isRetryableAgentFailure(error)) {
+          throw error;
+        }
+        lastError = error;
+        this.markUnavailable(config);
+      }
+    }
+
+    throw normalizeError(lastError);
+  }
+
+  private async safeRequest<T>(
     method: 'GET' | 'POST',
     path: string,
     schema: z.ZodType<T>,
     body?: unknown,
   ): Promise<T> {
-    const url = new URL(path, this.config.baseUrl);
+    let lastError: unknown = new Error('No manager Agent is available');
+
+    for (const config of this.candidateAgents()) {
+      try {
+        await this.verifyAgent(config);
+        const value = await this.requestTo(config, method, path, schema, body);
+        this.markActive(config);
+        return value;
+      } catch (error) {
+        if (!shouldFailover(error)) {
+          throw error;
+        }
+        lastError = error;
+        this.markUnavailable(config);
+      }
+    }
+
+    throw normalizeError(lastError);
+  }
+
+  private async mutationRequest<T>(
+    method: 'POST',
+    path: string,
+    schema: z.ZodType<T>,
+    body: unknown,
+  ): Promise<T> {
+    const config = await this.selectMutationAgent();
+
+    try {
+      const value = await this.requestTo(config, method, path, schema, body);
+      this.markActive(config);
+      return value;
+    } catch (error) {
+      if (isRetryableAgentFailure(error)) {
+        this.markUnavailable(config);
+      }
+      throw error;
+    }
+  }
+
+  private async identityWithFailover(): Promise<AgentIdentityResponse> {
+    let lastError: unknown = new Error('No manager Agent is available');
+
+    for (const config of this.candidateAgents()) {
+      try {
+        const identity = await this.readIdentity(config);
+        this.markActive(config);
+        return identity;
+      } catch (error) {
+        if (!shouldFailover(error)) {
+          throw error;
+        }
+        lastError = error;
+        this.markUnavailable(config);
+      }
+    }
+
+    throw normalizeError(lastError);
+  }
+
+  private async selectMutationAgent(): Promise<AgentConfig> {
+    let lastError: unknown = new Error('No manager Agent is available');
+
+    for (const config of this.candidateAgents()) {
+      try {
+        await this.verifyAgent(config);
+        this.markActive(config);
+        return config;
+      } catch (error) {
+        if (!shouldFailover(error)) {
+          throw error;
+        }
+        lastError = error;
+        this.markUnavailable(config);
+      }
+    }
+
+    throw normalizeError(lastError);
+  }
+
+  private candidateAgents(): AgentConfig[] {
+    const ordered = [
+      ...this.registry.agents.filter((agent) => agent.id === this.activeId),
+      ...this.registry.agents.filter((agent) => agent.id !== this.activeId),
+    ];
+    const now = Date.now();
+    const available = ordered.filter(
+      (agent) => (this.unavailableUntil.get(agent.id) ?? 0) <= now,
+    );
+    return available.length > 0 ? available : ordered;
+  }
+
+  private async verifyAgent(config: AgentConfig): Promise<void> {
+    const cachedClusterId = this.verifiedClusters.get(config.id);
+    if (
+      cachedClusterId &&
+      (this.referenceClusterId === null ||
+        cachedClusterId === this.referenceClusterId)
+    ) {
+      return;
+    }
+    await this.readIdentity(config);
+  }
+
+  private async readIdentity(
+    config: AgentConfig,
+  ): Promise<AgentIdentityResponse> {
+    let identity: AgentIdentityResponse;
+    try {
+      identity = await this.requestTo(
+        config,
+        'GET',
+        '/v1/identity',
+        AgentIdentityResponseSchema,
+      );
+    } catch (error) {
+      if (isRetryableAgentFailure(error)) {
+        throw error;
+      }
+      throw new AgentIdentityError(
+        config.id,
+        error instanceof Error ? error.message : String(error),
+        error,
+      );
+    }
+
+    const referenceClusterId = this.referenceClusterId;
+    if (
+      referenceClusterId !== null &&
+      identity.clusterId !== referenceClusterId
+    ) {
+      throw new AgentIdentityError(
+        config.id,
+        `cluster ${identity.clusterId} does not match ${referenceClusterId}`,
+      );
+    }
+
+    if (this.referenceClusterId === null) {
+      this.referenceClusterId = identity.clusterId;
+    }
+    this.verifiedClusters.set(config.id, identity.clusterId);
+    return identity;
+  }
+
+  private markActive(config: AgentConfig): void {
+    this.activeId = config.id;
+    this.unavailableUntil.delete(config.id);
+  }
+
+  private markUnavailable(config: AgentConfig): void {
+    this.unavailableUntil.set(
+      config.id,
+      Date.now() + AGENT_FAILURE_COOLDOWN_MS,
+    );
+    this.verifiedClusters.delete(config.id);
+  }
+
+  private async requestTo<T>(
+    config: AgentConfig,
+    method: 'GET' | 'POST',
+    path: string,
+    schema: z.ZodType<T>,
+    body?: unknown,
+  ): Promise<T> {
+    const url = new URL(path, config.baseUrl);
     const options: RequestOptions = {
       method,
       hostname: url.hostname,
       port: url.port,
       path: `${url.pathname}${url.search}`,
       servername: url.hostname,
-      ca: this.config.ca,
-      cert: this.config.cert,
-      key: this.config.key,
-      rejectUnauthorized: !this.config.insecureDev,
+      ca: config.ca,
+      cert: config.cert,
+      key: config.key,
+      rejectUnauthorized: !config.insecureDev,
       timeout: REQUEST_TIMEOUT_MS,
     };
 
@@ -396,18 +607,23 @@ export class HttpAgentClient implements AgentClient {
         });
 
         res.once('aborted', () => {
-          rejectOnce(new Error('Agent response aborted'));
+          rejectOnce(
+            new AgentTransportError(config.id, 'response aborted'),
+          );
         });
         res.once('error', (error) => {
           rejectOnce(
-            error instanceof Error
-              ? error
-              : new Error(`Agent response error: ${String(error)}`),
+            toTransportError(config.id, 'response error', error),
           );
         });
         res.once('close', () => {
           if (!ended) {
-            rejectOnce(new Error('Agent response closed before completion'));
+            rejectOnce(
+              new AgentTransportError(
+                config.id,
+                'response closed before completion',
+              ),
+            );
           }
         });
         res.once('end', () => {
@@ -439,9 +655,13 @@ export class HttpAgentClient implements AgentClient {
           : httpRequest(options, onResponse);
 
       req.on('timeout', () =>
-        req.destroy(new Error('Agent request timed out')),
+        req.destroy(
+          new AgentTransportError(config.id, 'request timed out'),
+        ),
       );
-      req.on('error', (error) => rejectOnce(error));
+      req.on('error', (error) =>
+        rejectOnce(toTransportError(config.id, 'request error', error)),
+      );
 
       if (body !== undefined) {
         req.setHeader('Content-Type', 'application/json');
@@ -451,4 +671,33 @@ export class HttpAgentClient implements AgentClient {
       }
     });
   }
+}
+
+
+function isRetryableAgentFailure(error: unknown): boolean {
+  return (
+    error instanceof AgentTransportError ||
+    (error instanceof AgentRequestError && error.statusCode >= 500)
+  );
+}
+
+function shouldFailover(error: unknown): boolean {
+  return (
+    isRetryableAgentFailure(error) ||
+    error instanceof AgentIdentityError
+  );
+}
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function toTransportError(
+  agentId: string,
+  message: string,
+  error: unknown,
+): AgentTransportError {
+  return error instanceof AgentTransportError
+    ? error
+    : new AgentTransportError(agentId, message, error);
 }
