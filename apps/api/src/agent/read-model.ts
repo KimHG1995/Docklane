@@ -7,6 +7,7 @@ export const HealthResponseSchema = z.object({
 
 export const AgentIdentityResponseSchema = z.object({
   component: z.literal('docklane-agent'),
+  clusterId: z.string().min(1),
   nodeId: z.string().min(1),
   hostname: z.string().min(1),
   manager: z.literal(true),
