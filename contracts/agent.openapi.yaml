@@ -474,11 +474,14 @@ components:
     AgentIdentityResponse:
       type: object
       additionalProperties: false
-      required: [component, nodeId, hostname, manager, leader]
+      required: [component, clusterId, nodeId, hostname, manager, leader]
       properties:
         component:
           type: string
           const: docklane-agent
+        clusterId:
+          type: string
+          minLength: 1
         nodeId:
           type: string
           minLength: 1
