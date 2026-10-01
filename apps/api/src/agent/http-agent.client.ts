@@ -1,9 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import { z } from 'zod';
 import { AgentRequestError, type AgentClient } from './agent-client.js';
-import { loadAgentConfig, type AgentConfig } from './agent-config.js';
+import {
+  MANAGER_AGENT_CONFIG,
+  type AgentConfig,
+  type ManagerAgentConfig,
+} from './agent-config.js';
 import {
   CapacityCheckResponseSchema,
 } from './capacity-model.js';
@@ -49,7 +53,20 @@ const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 @Injectable()
 export class HttpAgentClient implements AgentClient {
-  private readonly config: AgentConfig = loadAgentConfig();
+  private readonly config: AgentConfig;
+
+  constructor(
+    @Inject(MANAGER_AGENT_CONFIG)
+    registry: ManagerAgentConfig,
+  ) {
+    const primary = registry.agents.find(
+      (agent) => agent.id === registry.primaryId,
+    );
+    if (!primary) {
+      throw new Error('Primary manager Agent configuration disappeared');
+    }
+    this.config = primary;
+  }
 
   health(): Promise<HealthResponse> {
     return this.request('GET', '/v1/health', HealthResponseSchema);
