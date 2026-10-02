@@ -1,0 +1,57 @@
+name: operational-readiness-swarm-backup-restore
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/operational-readiness-swarm-backup-restore.yml'
+      - 'tests/operational-readiness/swarm-backup-restore.sh'
+      - 'tests/operational-readiness/swarm-backup-restore-cleanup.sh'
+
+concurrency:
+  group: operational-readiness-three-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  swarm-backup-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify harness syntax
+        run: |
+          bash -n tests/operational-readiness/swarm-backup-restore.sh
+          bash -n tests/operational-readiness/swarm-backup-restore-cleanup.sh
+
+      - name: Verify disposable Docker host
+        run: |
+          docker version
+          docker info
+          test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive"
+
+      - name: Run Swarm cold backup and disaster restore drill
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+          DOCKLANE_OR_PRIVATE_BACKUP_DIR: ${{ runner.temp }}/docklane-swarm-backup-private-${{ github.run_id }}
+        run: bash tests/operational-readiness/swarm-backup-restore.sh
+
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-operational-readiness-swarm-backup-restore-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-operational-readiness
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup
+        if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+          DOCKLANE_OR_PRIVATE_BACKUP_DIR: ${{ runner.temp }}/docklane-swarm-backup-private-${{ github.run_id }}
+        run: bash tests/operational-readiness/swarm-backup-restore-cleanup.sh
