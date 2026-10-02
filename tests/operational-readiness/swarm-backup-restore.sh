@@ -6,6 +6,7 @@ LOG="${DOCKLANE_OR_LOG_DIR:-${RUNNER_TEMP:-/tmp}/docklane-operational-readiness}
 OWN="$LOG/ownership"
 BACKUP="${DOCKLANE_OR_PRIVATE_BACKUP_DIR:-${RUNNER_TEMP:-/tmp}/docklane-swarm-backup-private-${GITHUB_RUN_ID:-local}}"
 NET="docklane-or-manager-net"
+NET_SUBNET="${DOCKLANE_OR_MANAGER_SUBNET:-172.30.250.0/24}"
 M1="docklane-or-manager-01"
 M2="docklane-or-manager-02"
 M3="docklane-or-manager-03"
@@ -182,8 +183,12 @@ rm -rf "$BACKUP"; mkdir -p "$BACKUP"; chmod 0700 "$BACKUP"
 trap cleanup EXIT
 
 log "creating source three-manager Swarm"
-NET_ID="$(docker network create "$NET")"
+NET_ID="$(docker network create --subnet "$NET_SUBNET" "$NET")"
 printf '%s\n' "$NET_ID" >"$OWN/manager-network.network-id"
+ACTUAL_NET_SUBNET="$(docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$NET")"
+[[ "$ACTUAL_NET_SUBNET" == "$NET_SUBNET" ]] \
+  || fail "manager network subnet mismatch: expected $NET_SUBNET, got $ACTUAL_NET_SUBNET"
+printf '%s\n' "$ACTUAL_NET_SUBNET" >"$LOG/manager-network-subnet.txt"
 start_fresh "$M1" manager-01
 start_fresh "$M2" manager-02
 start_fresh "$M3" manager-03
