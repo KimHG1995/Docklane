@@ -2,13 +2,6 @@ name: operational-readiness-resource-contention
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/operational-readiness-resource-contention.yml'
-      - 'tests/operational-readiness/resource-contention.sh'
-      - 'tests/operational-readiness/resource-pressure.go'
-      - 'tests/operational-readiness/cleanup.sh'
-      - 'agent/**'
   push:
     branches: [main]
     paths:
