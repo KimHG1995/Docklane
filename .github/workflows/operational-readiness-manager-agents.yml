@@ -2,17 +2,6 @@ name: operational-readiness-manager-agents
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/operational-readiness-manager-agents.yml'
-      - 'agent/**'
-      - 'apps/api/src/agent/**'
-      - 'apps/api/package.json'
-      - 'package.json'
-      - 'pnpm-workspace.yaml'
-      - 'contracts/agent.openapi.yaml'
-      - 'tests/operational-readiness/manager-agents.sh'
-      - 'tests/operational-readiness/cleanup.sh'
   push:
     branches: [main]
     paths:

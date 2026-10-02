@@ -270,14 +270,34 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Verify operational readiness harness syntax
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Verify all operational readiness harnesses
+        shell: bash
         run: |
-          bash -n tests/operational-readiness/leader-loss.sh
-          bash -n tests/operational-readiness/manager-loss.sh
-          bash -n tests/operational-readiness/quorum-loss.sh
-          bash -n tests/operational-readiness/network-partition.sh
-          bash -n tests/operational-readiness/manager-agents.sh
-          bash -n tests/operational-readiness/cleanup.sh
+          set -euo pipefail
+
+          mapfile -t shell_scripts < <(
+            find tests/operational-readiness -maxdepth 1 -type f -name '*.sh' -print | sort
+          )
+          (( ${#shell_scripts[@]} > 0 ))
+
+          for script in "${shell_scripts[@]}"; do
+            echo "bash -n $script"
+            bash -n "$script"
+          done
+
+          mapfile -t go_helpers < <(
+            find tests/operational-readiness -maxdepth 1 -type f -name '*.go' -print | sort
+          )
+
+          for helper in "${go_helpers[@]}"; do
+            echo "gofmt/build $helper"
+            test -z "$(gofmt -l "$helper")"
+            go build -o "${RUNNER_TEMP}/$(basename "${helper%.go}")" "$helper"
+          done
 
   bootstrap-docker:
     needs: changes

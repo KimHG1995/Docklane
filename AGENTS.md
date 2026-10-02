@@ -127,3 +127,7 @@ When CI fails:
 6. do not add unrelated cleanup or documentation commits while waiting for the rerun
 
 For expensive Operational Readiness workflows, a successful acceptance run is evidence. Do not retrigger the same heavy scenario solely because a later commit changes prose. Keep acceptance evidence and documentation in the same acceptance PR before the final run whenever practical.
+
+Heavy Operational Readiness workflows must not run automatically on every pull-request synchronization. PR validation is limited to deterministic static/preflight checks; real multi-node acceptance runs belong on `main` push or explicit `workflow_dispatch`.
+
+Operational Readiness static validation must discover harness scripts and standalone helpers dynamically. Do not maintain a hand-written file allowlist that can silently omit a new scenario.
