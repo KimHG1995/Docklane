@@ -19,7 +19,7 @@ permissions:
 jobs:
   swarm-backup-restore:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

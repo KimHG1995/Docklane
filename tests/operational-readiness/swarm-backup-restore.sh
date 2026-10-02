@@ -67,6 +67,37 @@ wait_manager_count(){
   fail "$expected-manager Swarm did not converge"
 }
 
+wait_restored_manager_count(){
+  local observer="$1" expected="$2" output="$3"
+  for attempt in {1..600}; do
+    if topology "$observer" "$output" 2>/dev/null; then
+      local ready leaders followers
+      ready="$(awk -F'|' '$2=="Ready" && $3=="Active" && ($4=="Leader" || $4=="Reachable") {n++} END{print n+0}' "$output")"
+      leaders="$(awk -F'|' '$4=="Leader" {n++} END{print n+0}' "$output")"
+      followers="$(awk -F'|' '$4=="Reachable" {n++} END{print n+0}' "$output")"
+      [[ "$ready" == "$expected" && "$leaders" == 1 && "$followers" == $((expected - 1)) ]] && return 0
+    fi
+
+    if (( attempt % 30 == 0 )); then
+      cp "$output" "$LOG/restored-manager-convergence-${expected}-${attempt}s.txt" 2>/dev/null || true
+    fi
+    sleep 1
+  done
+
+  docker exec "$observer" docker node ls >"$LOG/restored-manager-timeout-node-ls.txt" 2>&1 || true
+  node_ids="$(docker exec "$observer" docker node ls -q 2>/dev/null || true)"
+  if [[ -n "$node_ids" ]]; then
+    docker exec "$observer" docker node inspect $node_ids       >"$LOG/restored-manager-timeout-node-inspect.json" 2>&1 || true
+  fi
+  for container in "$M1" "$M2" "$M3"; do
+    docker inspect "$container" >/dev/null 2>&1 || continue
+    docker exec "$container" docker info       >"$LOG/restored-manager-timeout-${container}-docker-info.txt" 2>&1 || true
+    docker logs "$container"       >"$LOG/restored-manager-timeout-${container}-dockerd.log" 2>&1 || true
+  done
+
+  fail "$expected-manager restored Swarm did not converge within 10 minutes"
+}
+
 record(){
   printf '%s\n' "$2" >"$OWN/$1.container-id"
 }
@@ -277,11 +308,11 @@ M3_NODE_ID="$(wait_worker_ready "$M3" "$M1" "$LOG/restored-worker-03-state.txt")
 
 log "promoting manager-02 and waiting for two-manager convergence"
 docker exec "$M1" docker node promote "$M2_NODE_ID" >"$LOG/restored-manager-02-promote.log"
-wait_manager_count "$M1" 2 "$LOG/topology-after-first-manager-restore.txt"
+wait_restored_manager_count "$M1" 2 "$LOG/topology-after-first-manager-restore.txt"
 
 log "promoting manager-03 and restoring three-manager operating capacity"
 docker exec "$M1" docker node promote "$M3_NODE_ID" >"$LOG/restored-manager-03-promote.log"
-wait_three "$M1" "$LOG/topology-after-restore.txt"
+wait_restored_manager_count "$M1" 3 "$LOG/topology-after-restore.txt"
 verify_markers "$M1" "$SERVICE_ID" "$CONFIG_ID" after-capacity-restore
 
 cat >"$LOG/swarm-backup-restore-summary.txt" <<SUMMARY
