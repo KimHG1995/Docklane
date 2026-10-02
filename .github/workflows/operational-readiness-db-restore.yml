@@ -1,0 +1,69 @@
+name: operational-readiness-db-restore
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/operational-readiness-db-restore.yml'
+      - 'tests/operational-readiness/db-restore.sh'
+      - 'tests/operational-readiness/db-restore-cleanup.sh'
+      - 'apps/api/src/db/**'
+      - 'apps/api/package.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+
+concurrency:
+  group: operational-readiness-db-restore
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  db-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnmp --filter @docklane/api build
+
+      - name: Verify harness syntax
+        run: |
+          bash -n tests/operational-readiness/db-restore.sh
+          bash -n tests/operational-readiness/db-restore-cleanup.sh
+
+      - name: Verify disposable Docker host
+        run: |
+          docker version
+          docker info
+          ! docker inspect docklane-or-db-source >/dev/null 2>&1
+          ! docker inspect docklane-or-db-restore >/dev/null 2>&1
+
+      - name: Run Docklane DB restore drill
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+          DOCKLANE_OR_PRIVATE_BACKUP_DIR: ${{ runner.temp }}/docklane-db-backup-private-${{ github.run_id }}
+        run: bash tests/operational-readiness/db-restore.sh
+
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-operational-readiness-db-restore-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-operational-readiness
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup
+        if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+          DOCKLANE_OR_PRIVATE_BACKUP_DIR: ${{ runner.temp }}/docklane-db-backup-private-${{ github.run_id }}
+        run: bash tests/operational-readiness/db-restore-cleanup.sh
