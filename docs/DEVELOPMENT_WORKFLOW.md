@@ -163,3 +163,99 @@ SUCCESS / FAILED / NEEDS_ATTENTION
 ```
 
 CI green만으로 runtime safety가 증명된다고 가정하지 않는다. race, response loss, process restart, external mutation 시나리오를 테스트에 포함한다.
+
+
+## 9. CI Noise Budget
+
+CI 실행 횟수 자체도 개발 품질의 일부로 본다. 실패를 숨기는 것이 아니라, **로컬 또는 정적 검증으로 잡을 수 있는 실패를 Actions까지 올리지 않는 것**이 목표다.
+
+기본 원칙:
+
+```text
+implementation
+  ↓
+local/static preflight
+  ↓
+review complete diff
+  ↓
+single push
+  ↓
+CI validation
+```
+
+금지에 가까운 패턴:
+
+```text
+guess
+  -> push
+  -> CI failure
+  -> guess
+  -> push
+  -> CI failure
+```
+
+특히 다음 항목은 PR push 전에 확인한다.
+
+- TypeScript type/test/build
+- Go fmt/vet/test/build
+- shell `bash -n`
+- workflow YAML 구조와 referenced path
+- 인증서/secret/file path 존재 가정
+- Docker port/network 접근 경로
+- process lifecycle과 cleanup
+- fixture/test 기대값이 변경된 정책과 일치하는지
+
+## 10. Product PR vs Acceptance PR
+
+새 Operational/Functional PoC나 GitHub Actions harness는 제품 코드와 원칙적으로 분리한다.
+
+### PR A — Product
+
+포함:
+
+- runtime/product code
+- unit test
+- deterministic integration regression
+- 기존 CI/PoC 호환성 수정
+
+완료 조건:
+
+- 기존 validation green
+- 기존 mTLS/DB/Agent PoC 등 영향 범위 green
+- 새 heavy harness 없이도 코드 정책이 테스트로 설명됨
+
+### PR B — Acceptance
+
+포함:
+
+- DinD topology
+- network partition/resource pressure
+- TLS/certificate orchestration
+- process kill/restart
+- backup/restore drill
+- 새 GitHub Actions workflow 또는 heavy scenario
+- acceptance evidence
+- acceptance 결과를 반영하는 문서
+
+완료 조건:
+
+- shell/workflow static preflight
+- 실제 acceptance 성공
+- evidence 생성
+- 문서와 run 번호 정리
+- 이후 prose-only commit으로 동일 heavy workflow를 다시 돌리지 않도록 최종 상태를 한 번에 push
+
+제품 코드와 acceptance를 한 PR에 묶어도 되는 경우는 새 환경 구성 없이 빠르고 deterministic한 테스트만 추가하는 경우로 제한한다.
+
+## 11. Failure Classification
+
+CI 실패는 수정 전에 다음 네 종류 중 하나로 분류한다.
+
+| 종류 | 예 | 처리 |
+| --- | --- | --- |
+| product | runtime logic, contract, type error | 제품 코드 수정 |
+| regression test | 기대값이 새 정책과 불일치 | 테스트와 정책 재검토 후 수정 |
+| harness | port, TLS path, Docker topology, cleanup | 제품 코드와 분리하여 harness 수정 |
+| external | runner/provider/network outage | 코드 변경 없이 재실행 여부 판단 |
+
+harness 실패를 product failure처럼 취급해 runtime 코드를 임의로 변경하지 않는다.

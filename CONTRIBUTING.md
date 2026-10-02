@@ -10,6 +10,8 @@ Docklane은 현재 pre-alpha 단계입니다. 기능 수보다 **작고 검증 �
 4. Security boundary를 편의를 위해 우회하지 않는다.
 5. 큰 기능보다 하나의 검증 가능한 vertical slice를 우선한다.
 6. CI를 formatter나 반복 디버거로 사용하지 않는다.
+7. 새 Functional/Operational acceptance harness는 제품 구현 PR과 기본적으로 분리한다.
+8. 로컬/정적 preflight로 발견 가능한 오류를 GitHub Actions까지 올리지 않는다.
 
 ## Work Unit
 
