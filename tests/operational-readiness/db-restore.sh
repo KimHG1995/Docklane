@@ -29,15 +29,17 @@ record_container(){
 }
 
 wait_mysql(){
-  local container="$1"
+  local container="$1" pid_one
   for _ in {1..120}; do
-    if docker exec -e MYSQL_PWD="$PASSWORD" "$container" \
-      mysqladmin ping -uroot --silent >/dev/null 2>&1; then
+    pid_one="$(docker exec "$container" sh -c 'cat /proc/1/comm' 2>/dev/null || true)"
+    if [[ "$pid_one" == "mysqld" ]] &&
+       docker exec -e MYSQL_PWD="$PASSWORD" "$container" \
+         mysqladmin ping -uroot --silent >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
-  fail "MySQL did not become ready: $container"
+  fail "MySQL final mysqld did not become ready: $container"
 }
 
 start_mysql(){
