@@ -18,6 +18,12 @@ Repository-wide instructions for coding agents and automation.
 12. Merge only when the latest PR head is green.
 13. Use squash merge unless the task explicitly requires another strategy.
 14. Treat the post-merge `main` validation run as expected.
+15. Do not use GitHub Actions to discover basic implementation, test, formatting, shell, certificate-path, port-mapping, or harness setup mistakes that can be checked before push.
+16. Product/runtime code and new Functional/Operational acceptance harness work are separate work units by default. Use separate branches and PRs unless the harness is a tiny deterministic regression test with no new infrastructure or environment setup.
+17. For a new heavy harness or environment scenario, first make the product change green against existing validation. Add the new acceptance harness only in the next PR.
+18. Before pushing a workflow or shell harness change, run every locally reproducible static/preflight check available for that file (syntax, path existence assumptions, configuration shape, formatting, and referenced build outputs).
+19. Do not push speculative fixes one at a time. Diagnose the complete failure, update all related causes together, then push one correction.
+20. Avoid creating extra workflow runs for documentation-only follow-ups. Documentation needed to describe an accepted feature belongs in the acceptance/docs PR, not as a commit after the final acceptance run.
 
 ## Commit hygiene
 
@@ -80,3 +86,44 @@ Mutation work must preserve:
 - convergence verification
 
 When a mutation touches multiple resources, all affected resource relationships must be considered in both entry checks and retries/reconciliation.
+
+
+## CI noise control
+
+GitHub Actions is a validation gate, not the primary development loop.
+
+Required default split:
+
+```text
+PR A: product/runtime change
+  -> unit/integration regression tests
+  -> existing CI/PoC compatibility
+  -> green
+  -> merge
+
+PR B: new acceptance harness / workflow / environment scenario
+  -> harness static checks
+  -> real acceptance run
+  -> evidence + docs
+  -> green
+  -> merge
+```
+
+A combined PR is allowed only when all of the following are true:
+
+- no new Docker/network/TLS/process orchestration is introduced
+- no new GitHub Actions workflow or heavy job is introduced
+- the added test is deterministic and fast
+- the test can be exercised before opening the PR
+- failure cannot create repeated speculative workflow runs
+
+When CI fails:
+
+1. classify it as product-code, regression-test, workflow/harness, or external-infrastructure failure
+2. collect the complete failing logs
+3. reproduce locally or with the narrowest available preflight when possible
+4. fix the root cause and adjacent deterministic issues together
+5. push once
+6. do not add unrelated cleanup or documentation commits while waiting for the rerun
+
+For expensive Operational Readiness workflows, a successful acceptance run is evidence. Do not retrigger the same heavy scenario solely because a later commit changes prose. Keep acceptance evidence and documentation in the same acceptance PR before the final run whenever practical.

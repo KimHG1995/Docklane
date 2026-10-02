@@ -107,7 +107,7 @@ jobs:
               tests/operational-readiness/*)
                 operational=true
                 ;;
-              docs/*|README.md|CONTRIBUTING.md|SECURITY.md|LICENSE)
+              docs/*|README.md|AGENTS.md|CONTRIBUTING.md|SECURITY.md|LICENSE)
                 docs=true
                 ;;
               *)
