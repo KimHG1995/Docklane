@@ -243,7 +243,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager resource contention — run #36950209098
 - [x] Swarm backup/restore drill — run #36968255603
 - [x] Docklane DB restore — run #36972631705
-- [ ] encryption/trust key restore
+- [ ] encryption/trust key restore — harness added, acceptance pending
 - [ ] recovery runbook
 
 이 단계 통과 전 production adoption을 권장하지 않는다.

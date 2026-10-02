@@ -330,3 +330,25 @@ Acceptance 조건:
 - `resource-contention-summary.txt`
 
 2026-10-02 acceptance run #36950209098에서 manager resource contention 시나리오를 확인했다.
+
+
+## Swarm encryption / trust key restore
+
+전용 workflow:
+
+`operational-readiness-trust-key-restore`
+
+검증 범위:
+
+1. 3-manager Swarm을 `--autolock`으로 구성한다.
+2. manager restart 시 unlock이 필요한지 확인한다.
+3. cold backup을 만들고 원본 manager를 제거한다.
+4. 백업을 clean manager에 복원한 뒤 locked 상태로 시작되는지 확인한다.
+5. 잘못된 unlock key를 거절하고 원래 key로 encrypted Swarm state를 복구한다.
+6. `--force-new-cluster` 복구 후 root CA fingerprint가 보존되는지 확인한다.
+7. 복구 직후 unlock key를 rotate한다.
+8. restart 후 이전 key는 거절되고 새 key는 정상 동작하는지 확인한다.
+9. fresh worker가 restored Swarm에 join하고 동일 root CA를 신뢰하는지 확인한다.
+10. unlock key, Swarm backup 원문 등 recovery secret material은 artifact에 포함하지 않는다.
+
+Acceptance가 실제 GitHub Actions에서 성공하기 전에는 ROADMAP 완료로 표시하지 않는다.

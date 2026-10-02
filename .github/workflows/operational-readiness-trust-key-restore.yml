@@ -1,0 +1,61 @@
+name: operational-readiness-trust-key-restore
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/operational-readiness-trust-key-restore.yml'
+      - 'tests/operational-readiness/trust-key-restore.sh'
+      - 'tests/operational-readiness/trust-key-restore-cleanup.sh'
+
+concurrency:
+  group: operational-readiness-three-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trust-key-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify harness preflight
+        run: |
+          bash -n tests/operational-readiness/trust-key-restore.sh
+          bash -n tests/operational-readiness/trust-key-restore-cleanup.sh
+          tmp_dir="$(mktemp -d)"
+          DOCKLANE_OR_LOG_DIR="$tmp_dir/log"           DOCKLANE_OR_PRIVATE_BACKUP_DIR="$tmp_dir/docklane-trust-backup-private-preflight"             bash tests/operational-readiness/trust-key-restore-cleanup.sh
+          rm -rf "$tmp_dir"
+
+      - name: Verify disposable Docker host
+        run: |
+          docker version
+          docker info
+          test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive"
+          ! docker network inspect docklane-or-manager-net >/dev/null 2>&1
+
+      - name: Run trust key restore drill
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+          DOCKLANE_OR_PRIVATE_BACKUP_DIR: ${{ runner.temp }}/docklane-trust-backup-private-${{ github.run_id }}
+        run: bash tests/operational-readiness/trust-key-restore.sh
+
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-operational-readiness-trust-key-restore-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-operational-readiness
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup
+        if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+          DOCKLANE_OR_PRIVATE_BACKUP_DIR: ${{ runner.temp }}/docklane-trust-backup-private-${{ github.run_id }}
+        run: bash tests/operational-readiness/trust-key-restore-cleanup.sh
