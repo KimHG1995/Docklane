@@ -12,6 +12,7 @@ Docklane은 현재 pre-alpha 단계입니다. 기능 수보다 **작고 검증 �
 6. CI를 formatter나 반복 디버거로 사용하지 않는다.
 7. 새 Functional/Operational acceptance harness는 제품 구현 PR과 기본적으로 분리한다.
 8. 로컬/정적 preflight로 발견 가능한 오류를 GitHub Actions까지 올리지 않는다.
+9. 모든 작업은 `docs/ROADMAP.md` 확인과 동기화를 Definition of Done에 포함한다.
 
 ## Work Unit
 
@@ -70,6 +71,7 @@ PR은 구현 중간에 먼저 만들지 않는다.
 - 테스트 추가 또는 기존 테스트 영향 검토 완료
 - 문서 영향 검토 완료
 - secret/credential 포함 여부 확인
+- `docs/ROADMAP.md` 상태와 실제 구현/검증/acceptance 결과 일치 여부 확인
 
 현재 repository validation 기준:
 
@@ -140,6 +142,14 @@ Infrastructure mutation을 추가/변경하면 반드시 확인한다.
 명령 수락만으로 `SUCCESS`를 기록하지 않는다.
 
 ## Documentation
+
+모든 작업은 시작 시와 merge 전 `docs/ROADMAP.md`를 확인한다.
+
+- 구현 또는 검증 상태가 바뀌면 같은 PR에서 ROADMAP 상태를 갱신한다.
+- acceptance 완료는 실제 성공 run 또는 동등한 evidence가 있을 때만 체크한다.
+- heavy acceptance 결과가 `main` merge 후에만 확인되는 경우, 다음 작업은 새 범위를 시작하기 전에 해당 결과를 ROADMAP에 먼저 동기화하고 같은 PR에 포함한다.
+- routine ROADMAP 동기화만을 위한 별도 docs-only PR은 가능한 한 만들지 않는다.
+- ROADMAP 상태 변화가 없는 작업도 merge 전에 변경이 필요 없는지 확인한다.
 
 Architecture 또는 domain boundary를 변경하면 관련 문서를 함께 갱신한다.
 

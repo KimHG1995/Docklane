@@ -24,6 +24,8 @@ Repository-wide instructions for coding agents and automation.
 18. Before pushing a workflow or shell harness change, run every locally reproducible static/preflight check available for that file (syntax, path existence assumptions, configuration shape, formatting, and referenced build outputs).
 19. Do not push speculative fixes one at a time. Diagnose the complete failure, update all related causes together, then push one correction.
 20. Avoid creating extra workflow runs for documentation-only follow-ups. Documentation needed to describe an accepted feature belongs in the acceptance/docs PR, not as a commit after the final acceptance run.
+21. Every work unit must include roadmap synchronization. Review `docs/ROADMAP.md` before implementation and again before merge. If implementation, validation, or acceptance changes an item's state or evidence, update the roadmap in the same PR whenever that result is already known.
+22. When an acceptance result is only known after merge on `main`, the next work unit must begin by synchronizing that result into `docs/ROADMAP.md` before adding new scope. Include the successful run/evidence in that same PR instead of leaving roadmap drift unresolved.
 
 ## Commit hygiene
 
@@ -131,3 +133,27 @@ For expensive Operational Readiness workflows, a successful acceptance run is ev
 Heavy Operational Readiness workflows must not run automatically on every pull-request synchronization. PR validation is limited to deterministic static/preflight checks; real multi-node acceptance runs belong on `main` push or explicit `workflow_dispatch`.
 
 Operational Readiness static validation must discover harness scripts and standalone helpers dynamically. Do not maintain a hand-written file allowlist that can silently omit a new scenario.
+
+
+## Roadmap synchronization
+
+Roadmap synchronization is part of the definition of done for every task.
+
+Required flow:
+
+```text
+start task
+  -> read ROADMAP
+  -> implement / validate
+  -> re-check ROADMAP
+  -> update status and evidence if changed
+  -> merge
+```
+
+Rules:
+
+- Do not leave a completed implementation or accepted scenario unchecked in `docs/ROADMAP.md`.
+- Do not mark acceptance complete from implementation alone. Record the actual successful run or equivalent evidence.
+- If a heavy acceptance runs only after merge, carry that result into the very next work unit before new scope.
+- Do not create a separate documentation-only PR solely for routine roadmap synchronization when it can be included in the active work unit.
+- When a task does not change roadmap state, explicitly verify that no roadmap change is required before merge.
