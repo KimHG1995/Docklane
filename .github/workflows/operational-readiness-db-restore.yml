@@ -32,12 +32,15 @@ jobs:
           node-version: '24'
       - run: corepack enable
       - run: pnpm install --no-frozen-lockfile
-      - run: pnmp --filter @docklane/api build
+      - run: pnpm --filter @docklane/api build
 
-      - name: Verify harness syntax
+      - name: Verify harness preflight
         run: |
           bash -n tests/operational-readiness/db-restore.sh
           bash -n tests/operational-readiness/db-restore-cleanup.sh
+          tmp_dir="$(mktemp -d)"
+          DOCKLANE_OR_LOG_DIR="$tmp_dir/log"           DOCKLANE_OR_PRIVATE_BACKUP_DIR="$tmp_dir/docklane-db-backup-private-preflight"             bash tests/operational-readiness/db-restore-cleanup.sh
+          rm -rf "$tmp_dir"
 
       - name: Verify disposable Docker host
         run: |

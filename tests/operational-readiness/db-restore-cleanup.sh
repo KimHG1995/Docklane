@@ -7,7 +7,8 @@ BACKUP="${DOCKLANE_OR_PRIVATE_BACKUP_DIR:-}"
 failed=0
 
 remove_owned_container(){
-  local name="$1" file="$OWN/$name.container-id" id current
+  local name="$1"
+  local file="$OWN/$name.container-id" id current
   [[ -f "$file" ]] || return 0
   id="$(cat "$file" 2>/dev/null || true)"
   [[ -n "$id" ]] || { rm -f "$file"; return 0; }
