@@ -209,6 +209,9 @@ case "$BACKUP_HOST" in
   manager-03) BM="$M3" ;;
   *) fail "no backup manager found" ;;
 esac
+BACKUP_IP="$(ip "$BM")"
+[[ -n "$BACKUP_IP" ]] || fail "backup manager address is empty"
+printf '%s\n' "$BACKUP_IP" >"$LOG/backup-manager-ip.txt"
 verify_markers "$BM" "$SERVICE_ID" "$CONFIG_ID" backup-peer
 docker stop "$BM" >"$LOG/backup-manager-stop.log"
 [[ "$(docker inspect --format '{{.State.Running}}' "$BM")" == false ]] || fail "backup manager still running"
@@ -233,13 +236,15 @@ rm -f "$OWN/manager-01.container-id" "$OWN/manager-02.container-id" "$OWN/manage
 
 log "restoring backup into a clean manager"
 RESTORE_ID="$(docker create --privileged --name "$M1" --hostname manager-01 \
-  --network "$NET" -e DOCKER_TLS_CERTDIR= "$IMG")"
+  --network "$NET" --ip "$BACKUP_IP" -e DOCKER_TLS_CERTDIR= "$IMG")"
 record manager-01 "$RESTORE_ID"
 docker run --rm --volumes-from "$M1" -v "$BACKUP:/backup:ro" --entrypoint sh "$IMG" \
   -c 'set -eu; rm -rf /var/lib/docker/swarm; tar -C /var/lib/docker -xf /backup/swarm.tar'
 docker start "$M1" >"$LOG/restore-manager-start.log"
 wait_docker "$M1"
 RESTORE_IP="$(ip "$M1")"
+[[ "$RESTORE_IP" == "$BACKUP_IP" ]] \
+  || fail "restored manager address changed: expected $BACKUP_IP, got $RESTORE_IP"
 
 docker exec "$M1" docker swarm init --force-new-cluster --advertise-addr "$RESTORE_IP" \
   >"$LOG/force-new-cluster.log"
@@ -253,6 +258,11 @@ verify_markers "$M1" "$SERVICE_ID" "$CONFIG_ID" after-restore
 RESTORED_NODE_ID="$(docker exec "$M1" docker info --format '{{.Swarm.NodeID}}')"
 [[ -n "$RESTORED_NODE_ID" ]] || fail "restored manager has no canonical node ID"
 printf '%s\n' "$RESTORED_NODE_ID" >"$LOG/restored-node-id.txt"
+
+RESTORED_MANAGER_ADDR="$(docker exec "$M1" docker node inspect "$RESTORED_NODE_ID" --format '{{.ManagerStatus.Addr}}')"
+printf '%s\n' "$RESTORED_MANAGER_ADDR" >"$LOG/restored-manager-address.txt"
+[[ "$RESTORED_MANAGER_ADDR" == "$RESTORE_IP:2377" ]] \
+  || fail "restored Raft manager address mismatch: expected $RESTORE_IP:2377, got $RESTORED_MANAGER_ADDR"
 
 log "removing stale nodes from restored snapshot"
 cleanup_stale_restored_nodes "$M1" "$RESTORED_NODE_ID"
@@ -331,6 +341,8 @@ fresh nodes joined as workers: PASS
 manager-02 promoted and converged: PASS
 manager-03 promoted and three-manager capacity restored: PASS
 backup manager: $BACKUP_HOST
+backup manager IP: $BACKUP_IP
+restored manager address: $RESTORED_MANAGER_ADDR
 original cluster ID: $ORIGINAL_CLUSTER
 restored cluster ID: $RESTORED_CLUSTER
 service ID: $SERVICE_ID
