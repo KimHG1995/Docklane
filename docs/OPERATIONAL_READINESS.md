@@ -295,3 +295,38 @@ manager-03 ─ docklane-agent ─ local Docker daemon
 이 workflow도 다른 3-manager readiness workflow와 동일한 `operational-readiness-three-manager` concurrency group을 사용한다.
 
 2026-10-02 acceptance run #36941789676에서 3-manager mTLS Agent 구성, 동일 cluster identity 검증, primary Agent 프로세스 종료 후 Control Plane read failover를 확인했다.
+
+
+## Manager resource contention
+
+전용 workflow:
+
+`operational-readiness-resource-contention`
+
+Acceptance 조건:
+
+1. 3-manager DinD Swarm을 구성한다.
+2. leader가 아닌 manager 하나를 contention target으로 선택한다.
+3. target manager container를 **0.75 CPU / 768 MiB**로 제한한다.
+4. 정적 Go pressure helper로 **256 MiB resident memory + 4 CPU workers**를 30초 동안 유지한다.
+5. pressure가 활성화된 동안 3회 연속으로 다음을 확인한다.
+   - 3 managers가 Ready / Active 상태를 유지
+   - leader 1개, reachable follower 2개 유지
+   - stressed manager가 `Reachable` 상태 유지
+   - stressed manager의 Docker control read가 5초 이내 응답
+   - stressed manager의 Agent `/v1/health` 응답 유지
+   - stressed manager의 Agent `/v1/identity`에서 cluster ID / node ID가 변하지 않음
+6. pressure helper 종료 후 3-manager topology와 Agent health/identity가 정상 상태를 유지하는지 다시 확인한다.
+
+주요 evidence:
+
+- `resource-limits.json`
+- `resource-pressure-ready.txt`
+- `outer-container-stats-*.json`
+- `topology-under-pressure-*.txt`
+- `target-health-under-pressure-*.json`
+- `target-identity-under-pressure-*.json`
+- `resource-pressure.log`
+- `resource-contention-summary.txt`
+
+2026-10-02 acceptance run #36950209098에서 manager resource contention 시나리오를 확인했다.

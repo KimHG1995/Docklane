@@ -240,7 +240,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] network partition — run #36682848436
 - [x] manager별 Go Agent 배포 — run #36831602534
 - [x] Agent reconnect/failover — run #36941789676
-- [ ] manager resource contention
+- [x] manager resource contention — run #36950209098
 - [ ] Swarm backup/restore drill
 - [ ] Docklane DB restore
 - [ ] encryption/trust key restore
