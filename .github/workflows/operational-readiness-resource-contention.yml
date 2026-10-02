@@ -1,0 +1,79 @@
+name: operational-readiness-resource-contention
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/operational-readiness-resource-contention.yml'
+      - 'tests/operational-readiness/resource-contention.sh'
+      - 'tests/operational-readiness/resource-pressure.go'
+      - 'tests/operational-readiness/cleanup.sh'
+      - 'agent/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/operational-readiness-resource-contention.yml'
+      - 'tests/operational-readiness/resource-contention.sh'
+      - 'tests/operational-readiness/resource-pressure.go'
+      - 'tests/operational-readiness/cleanup.sh'
+      - 'agent/**'
+
+concurrency:
+  group: operational-readiness-three-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resource-contention:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Verify harness syntax
+        run: bash -n tests/operational-readiness/resource-contention.sh
+
+      - name: Verify disposable Docker host
+        run: |
+          docker version
+          docker info
+          test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive"
+
+      - name: Build static Go Agent
+        working-directory: agent
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o "${RUNNER_TEMP}/docklane-agent" ./cmd/docklane-agent
+
+      - name: Build static resource pressure helper
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o "${RUNNER_TEMP}/docklane-resource-pressure" tests/operational-readiness/resource-pressure.go
+
+      - name: Run manager resource contention scenario
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+          DOCKLANE_MANAGER_AGENT_BINARY: ${{ runner.temp }}/docklane-agent
+          DOCKLANE_RESOURCE_PRESSURE_BINARY: ${{ runner.temp }}/docklane-resource-pressure
+        run: bash tests/operational-readiness/resource-contention.sh
+
+      - name: Upload operational readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-operational-readiness-resource-contention-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-operational-readiness
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup operational readiness topology
+        if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+        run: bash tests/operational-readiness/cleanup.sh
