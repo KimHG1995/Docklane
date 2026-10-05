@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG="${DOCKLANE_OR_LOG_DIR:-${RUNNER_TEMP:-/tmp}/docklane-operational-readiness}"
@@ -22,9 +23,32 @@ fail(){ printf '[operational-readiness] ERROR: %s\n' "$*" >&2; exit 1; }
 cleanup(){ bash "$ROOT/tests/operational-readiness/trust-key-restore-cleanup.sh" || true; }
 record(){ printf '%s\n' "$2" >"$OWN/$1.container-id"; }
 
+# Bound both the CLI in DinD and the outer Docker exec. Killing only the outer
+# CLI leaves the inner command running. A timed-out mutation has an uncertain
+# daemon-side outcome: fail this drill; never retry it or continue recovery.
+swarm_call(){
+  local container="$1"
+  local limit="${DOCKLANE_OR_RECOVERY_CALL_TIMEOUT_SECONDS:-30}"
+  shift
+  [[ "$limit" =~ ^[1-9][0-9]?$ && "$limit" -le 60 ]] \
+    || fail "recovery call timeout must be an integer between 1 and 60 seconds"
+  timeout --kill-after=2 "$((limit + 2))" \
+    docker exec -i "$container" timeout -s KILL "$limit" docker "$@"
+}
+
+# Change a significant base64 digit, not ignored trailing padding bits.
+different_unlock_key(){
+  local payload="${1#SWMKEY-1-}" first=A
+  [[ "$1" == SWMKEY-1-* && "$payload" =~ ^[A-Za-z0-9+/]{43}$ ]] \
+    || fail "unexpected unlock key encoding"
+  [[ "${payload:0:1}" != A ]] || first=B
+  printf 'SWMKEY-1-%s%s\n' "$first" "${payload:1}"
+}
+
 wait_dind(){
-  for _ in {1..120}; do
-    timeout 5 docker exec "$1" docker version >/dev/null 2>&1 && return 0
+  local deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
+    swarm_call "$1" version >/dev/null 2>&1 && return 0
     sleep 1
   done
   fail "Docker daemon not ready: $1"
@@ -43,8 +67,9 @@ start_fresh(){
 
 wait_three(){
   local out="$2"
-  for _ in {1..120}; do
-    if docker exec "$1" docker node ls --format '{{.Hostname}}|{{.Status}}|{{.Availability}}|{{.ManagerStatus}}' >"$out" 2>/dev/null; then
+  local deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
+    if swarm_call "$1" node ls --format '{{.Hostname}}|{{.Status}}|{{.Availability}}|{{.ManagerStatus}}' >"$out" 2>/dev/null; then
       local ready leaders followers
       ready="$(awk -F'|' '$2=="Ready" && $3=="Active" {n++} END{print n+0}' "$out")"
       leaders="$(awk -F'|' '$4=="Leader" {n++} END{print n+0}' "$out")"
@@ -57,19 +82,55 @@ wait_three(){
 }
 
 assert_locked(){
-  if docker exec "$1" docker node ls >"$LOG/$2.out" 2>"$LOG/$2.err"; then
-    fail "$1 unexpectedly accepted Swarm reads while locked"
+  local container="$1" phase="$2" state status
+  log "checking locked state: $phase"
+  if ! state="$(swarm_call "$container" info --format '{{.Swarm.LocalNodeState}}' 2>"$LOG/$phase-state.err")"; then
+    fail "$phase: cannot establish local Swarm state"
   fi
+  printf '%s\n' "$state" >"$LOG/$phase-state.txt"
+  [[ "$state" == locked ]] || fail "$phase: local Swarm state is not locked"
+  if swarm_call "$container" node ls >"$LOG/$phase.out" 2>"$LOG/$phase.err"; then
+    fail "$phase: locked manager unexpectedly accepted Swarm reads"
+  else
+    status=$?
+  fi
+  [[ "$status" == 1 ]] &&
+    grep -Fqi 'Swarm is encrypted and needs to be unlocked' "$LOG/$phase.err" \
+    || fail "$phase: read failed without a confirmed locked-manager rejection (exit $status)"
 }
 
 unlock(){
-  printf '%s\n' "$2" | docker exec -i "$1" docker swarm unlock >"$LOG/$3.out" 2>"$LOG/$3.err"
+  local container="$1" key="$2" phase="$3" status
+  log "starting unlock: $phase"
+  printf 'phase=%s\nstatus=started\n' "$phase" >"$LOG/$phase-status.txt"
+  if printf '%s\n' "$key" | swarm_call "$container" swarm unlock >"$LOG/$phase.out" 2>"$LOG/$phase.err"; then
+    printf 'phase=%s\nstatus=completed\n' "$phase" >"$LOG/$phase-status.txt"
+    log "completed unlock: $phase"
+  else
+    status=$?
+    printf 'phase=%s\nstatus=failed\nexit=%s\n' "$phase" "$status" >"$LOG/$phase-status.txt"
+    fail "$phase: unlock failed or timed out (exit $status); no retry or force-new-cluster continuation"
+  fi
+}
+
+reject_unlock(){
+  local container="$1" key="$2" phase="$3" status
+  log "checking invalid-key rejection: $phase"
+  if printf '%s\n' "$key" | swarm_call "$container" swarm unlock >"$LOG/$phase.out" 2>"$LOG/$phase.err"; then
+    fail "$phase: invalid unlock key was accepted"
+  else
+    status=$?
+  fi
+  [[ "$status" == 1 ]] && grep -Fqi 'swarm could not be unlocked: invalid key provided' "$LOG/$phase.err" \
+    || fail "$phase: failure is not a confirmed invalid-key rejection (exit $status)"
+  assert_locked "$container" "$phase-still-locked"
 }
 
 wait_control(){
-  for _ in {1..120}; do
+  local deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
     local available
-    available="$(timeout 5 docker exec "$1" docker info --format '{{.Swarm.ControlAvailable}}' 2>/dev/null || true)"
+    available="$(swarm_call "$1" info --format '{{.Swarm.ControlAvailable}}' 2>/dev/null || true)"
     [[ "$available" == true ]] && return 0
     sleep 1
   done
@@ -77,10 +138,11 @@ wait_control(){
 }
 
 wait_worker(){
-  for _ in {1..120}; do
-    local id state
-    id="$(timeout 5 docker exec "$1" docker info --format '{{.Swarm.NodeID}}' 2>/dev/null || true)"
-    if [[ -n "$id" ]] && timeout 5 docker exec "$2" docker node inspect "$id" --format '{{.Status.State}}|{{.Spec.Role}}' >"$3" 2>/dev/null; then
+  local deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
+    local id state role
+    id="$(swarm_call "$1" info --format '{{.Swarm.NodeID}}' 2>/dev/null || true)"
+    if [[ -n "$id" ]] && swarm_call "$2" node inspect "$id" --format '{{.Status.State}}|{{.Spec.Role}}' >"$3" 2>/dev/null; then
       IFS='|' read -r state role <"$3"
       [[ "$state" == ready && "$role" == worker ]] && { printf '%s\n' "$id"; return 0; }
     fi
@@ -106,14 +168,14 @@ start_fresh "$M2" manager-02
 start_fresh "$M3" manager-03
 
 IP1="$(ip "$M1")"; IP2="$(ip "$M2")"; IP3="$(ip "$M3")"
-docker exec "$M1" docker swarm init --autolock --advertise-addr "$IP1" >"$BACKUP/swarm-init-private.log"
-KEY1="$(docker exec "$M1" docker swarm unlock-key -q)"
+swarm_call "$M1" swarm init --autolock --advertise-addr "$IP1" >"$BACKUP/swarm-init-private.log"
+KEY1="$(swarm_call "$M1" swarm unlock-key -q)"
 [[ "$KEY1" == SWMKEY-* ]] || fail "unlock key missing"
 printf '%s\n' "$KEY1" >"$BACKUP/unlock-key.txt"
 
-TOKEN="$(docker exec "$M1" docker swarm join-token -q manager)"
-docker exec "$M2" docker swarm join --token "$TOKEN" --advertise-addr "$IP2" "$IP1:2377" >"$LOG/manager-02-join.log"
-docker exec "$M3" docker swarm join --token "$TOKEN" --advertise-addr "$IP3" "$IP1:2377" >"$LOG/manager-03-join.log"
+TOKEN="$(swarm_call "$M1" swarm join-token -q manager)"
+swarm_call "$M2" swarm join --token "$TOKEN" --advertise-addr "$IP2" "$IP1:2377" >"$LOG/manager-02-join.log"
+swarm_call "$M3" swarm join --token "$TOKEN" --advertise-addr "$IP3" "$IP1:2377" >"$LOG/manager-03-join.log"
 wait_three "$M1" "$LOG/topology-before-backup.txt"
 
 CA1="$(docker exec "$M1" sha256sum /var/lib/docker/swarm/certificates/swarm-root-ca.crt | awk '{print $1}')"
@@ -151,15 +213,13 @@ docker start "$RESTORE" >"$LOG/restore-start.log"
 wait_dind "$RESTORE"
 assert_locked "$RESTORE" restore-locked
 
-BAD_KEY="${KEY1%?}X"
-if [[ "$BAD_KEY" == "$KEY1" ]]; then BAD_KEY="${KEY1%?}Y"; fi
-if printf '%s\n' "$BAD_KEY" | docker exec -i "$RESTORE" docker swarm unlock >"$LOG/wrong-key.out" 2>"$LOG/wrong-key.err"; then
-  fail "invalid unlock key accepted"
-fi
+BAD_KEY="$(different_unlock_key "$KEY1")"
+reject_unlock "$RESTORE" "$BAD_KEY" wrong-key
 unlock "$RESTORE" "$KEY1" restore-unlock
 
 RESTORE_IP="$(ip "$RESTORE")"
-timeout 60 docker exec "$RESTORE" docker swarm init --force-new-cluster --advertise-addr "$RESTORE_IP" >"$BACKUP/force-new-cluster-private.log"
+log "reinitializing restored quorum"
+swarm_call "$RESTORE" swarm init --force-new-cluster --advertise-addr "$RESTORE_IP" >"$BACKUP/force-new-cluster-private.log"
 wait_control "$RESTORE"
 
 CA2="$(docker exec "$RESTORE" sha256sum /var/lib/docker/swarm/certificates/swarm-root-ca.crt | awk '{print $1}')"
@@ -167,24 +227,22 @@ CA2="$(docker exec "$RESTORE" sha256sum /var/lib/docker/swarm/certificates/swarm
 printf '%s\n' "$CA2" >"$LOG/restored-root-ca.sha256"
 
 log "rotating unlock key"
-KEY2="$(docker exec "$RESTORE" docker swarm unlock-key --rotate -q)"
+KEY2="$(swarm_call "$RESTORE" swarm unlock-key --rotate -q)"
 [[ "$KEY2" == SWMKEY-* && "$KEY2" != "$KEY1" ]] || fail "unlock key rotation failed"
 printf '%s\n' "$KEY2" >"$BACKUP/rotated-unlock-key.txt"
 
 docker restart "$RESTORE" >"$LOG/restore-restart.log"
 wait_dind "$RESTORE"
 assert_locked "$RESTORE" rotated-locked
-if printf '%s\n' "$KEY1" | docker exec -i "$RESTORE" docker swarm unlock >"$LOG/old-key.out" 2>"$LOG/old-key.err"; then
-  fail "old unlock key accepted after rotation"
-fi
+reject_unlock "$RESTORE" "$KEY1" old-key
 unlock "$RESTORE" "$KEY2" rotated-unlock
 wait_control "$RESTORE"
 
 log "verifying restored CA signs fresh worker"
 start_fresh "$WORKER" trust-worker
 WIP="$(ip "$WORKER")"
-WTOKEN="$(docker exec "$RESTORE" docker swarm join-token -q worker)"
-timeout 60 docker exec "$WORKER" docker swarm join --token "$WTOKEN" --advertise-addr "$WIP" "$RESTORE_IP:2377" >"$LOG/worker-join.log"
+WTOKEN="$(swarm_call "$RESTORE" swarm join-token -q worker)"
+swarm_call "$WORKER" swarm join --token "$WTOKEN" --advertise-addr "$WIP" "$RESTORE_IP:2377" >"$LOG/worker-join.log"
 WID="$(wait_worker "$WORKER" "$RESTORE" "$LOG/worker-state.txt")"
 CA3="$(docker exec "$WORKER" sha256sum /var/lib/docker/swarm/certificates/swarm-root-ca.crt | awk '{print $1}')"
 [[ "$CA3" == "$CA1" ]] || fail "worker root CA mismatch"

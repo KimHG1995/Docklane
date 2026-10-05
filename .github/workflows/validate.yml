@@ -299,6 +299,14 @@ jobs:
             go build -o "${RUNNER_TEMP}/$(basename "${helper%.go}")" "$helper"
           done
 
+      - name: Run operational readiness harness regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' regression; do
+            python3 "$regression"
+          done < <(find tests/operational-readiness -maxdepth 1 -type f -name '*-test.py' -print0)
+
   bootstrap-docker:
     needs: changes
     if: needs.changes.outputs.bootstrap == 'true'
