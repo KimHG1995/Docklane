@@ -14,7 +14,7 @@ PROBE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PROBE)
 CID = 'a' * 64
 TARGET = PROBE.NAMES[0]
-STATE = {'LocalNodeState': 'pending', 'ControlAvailable': True}
+STATE = {'LocalNodeState': 'pending', 'StateSource': 'ping-swarm-header'}
 RAW_STACK = '''goroutine 1 [chan receive]:
 github.com/docker/docker/daemon/cluster.(*Cluster).UnlockSwarm(0xcafebabe, SWMKEY-1-secret)
     /go/src/swarm.go:350 +0xabc
@@ -22,6 +22,8 @@ github.com/docker/docker/daemon/cluster.(*Cluster).UnlockSwarm(0xcafebabe, SWMKE
 goroutine 2 [select]:
 github.com/moby/swarmkit/v2/manager/state/raft.WaitForLeader(SWMTKN-1-secret)
     /go/src/util.go:52 +0xabc
+github.com/moby/swarmkit/v2/manager.(*Manager).Run(0xcafebabe)
+    /go/src/manager.go:609 +0xabc
 -----BEGIN PRIVATE KEY-----
 private-content
 '''
@@ -41,7 +43,7 @@ class SnapshotDocker(PROBE.Docker):
     def raw(self, args, seconds=10, payload=None):
         if args[0] == 'inspect':
             label, result = 'ownership', (0, json.dumps(self.metadata), '')
-        elif 'info' in args:
+        elif 'info' in args or '/usr/local/bin/docklane-local-swarm-status' in args:
             label, result = 'state', (self.state_exit, self.state, 'SWMKEY-1-secret')
         elif 'kill -USR1' in args[-1]:
             label, result = 'signal', (self.signal_exit, '', 'SWMKEY-1-secret')
@@ -85,7 +87,7 @@ class SnapshotTests(unittest.TestCase):
         except (PROBE.ProbeError, ValueError, RecursionError) as error:
             self.fail(f'snapshot lost independently collectable evidence: {error}')
 
-    def test_info_timeout_keeps_separate_stacks_but_cannot_resume(self):
+    def test_local_state_timeout_keeps_separate_stacks_but_cannot_resume(self):
         docker = SnapshotDocker(state_exit=137)
         probe = self.probe(docker)
         state, stacks = self.snapshot(probe)
@@ -198,6 +200,7 @@ class SnapshotTests(unittest.TestCase):
         docker = SnapshotDocker(reads=[(1, ''), (0, RAW_STACK)])
         with patch.object(PROBE.time, 'sleep'):
             state, stacks = self.snapshot(self.probe(docker))
+        self.assertEqual(state, STATE)
         self.assertEqual(PROBE.pending_evidence(state, stacks)['waits_in_separate_stacks'], True)
         self.assertEqual(sum(call[0] == 'read' for call in docker.calls), 2)
         self.assertEqual(self.saved()['snapshot']['stack_probe'], 'collected')
@@ -223,6 +226,51 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(self.saved()['status'], 'failed')
         self.assertTrue(self.saved()['cleanup_completed'])
         self.assertEqual(len(self.saved()['snapshot']['stacks']), 2)
+
+
+    def test_snapshot_uses_local_ping_instead_of_quorum_info(self):
+        docker = SnapshotDocker()
+        state, stacks = self.snapshot(self.probe(docker))
+        self.assertEqual(state, STATE)
+        self.assertEqual(PROBE.pending_evidence(state, stacks)['state_source'], 'ping-swarm-header')
+        self.assertIsNone(self.saved()['snapshot']['control_available'])
+        calls = [args for _, _, args in docker.calls]
+        self.assertTrue(any('/usr/local/bin/docklane-local-swarm-status' in args for args in calls))
+        self.assertTrue(all('info' not in args for args in calls))
+
+    def test_info_shaped_state_cannot_authorize_peer_resume(self):
+        _, stacks = self.snapshot(self.probe(SnapshotDocker()))
+        old_state = {'LocalNodeState': 'pending', 'ControlAvailable': True}
+        resume = Mock()
+        with self.assertRaises(PROBE.ProbeError):
+            PROBE.resume_pending_unlock(Mock(), lambda: (old_state, stacks), resume, Mock())
+        resume.assert_not_called()
+
+    def test_nonpending_state_or_wrong_provenance_is_never_approved(self):
+        _, stacks = self.snapshot(self.probe(SnapshotDocker()))
+        for state in ({}, dict(STATE, StateSource='info'), dict(STATE, StateSource=''),
+                      *(dict(STATE, LocalNodeState=value) for value in
+                        ('inactive', 'error', 'locked', 'active/worker', 'active/manager', 'unknown'))):
+            with self.subTest(state=state):
+                resume = Mock()
+                with self.assertRaises(PROBE.ProbeError):
+                    PROBE.resume_pending_unlock(Mock(), lambda: (state, stacks), resume, Mock())
+                resume.assert_not_called()
+
+    def test_function_names_without_wait_states_do_not_authorize_resume(self):
+        state, stacks = self.snapshot(self.probe(SnapshotDocker()))
+        for index in (0, 1):
+            changed = json.loads(json.dumps(stacks))
+            changed[index]['state'] = 'running'
+            with self.subTest(index=index), self.assertRaises(PROBE.ProbeError):
+                PROBE.pending_evidence(state, changed)
+
+
+    def test_leader_wait_without_manager_run_is_not_enough(self):
+        state, stacks = self.snapshot(self.probe(SnapshotDocker()))
+        stacks[1]['frames'] = stacks[1]['frames'][:1]
+        with self.assertRaises(PROBE.ProbeError):
+            PROBE.pending_evidence(state, stacks)
 
 
 if __name__ == '__main__':

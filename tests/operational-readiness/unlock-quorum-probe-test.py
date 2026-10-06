@@ -14,9 +14,10 @@ PROBE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PROBE)
 STACKS = [
     {'state': 'chan receive', 'frames': [{'function': 'github.com/docker/docker/daemon/cluster.(*Cluster).UnlockSwarm', 'file': 'swarm.go', 'line': 350}]},
-    {'state': 'select', 'frames': [{'function': 'github.com/moby/swarmkit/v2/manager/state/raft.WaitForLeader', 'file': 'util.go', 'line': 52}]},
+    {'state': 'select', 'frames': [{'function': 'github.com/moby/swarmkit/v2/manager/state/raft.WaitForLeader', 'file': 'util.go', 'line': 52},
+                                   {'function': 'github.com/moby/swarmkit/v2/manager.(*Manager).Run', 'file': 'manager.go', 'line': 609}]},
 ]
-STATE = {'LocalNodeState': 'pending', 'ControlAvailable': True}
+STATE = {'LocalNodeState': 'pending', 'StateSource': 'ping-swarm-header'}
 
 
 class UnlockQuorumPolicyTests(unittest.TestCase):
@@ -58,7 +59,7 @@ class UnlockQuorumPolicyTests(unittest.TestCase):
 
     def test_unrelated_or_merged_stacks_do_not_authorize_resume(self):
         for state, stacks in ((dict(STATE, LocalNodeState='active'), STACKS),
-                              (dict(STATE, ControlAvailable=False), STACKS),
+                              (dict(STATE, StateSource='info'), STACKS),
                               (STATE, STACKS[:1]), (STATE, []),
                               (STATE, [{'state': 'select', 'frames': STACKS[0]['frames'] + STACKS[1]['frames']}])):
             with self.subTest(state=state, stacks=stacks):
@@ -88,7 +89,8 @@ class UnlockQuorumPolicyTests(unittest.TestCase):
 
     def test_evidence_omits_raw_secrets(self):
         value = PROBE.pending_evidence(dict(STATE, Error='SWMKEY-1-secret', RemoteManagers=['SWMTKN-1-secret']), STACKS)
-        self.assertEqual(value, {'state': 'pending', 'control_available': True,
+        self.assertEqual(value, {'state': 'pending', 'control_available': None,
+                                 'state_source': 'ping-swarm-header',
                                  'unlock_wait_observed': True, 'leader_wait_observed': True,
                                  'waits_in_separate_stacks': True})
         self.assertNotIn('SWM', str(value))
@@ -296,8 +298,12 @@ class ProbeRuntimeTests(unittest.TestCase):
         context = Mock()
         context.__enter__ = Mock(return_value=attempt)
         context.__exit__ = Mock(return_value=False)
+        helper = self.root / 'local-swarm-status'
+        helper.write_bytes(b'synthetic-helper')
+        helper.chmod(0o755)
         probe = PROBE.Probe(self.root, FakeDocker())
-        with patch.dict(os.environ, {'DOCKLANE_OR_DISPOSABLE_HOST': '1', 'DOCKER_HOST': '', 'DOCKER_CONTEXT': ''}), \
+        with patch.dict(os.environ, {'DOCKLANE_OR_DISPOSABLE_HOST': '1', 'DOCKER_HOST': '', 'DOCKER_CONTEXT': '',
+                                     'DOCKLANE_OR_LOCAL_STATE_HELPER': str(helper)}), \
                 patch.object(PROBE.time, 'sleep'), patch.object(PROBE, 'UnlockAttempt', return_value=context) as factory, \
                 patch.object(probe, 'snapshot', return_value=(STATE, STACKS)):
             probe.execute()
@@ -307,6 +313,9 @@ class ProbeRuntimeTests(unittest.TestCase):
             self.assertFalse(probe.report['single_backup_acceptance'])
             self.assertTrue(probe.report['same_pending_unlock_completed'])
             self.assertTrue(probe.cleanup())
+        copies = [event for event in events if event[0] == 'cp']
+        self.assertEqual(copies, [('cp', str(helper), ids[names[1]] + ':/usr/local/bin/docklane-local-swarm-status')])
+        self.assertLess(events.index(copies[0]), next(i for i, event in enumerate(events) if event[0] == 'restart'))
         self.assertEqual(sum(event[0] == 'pause' for event in events), 1)
         self.assertEqual(sum(event[0] == 'unpause' for event in events), 1)
         self.assertNotIn('--force-new-cluster', str(events))
@@ -324,6 +333,30 @@ class ProbeRuntimeTests(unittest.TestCase):
         with self.assertRaises(PROBE.ProbeError):
             probe.load_ownership()
         self.assertTrue(marker.exists())
+
+
+    def test_missing_or_unexecutable_helper_is_rejected_before_creating_resources(self):
+        docker = Mock()
+        binary = self.root / 'helper'
+        binary.write_bytes(b'synthetic')
+        alias = self.root / 'alias'
+        alias.symlink_to(binary)
+        for path in (self.root / 'missing', self.root, binary, alias):
+            with self.subTest(path=path), patch.dict(os.environ, {
+                'DOCKLANE_OR_DISPOSABLE_HOST': '1', 'DOCKER_HOST': 'unix:///var/run/docker.sock',
+                'DOCKER_CONTEXT': '', 'DOCKLANE_OR_LOCAL_STATE_HELPER': str(path),
+            }):
+                with self.assertRaisesRegex(PROBE.ProbeError, 'helper'):
+                    PROBE.Probe(self.root, docker).execute()
+        self.assertEqual(docker.mock_calls, [])
+
+    def test_workflow_builds_static_reader_before_the_probe(self):
+        text = (HERE.parents[1] / '.github/workflows/operational-readiness-unlock-quorum.yml').read_text()
+        self.assertIn('actions/setup-go@v5', text)
+        self.assertIn('CGO_ENABLED=0 go build', text)
+        self.assertIn('tests/operational-readiness/local-swarm-status.go', text)
+        self.assertIn('DOCKLANE_OR_LOCAL_STATE_HELPER: ${{ runner.temp }}/docklane-local-swarm-status', text)
+        self.assertLess(text.index('CGO_ENABLED=0 go build'), text.index('Run differential probe'))
 
 
 if __name__ == '__main__':

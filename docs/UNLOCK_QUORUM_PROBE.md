@@ -4,7 +4,7 @@
 
 이 실험은 백업 복사, 새 manager 주소, 잘못된 키 변수를 제외하고 정상 키 unlock의 준비 대기가 quorum 가용성에 의존하는지 확인한다. `recovery-v2`의 단일 암호화 백업 복구를 다른 시나리오로 대체하지 않는다. 성공하더라도 `single_backup_acceptance=false`다.
 
-기준은 `main@a038b2a9b7de1da00add414f50f6375d5ef126c7`이다. 기존 [복구 run #37406102027](https://github.com/KimHG1995/Docklane/actions/runs/37406102027)의 artifact `11386897386`은 Engine 28.5.2 / API 1.51, `pending`, `ControlAvailable=true`, `OOMKilled=false`와 별도 `UnlockSwarm` / `raft.WaitForLeader` 스택을 기록했다. ZIP SHA256은 `c283b3f8f9bd5f72734628940341ba2515d378283d73d4d8bb14c30b9d61e81c`이다.
+대조 실험 최초 기준은 `main@a038b2a9b7de1da00add414f50f6375d5ef126c7`이며, 로컬 상태 조회 보완은 `main@9bd655f`에서 시작했다. 기존 [복구 run #37406102027](https://github.com/KimHG1995/Docklane/actions/runs/37406102027)의 artifact `11386897386`은 Engine 28.5.2 / API 1.51, `pending`, `ControlAvailable=true`, `OOMKilled=false`와 별도 `UnlockSwarm` / `raft.WaitForLeader` 스택을 기록했다. ZIP SHA256은 `c283b3f8f9bd5f72734628940341ba2515d378283d73d4d8bb14c30b9d61e81c`이다.
 
 ## 소스 대조
 
@@ -16,9 +16,9 @@
 
 1. 명시적인 disposable opt-in이 있는 Linux host에서만 실행한다. 원격 Docker endpoint와 `DOCKER_CONTEXT` override, 이미 Swarm에 가입한 outer host, 같은 이름의 기존 리소스 또는 남은 ownership이 있으면 시작하지 않는다.
 2. 기존 실패와 같은 image digest로 독립적인 manager 3개를 만들고 autolock을 켠다. 내부 Engine이 28.5.2인지 확인한다.
-3. follower 하나를 재시작해 locked 상태를 확인한다. 나머지 manager가 살아 있는 조건에서 정상 키 unlock과 3-manager 준비 수렴을 확인한다.
+3. 준비된 정적 로컬 상태 helper를 소유권이 확인된 follower에 복사하고, 해당 follower를 재시작해 locked 상태를 확인한다. 나머지 manager가 살아 있는 조건에서 정상 키 unlock과 3-manager 준비 수렴을 확인한다.
 4. 나머지 두 manager를 pause한다. 같은 follower를 다시 재시작하고 locked 상태를 확인한다. 백업 복사와 주소 교체는 없다.
-5. 정상 키 unlock을 한 번만 보낸다. DinD 내부 30초 제한과 외부 프로세스 제한을 적용한다. 대기 중인 프로세스, pending 상태와 서로 분리된 unlock/leader 대기 스택을 확인한다.
+5. 정상 키 unlock을 한 번만 보낸다. DinD 내부 30초 제한과 외부 프로세스 제한을 적용한다. 대기 중인 프로세스, HEAD /_ping의 실제 pending 상태와 서로 분리된 unlock/leader 대기 스택을 확인한다.
 6. 같은 요청이 아직 살아 있고 예산이 충분할 때만 기존 두 peer를 unpause한다. 같은 unlock 요청의 정상 종료, 3-manager 수렴, 원래 cluster ID와 unlock key 보존을 확인한다.
 7. 기록된 full container/network ID만 정리한다. 불확실한 inspect 또는 삭제 실패에서는 ownership을 남겨 workflow의 always-cleanup 단계에서 재시도한다.
 
@@ -29,16 +29,27 @@
 폐기 가능한 전용 환경에서만 실행한다.
 
 ```bash
-DOCKLANE_OR_DISPOSABLE_HOST=1 \
+CGO_ENABLED=0 go build -o /tmp/docklane-local-swarm-status tests/operational-readiness/local-swarm-status.go
+DOCKLANE_OR_LOCAL_STATE_HELPER=/tmp/docklane-local-swarm-status DOCKLANE_OR_DISPOSABLE_HOST=1 \
 DOCKLANE_OR_LOG_DIR=/tmp/docklane-unlock-quorum-probe \
 python3 tests/operational-readiness/unlock-quorum-probe.py
 ```
 
-실제 실행은 `operational-readiness-unlock-quorum`의 main push 또는 수동 실행이다. PR에서는 기존 validate의 빠른 Python 회귀만 실행한다. 원래 recovery-v2와 legacy v1 workflow는 바꾸지 않는다. 문서 변경만으로 heavy 실험을 재실행하지 않는다.
+실제 실행은 `operational-readiness-unlock-quorum`의 main push 또는 수동 실행이다. PR에서는 기존 validate의 Go helper 빌드와 Python 회귀를 실행한다. Unix HTTP 테스트는 실제 Go 바이너리를 실행하며 Docker daemon은 필요하지 않다. 원래 recovery-v2와 legacy v1 workflow는 바꾸지 않는다. 문서 변경만으로 heavy 실험을 재실행하지 않는다.
 
 업로드 대상은 `unlock-quorum-probe.json`과 `unlock-quorum-pending.json` 두 파일뿐이다. 명령 stdout/stderr는 익명 임시 파일에서 받고 원시 스택은 기존 정규화기로 해석한다. 공개 JSON은 판정 boolean, 제한된 상태, image/version, 경과 시간, 안전한 오류 분류, cleanup 결과와 기존 정규화기가 허용한 함수명/파일명/줄 번호 프레임으로 제한한다. Unlock key는 stdin으로 전달하며 key, join token, 개인키, 임의 daemon 오류와 함수 인자를 업로드하지 않는다. 이는 모든 기존 artifact의 일반적인 비밀정보 감사 완료를 뜻하지 않는다.
 
 `--cleanup-only`도 disposable opt-in과 local Unix Docker endpoint를 확인한다. 알 수 없는 소유권이나 원격 context로 정리 명령을 보내지 않는다. 이 실험은 외부에서 동시에 자원을 변경하지 않는 전용 runner를 전제로 한다.
+
+## Quorum에 의존하지 않는 상태 조회
+
+`local-swarm-status.go`는 owned follower 내부 Unix socket에 HEAD /_ping을 한 번만 전송한다. [Docker가 문서화한 Swarm 헤더](https://docs.docker.com/reference/api/engine/version-history/#v142-api-changes)를 읽으며 [Moby pingHandler](https://github.com/moby/moby/blob/v28.5.2/api/server/router/system/system_routes.go#L39-L67)와 [Cluster.Status](https://github.com/moby/moby/blob/v28.5.2/daemon/cluster/swarm.go#L496-L515)를 기준으로 한다. 이 경로는 Info의 cluster/nodes 조회를 호출하지 않는다.
+
+기본 socket은 `/var/run/docker.sock`이며 테스트용 --socket도 절대 Unix 경로만 받는다. Helper는 2초 제한, 4096바이트 응답 헤더 제한, HTTP 200과 단일 Swarm 헤더를 요구한다. 허용 값은 inactive, pending, error, locked, active/worker, active/manager다. 헤더가 없거나 중복/비정상이면 실패한다. 원격 endpoint, 환경 프록시, redirect, 요청 재시도 또는 info fallback은 없다. 정적 바이너리가 없거나 실행 불가능하면 실험 리소스를 만들기 전에 중단한다.
+
+`pending_evidence`는 실제 로컬 pending과 `StateSource=ping-swarm-header`, 서로 다른 요약의 chan receive UnlockSwarm 및 select WaitForLeader + Manager.Run을 모두 요구한다. ControlAvailable은 이 endpoint가 반환하지 않으므로 null이다. 이 필드를 true로 추정하거나 대기 스택만으로 unknown 상태를 승인하지 않는다. 아직 살아 있는 동일 unlock과 기존 10초 재개 여유 확인은 유지한다. 전체 준비 완료는 peer 복귀 뒤 원래 topology/cluster ID/key 검사로 판정한다.
+
+[직전 run #37422751815](https://github.com/KimHG1995/Docklane/actions/runs/37422751815)는 상태가 unknown이라 실패했지만 스택 요약 62개를 보존했고 cleanup과 업로드는 성공했다. 새 방식의 실환경 결과는 실제 실행 이후 PR 체크포인트에 기록한다. 로컬에서는 reader 13개, probe 23개, snapshot 15개 테스트를 통과했다. 외부 Docker 대조 실험과 단일 백업 복구 성공은 별도 판정이다.
 
 ## 부분 진단 보존
 
@@ -48,7 +59,7 @@ python3 tests/operational-readiness/unlock-quorum-probe.py
 
 `unlock-quorum-probe.json`의 `snapshot`에 수집 상태, 상태 조회/스택 probe 분류, 예산 소진 여부와 정규화한 스택을 재개 판정 전에 기록한다. 판정 실패 후 main이 결과를 다시 저장해도 이 필드는 보존된다. 임의 명령 stdout/stderr 또는 예외 원문은 추가하지 않는다. `snapshot.status=collected`도 peer 재개 허가를 뜻하지 않는다. 상태 조회가 unknown이거나 필요한 별도 대기 스택이 없으면 기존 판정은 실패하며, 만료되거나 시간이 부족한 unlock도 재개하지 않는다.
 
-원본에서 새 회귀 10개의 세부 assertion 20개가 실패했고 수정 후 10개가 통과했다. 기존 probe 회귀 21개도 통과했다. Docker 대역으로 실제 snapshot, 파서, 실패 처리와 재개 판정을 실행한 결과이며 실환경 복구 성공의 근거는 아니다.
+PR #106 당시 원본에서 snapshot 회귀 10개의 세부 assertion 20개가 실패했고 수정 후 10개가 통과했다. 당시 기존 probe 회귀 21개도 통과했다. Docker 대역으로 실제 snapshot, 파서, 실패 처리와 재개 판정을 실행한 결과이며 실환경 복구 성공의 근거는 아니다.
 
 ## 운영 판단과 남은 검증
 

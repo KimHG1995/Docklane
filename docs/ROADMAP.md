@@ -258,6 +258,10 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 2026-10-06 대조 실험 진단 분리: [PR #105 체크포인트](https://github.com/KimHG1995/Docklane/pull/105#issuecomment-6010113874)의 실제 run #37419223384는 quorum이 있는 unlock에 성공했지만, 격리 조건의 진단용 info가 3초 제한에서 exit 137로 실패해 스택 수집에 도달하지 못했다. Cleanup과 artifact 업로드는 성공했다. 이 실패는 원래 recovery-v2의 30초 restore-unlock 실패와 별개다. 이번 수정은 상태 조회 실패/잘못된 응답에서도 독립적인 스택을 수집하고, 엄격한 재개 판정 전에 정규화한 partial 증거를 저장한다. 진단 명령은 ownership 확인부터 공유 10초 예산을 사용한다. 상태가 unknown이면 스택이 있어도 peer를 재개하지 않으며 기존 30초 unlock, 재전송 금지와 단일 백업 acceptance는 유지한다. 새 회귀 10개와 기존 probe 회귀 21개가 Docker 대역 로컬 검증에서 통과했다. 전체 실환경 대조 실험 및 암호화 복구 완료를 뜻하지 않는다. 병합 후 결과는 해당 PR 체크포인트에 기록한다.
 
+2026-10-06 PR #106 이후 결과 동기화: main validate #37422751838과 운영 회귀 80개가 통과했다. 실제 대조 실험 #37422751815는 state=unknown으로 실패했지만 정규화한 스택 요약 62개와 별도 UnlockSwarm/WaitForLeader/Manager.Run 대기를 보존했고 cleanup과 artifact 업로드도 성공했다. 따라서 진단 유실은 해결됐지만 info에 의존하는 준비 판정은 여전히 실험을 막았다. 새 snapshot은 info의 정확한 종료 코드를 저장하지 않았으므로 이전 run의 137을 새 실행의 확정값으로 인용하지 않는다. [PR #106 체크포인트](https://github.com/KimHG1995/Docklane/pull/106#issuecomment-6010604667)를 근거로 한다.
+
+2026-10-06 로컬 Swarm 상태 조회 보완: quorum 조회를 수행하는 info 대신 owned DinD의 Unix socket에 HEAD /_ping을 한 번 보내 Swarm 헤더를 읽는 정적 Go helper를 사용한다. 헤더 누락/중복/비정상 응답은 unknown으로 거절하며 info로 fallback하지 않는다. 로컬 pending과 분리된 chan receive UnlockSwarm, select WaitForLeader + Manager.Run 스택, 동일 live unlock과 남은 시간을 모두 요구한다. ControlAvailable은 조회하지 않았으므로 null로 보존한다. Unix HTTP 회귀 13개와 probe/snapshot 회귀 38개가 로컬에서 통과했다. 기존 30초 unlock과 10초 진단 예산, 재전송 금지 및 단일 백업 acceptance는 유지한다. 새 실환경 결과는 병합 후 체크포인트와 다음 작업에서 동기화한다.
+
 PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 미완료다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
