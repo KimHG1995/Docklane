@@ -243,7 +243,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager resource contention — run #36950209098
 - [x] Swarm backup/restore drill — run #36968255603
 - [x] Docklane DB restore — run #36972631705
-- [ ] encryption/trust key restore — recovery-v2 run #37385891177 failed at restore-unlock (exit 137); bounded private diagnostics and preflight regressions added, real acceptance pending ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
+- [ ] encryption/trust key restore — recovery-v2 run #37396470008 failed at restore-unlock (exit 137); node-ready/leader waits recorded in PR #99, stack-boundary parser regressions added, real acceptance pending ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
 - [ ] recovery runbook
 
 이 단계 통과 전 production adoption을 권장하지 않는다.

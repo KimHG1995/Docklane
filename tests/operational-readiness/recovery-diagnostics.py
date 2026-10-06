@@ -26,7 +26,10 @@ DIGEST = re.compile(r"(?:docker@)?sha256:[a-f0-9]{64}\Z")
 VERSION = re.compile(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-[a-z0-9.]+)?\Z")
 STACK_FRAME = re.compile(r"^((?:github\.com/(?:docker/docker|moby/(?:moby|swarmkit)|docker/swarmkit)/|runtime\.|sync\.|internal/sync\.|go\.etcd\.io/)[A-Za-z0-9_./*()@+%-]+)\(")
 STACK_LOCATION = re.compile(r"^\s+(?:/[^\s]+/)?([A-Za-z0-9_-]+\.go):([0-9]+)(?:\s|$)")
-STACK_STATE = re.compile(r"^goroutine [0-9]+ \[([a-zA-Z ]+)(?:, [0-9]+ minutes)?\]:$")
+STACK_STATE = re.compile(
+    r"^goroutine [0-9]+ \[([a-zA-Z][a-zA-Z .()]{0,95})"
+    r"(?:, [0-9]+ minutes)?(?:, locked to thread)?\]:$"
+)
 EVENTS = {
     "certificate_renewal": "failed to renew the certificate",
     "connection_refused": "connection refused",
@@ -72,11 +75,14 @@ def stack_summary(text):
     """Retain function/file/line and wait state, never argument dumps."""
     result, current, previous = [], None, None
     for line in text.splitlines():
-        state = STACK_STATE.fullmatch(line)
-        if state:
-            current = {"state": state.group(1), "frames": []}
-            previous = None
-            if len(result) < 256:
+        # Boundary detection must not depend on recognizing the wait state.
+        # Drop unsupported/truncated headers and their frames rather than append
+        # them to the previous goroutine. Never publish raw header metadata.
+        if line.startswith("goroutine "):
+            current, previous = None, None
+            state = STACK_STATE.fullmatch(line)
+            if state and len(result) < 256:
+                current = {"state": state.group(1), "frames": []}
                 result.append(current)
             continue
         match = STACK_FRAME.match(line)
