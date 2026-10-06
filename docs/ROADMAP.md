@@ -262,6 +262,10 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 2026-10-06 로컬 Swarm 상태 조회 보완: quorum 조회를 수행하는 info 대신 owned DinD의 Unix socket에 HEAD /_ping을 한 번 보내 Swarm 헤더를 읽는 정적 Go helper를 사용한다. 헤더 누락/중복/비정상 응답은 unknown으로 거절하며 info로 fallback하지 않는다. 로컬 pending과 분리된 chan receive UnlockSwarm, select WaitForLeader + Manager.Run 스택, 동일 live unlock과 남은 시간을 모두 요구한다. ControlAvailable은 조회하지 않았으므로 null로 보존한다. Unix HTTP 회귀 13개와 probe/snapshot 회귀 38개가 로컬에서 통과했다. 기존 30초 unlock과 10초 진단 예산, 재전송 금지 및 단일 백업 acceptance는 유지한다. 새 실환경 결과는 병합 후 체크포인트와 다음 작업에서 동기화한다.
 
+2026-10-06 PR #107 이후 결과 동기화: main validate #37428339641과 운영 회귀 100개가 통과했다. 실제 quorum 대조 실험 #37428339620도 성공했다. 실제 로컬 pending과 별도 대기 스택을 확인하고, 원래 peer 복귀 후 동일 unlock 한 건이 완료됐으며 cluster ID와 unlock key를 보존했다. 3.148초는 사전 대기 3초를 포함한 해당 요청의 전체 시간이다. 이 결과는 단일 cold backup 복구가 아니며 single_backup_acceptance=false다. [PR #107 체크포인트](https://github.com/KimHG1995/Docklane/pull/107#issuecomment-6011371612)를 근거로 한다.
+
+2026-10-06 대조 실험 소유권 보완: 생성 전에 실행별 nonce와 리소스 intent를 영속화하고 같은 식별 label을 Docker 리소스에 부여한다. 생성 응답을 잃으면 label 조회 후 전체 ID, 이름과 label을 inspect로 검증해 정리한다. 아직 관찰되지 않은 생성은 완료/부재로 단정하지 않고 intent를 유지한다. 삭제 응답 유실 후 정확한 ID의 명시적인 not-found는 정리 완료로 인정하며 연결/권한/timeout/불일치는 기록을 보존한다. 신규 subprocess 회귀 17개와 기존 probe 회귀 23개를 로컬에서 통과했다. [소유권 및 재시도 계약](QUORUM_PROBE_CLEANUP.md)을 참조한다. 복구 경로, unlock 재전송 금지와 단일 백업 acceptance는 변경하지 않는다.
+
 PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 미완료다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.

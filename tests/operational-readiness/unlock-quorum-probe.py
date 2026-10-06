@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -26,6 +27,8 @@ UNLOCK_SECONDS = 30
 SNAPSHOT_SECONDS = 10
 LOCAL_STATE_HELPER = '/usr/local/bin/docklane-local-swarm-status'
 STATE_SOURCE = 'ping-swarm-header'
+RUN_LABEL = 'io.docklane.quorum-probe.run'
+RESOURCE_LABEL = 'io.docklane.quorum-probe.resource'
 HEX_ID = re.compile(r'[a-f0-9]{64}\Z')
 
 
@@ -103,20 +106,42 @@ class Docker:
             raise ProbeError(f'{label}: command failed (exit {status})')
         return out.strip()
 
+    @staticmethod
+    def is_missing(kind, target, status, output, error):
+        allowed = {f'Error: No such {kind}: {target}',
+                   f'Error response from daemon: No such {kind}: {target}'}
+        if kind == 'network':
+            allowed.add(f'Error response from daemon: network {target} not found')
+        return status == 1 and output.strip() in ('', '[]') and error.strip() in allowed
+
     def absent(self, kind, name):
         args = (['inspect', '--type', 'container', name] if kind == 'container'
                 else ['network', 'inspect', name])
         try:
-            status, _, error = self.raw(args)
+            status, output, error = self.raw(args)
         except subprocess.TimeoutExpired:
             raise ProbeError('preflight inspect timed out') from None
-        allowed = {f'Error: No such {kind}: {name}',
-                   f'Error response from daemon: No such {kind}: {name}'}
-        if kind == 'network':
-            allowed.add(f'Error response from daemon: network {name} not found')
-            allowed.add(f'Error: No such network: {name}')
-        if status != 1 or error.strip() not in allowed:
+        if not self.is_missing(kind, name, status, output, error):
             raise ProbeError(f'preflight cannot confirm absent {kind}')
+
+    def inspect_resource(self, kind, rid):
+        args = (['inspect', '--type', 'container'] if kind == 'container'
+                else ['network', 'inspect'])
+        try:
+            status, output, error = self.raw([*args, '--format', '{{json .}}', rid])
+        except subprocess.TimeoutExpired:
+            raise ProbeError('cleanup inspect timed out') from None
+        if self.is_missing(kind, rid, status, output, error):
+            return None
+        if status != 0:
+            raise ProbeError('cleanup inspect unavailable')
+        try:
+            value = json.loads(output)
+        except (ValueError, RecursionError):
+            raise ProbeError('cleanup inspect invalid') from None
+        if not isinstance(value, dict):
+            raise ProbeError('cleanup inspect invalid')
+        return value
 
     def inner(self, cid, args, label, seconds=5):
         return self.call(['exec', '-i', cid, 'timeout', '-s', 'KILL', str(seconds),
@@ -176,6 +201,7 @@ class Probe:
         self.docker = docker or Docker()
         self.ids = {}
         self.network_id = None
+        self.creation = None
         self.report = {'schema': 1, 'status': 'not-established',
                        'single_backup_acceptance': False, 'image': IMAGE}
 
@@ -332,20 +358,12 @@ class Probe:
         self.docker.absent('network', NETWORK)
         self.docker.call(['pull', IMAGE], 'pinned image pull', 120)
         self.own.mkdir(parents=True, exist_ok=True)
-        nid = self.docker.call(['network', 'create', NETWORK], 'network create')
-        if not HEX_ID.fullmatch(nid):
-            raise ProbeError('invalid created network ID')
-        self.network_id = nid
-        (self.own / 'manager-network.network-id').write_text(nid + '\n')
+        self.create_owned(NETWORK, ['network', 'create', NETWORK], 'network create')
         addresses = {}
         for i, name in enumerate(NAMES, 1):
-            cid = self.docker.call(['create', '--privileged', '--name', name,
+            cid = self.create_owned(name, ['create', '--privileged', '--name', name,
                 '--hostname', f'manager-{i:02d}', '--network', NETWORK,
                 '-e', 'DOCKER_TLS_CERTDIR=', IMAGE], 'container create', 30)
-            if not HEX_ID.fullmatch(cid):
-                raise ProbeError('invalid created container ID')
-            self.ids[name] = cid
-            (self.own / f'{name}.container-id').write_text(cid + '\n')
             self.docker.call(['start', self.owned(name)], 'container start')
             self.wait(lambda: self.cli(name, ['version', '--format', '{{.Server.Version}}'], 'daemon') == '28.5.2', 'pinned Engine')
             addresses[name] = self.docker.call(['inspect', '--format',
@@ -394,16 +412,71 @@ class Probe:
         self.report.update(outcome, cluster_identity_preserved=True, unlock_key_preserved=True,
                            same_pending_unlock_completed=True, force_new_cluster_sent=False)
 
+    def marker(self, name):
+        return self.own / ('manager-network.network-id' if name == NETWORK
+                           else f'{name}.container-id')
+
+    def save_creation(self):
+        # Write intent durably BEFORE Docker creation. No credentials here.
+        if self.own.is_symlink() or (self.own / 'creation.json').is_symlink():
+            raise ProbeError('ownership path must not be a symlink')
+        self.own.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with tempfile.NamedTemporaryFile(mode='w', dir=self.own, delete=False) as out:
+            temporary = Path(out.name)
+            json.dump(self.creation, out, sort_keys=True)
+            out.write('\n')
+            out.flush()
+            os.fsync(out.fileno())
+        try:
+            temporary.replace(self.own / 'creation.json')
+            descriptor = os.open(self.own, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def record_id(self, name, rid):
+        if not isinstance(rid, str) or not HEX_ID.fullmatch(rid):
+            raise ProbeError('invalid created resource ID')
+        self.creation['resources'][name] = rid
+        self.save_creation()
+        # The journal is sufficient to recover even if this legacy marker write
+        # fails or the process exits before the in-memory maps are updated.
+        self.marker(name).write_text(rid + '\n')
+        if name == NETWORK:
+            self.network_id = rid
+        else:
+            self.ids[name] = rid
+
+    def create_owned(self, name, args, label, seconds=10):
+        if name not in (*NAMES, NETWORK):
+            raise ProbeError('unsupported creation target')
+        if self.creation is None:
+            if (self.own / 'creation.json').exists():
+                raise ProbeError('existing creation intent must be reconciled first')
+            self.creation = {'schema': 1, 'run_id': secrets.token_hex(16), 'resources': {}}
+        if name in self.creation['resources']:
+            raise ProbeError('creation must never be resent')
+        self.creation['resources'][name] = None
+        self.save_creation()
+        labels = ['--label', RUN_LABEL + '=' + self.creation['run_id'],
+                  '--label', RESOURCE_LABEL + '=' + name]
+        index = 2 if name == NETWORK else 1
+        rid = self.docker.call([*args[:index], *labels, *args[index:]], label, seconds)
+        self.record_id(name, rid)
+        return rid
+
     def load_ownership(self):
-        # For the workflow's always-cleanup step after interruption. Do not
-        # discover by name or delete malformed/untrusted marker contents.
+        # Legacy full-ID markers remain supported. A new run also has durable
+        # creation intents; an empty ID map must not hide an ambiguous create.
         if self.own.is_symlink():
             raise ProbeError('ownership directory must not be a symlink')
-        self.ids = {}
-        self.network_id = None
-        for name, suffix in [*((name, 'container-id') for name in NAMES),
-                             ('manager-network', 'network-id')]:
-            marker = self.own / f'{name}.{suffix}'
+        self.ids, self.network_id, self.creation = {}, None, None
+        markers = {}
+        for name in (*NAMES, NETWORK):
+            marker = self.marker(name)
             if marker.is_symlink():
                 raise ProbeError('ownership marker must not be a symlink')
             if not marker.exists():
@@ -412,29 +485,109 @@ class Probe:
                 value = source.read(256).strip()
             if not HEX_ID.fullmatch(value):
                 raise ProbeError('invalid ownership marker')
-            if suffix == 'network-id':
-                self.network_id = value
-            else:
-                self.ids[name] = value
+            markers[name] = value
+        path = self.own / 'creation.json'
+        if path.is_symlink():
+            raise ProbeError('creation intent must not be a symlink')
+        if path.exists():
+            with path.open() as source:
+                data = source.read(8193)
+            if len(data) > 8192:
+                raise ProbeError('creation intent too large')
+            value = json.loads(data)
+            if (not isinstance(value, dict) or set(value) != {'schema', 'run_id', 'resources'}
+                    or value['schema'] != 1 or not isinstance(value['run_id'], str)
+                    or re.fullmatch(r'[a-f0-9]{32}', value['run_id']) is None
+                    or not isinstance(value['resources'], dict)):
+                raise ProbeError('invalid creation intent')
+            for name, rid in value['resources'].items():
+                if (name not in (*NAMES, NETWORK)
+                        or rid is not None and (not isinstance(rid, str) or not HEX_ID.fullmatch(rid))
+                        or name in markers and markers[name] != rid):
+                    raise ProbeError('creation intent and ID marker mismatch')
+                if rid is not None:
+                    markers[name] = rid
+            self.creation = value
+        self.network_id = markers.pop(NETWORK, None)
+        self.ids = markers
+
+    def verify_cleanup_identity(self, kind, name, rid, value):
+        if value.get('Id') != rid or value.get('Name') != ('/' + name if kind == 'container' else name):
+            raise ProbeError('cleanup identity mismatch')
+        if kind == 'container':
+            host = value.get('HostConfig')
+            if not isinstance(host, dict) or host.get('PidMode') not in ('', 'private'):
+                raise ProbeError('cleanup PID namespace mismatch')
+            config = value.get('Config', {})
+            labels = config.get('Labels') if isinstance(config, dict) else None
+        else:
+            labels = value.get('Labels')
+        if self.creation is not None and name in self.creation['resources']:
+            if (not isinstance(labels, dict)
+                    or labels.get(RUN_LABEL) != self.creation['run_id']
+                    or labels.get(RESOURCE_LABEL) != name):
+                raise ProbeError('cleanup run labels mismatch')
+
+    def discover_created_id(self, kind, name):
+        # Never discover by name alone or retry create. Labels only narrow the
+        # search; inspect must independently confirm full ID, name and labels.
+        args = [kind, 'ls', '--quiet', '--no-trunc']
+        if kind == 'container':
+            args.append('--all')
+        args += ['--filter', 'label=' + RUN_LABEL + '=' + self.creation['run_id'],
+                 '--filter', 'label=' + RESOURCE_LABEL + '=' + name]
+        ids = self.docker.call(args, 'reconcile creation').splitlines()
+        if len(ids) != 1 or not HEX_ID.fullmatch(ids[0]):
+            # Zero matches does not prove a timed-out create cannot finish later.
+            raise ProbeError('creation outcome remains uncertain')
+        rid = ids[0]
+        value = self.docker.inspect_resource(kind, rid)
+        if value is None:
+            raise ProbeError('creation disappeared before ownership verification')
+        self.verify_cleanup_identity(kind, name, rid, value)
+        self.record_id(name, rid)
+        return rid
+
+    def forget_resource(self, name):
+        self.marker(name).unlink(missing_ok=True)
+        if self.creation is not None and name in self.creation['resources']:
+            del self.creation['resources'][name]
+            self.save_creation()
+        if name == NETWORK:
+            self.network_id = None
+        else:
+            self.ids.pop(name, None)
 
     def cleanup(self):
+        try:
+            self.load_ownership()
+        except (ProbeError, OSError, ValueError, RecursionError):
+            return False
         failed = False
-        for name in reversed(NAMES):
-            if name not in self.ids:
+        for name in (*reversed(NAMES), NETWORK):
+            kind = 'network' if name == NETWORK else 'container'
+            rid = self.network_id if kind == 'network' else self.ids.get(name)
+            intent = self.creation is not None and name in self.creation['resources']
+            if rid is None and not intent:
                 continue
             try:
-                self.docker.call(['rm', '-fv', self.owned(name)], 'owned container cleanup', 20)
-                (self.own / f'{name}.container-id').unlink(missing_ok=True)
-            except (ProbeError, OSError, ValueError):
-                failed = True  # Preserve ID for an explicit cleanup retry.
-        if self.network_id is not None:
+                if rid is None:
+                    rid = self.discover_created_id(kind, name)
+                value = self.docker.inspect_resource(kind, rid)
+                if value is not None:
+                    self.verify_cleanup_identity(kind, name, rid, value)
+                    args = ['network', 'rm', rid] if kind == 'network' else ['rm', '-fv', rid]
+                    self.docker.call(args, 'owned resource cleanup', 20)
+                # Only an exact full-ID not-found or successful removal reaches
+                # here. Transport/permission/timeouts leave both records intact.
+                self.forget_resource(name)
+            except (ProbeError, OSError, ValueError, RecursionError):
+                failed = True
+        if self.creation is not None and not self.creation['resources']:
             try:
-                current = self.docker.call(['network', 'inspect', '--format', '{{.Id}}', self.network_id], 'network ownership')
-                if current != self.network_id:
-                    raise ProbeError('network ownership mismatch')
-                self.docker.call(['network', 'rm', self.network_id], 'owned network cleanup')
-                (self.own / 'manager-network.network-id').unlink(missing_ok=True)
-            except (ProbeError, OSError, ValueError):
+                (self.own / 'creation.json').unlink()
+                self.creation = None
+            except OSError:
                 failed = True
         return not failed
 
