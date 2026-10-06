@@ -22,7 +22,6 @@ jobs:
     timeout-minutes: 10
     env:
       DOCKLANE_OR_DISPOSABLE_HOST: '1'
-      DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-unlock-quorum-probe
     steps:
       - uses: actions/checkout@v4
       - name: Verify deterministic preflight
@@ -30,9 +29,13 @@ jobs:
           python3 -m py_compile tests/operational-readiness/unlock-quorum-probe.py tests/operational-readiness/recovery-diagnostics.py
           python3 tests/operational-readiness/unlock-quorum-probe-test.py
       - name: Run differential probe (not backup acceptance)
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-unlock-quorum-probe
         run: python3 tests/operational-readiness/unlock-quorum-probe.py
       - name: Cleanup owned probe resources
         if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-unlock-quorum-probe
         run: python3 tests/operational-readiness/unlock-quorum-probe.py --cleanup-only
       - name: Upload sanitized probe evidence
         if: always()
