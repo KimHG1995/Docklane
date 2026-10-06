@@ -240,7 +240,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] network partition — run #36682848436
 - [x] manager별 Go Agent 배포 — run #37412930783 (PR #101 이후 재검증)
 - [x] Agent reconnect/failover — run #36941789676
-- [x] manager resource contention — run #36950209098
+- [x] manager resource contention — run #37414696823 (PR #103 이후 재검증)
 - [x] Swarm backup/restore drill — run #37414123569 (PR #102 이후 재검증)
 - [x] Docklane DB restore — run #37414123562 (PR #102 이후 재검증)
 - [ ] encryption/trust key restore — recovery-v2 run #37406102027 failed at restore-unlock (exit 137); PR #100 parser fix and separate node-ready/leader waits verified, real acceptance pending ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
@@ -250,7 +250,9 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 2026-10-06 recovery cleanup 보완: DB/Swarm/trust-key 정리는 inspect 통신 오류, 권한 오류, ID 불일치와 삭제 실패에서 ownership을 보존하고 실패를 반환한다. 기록된 리소스의 명시적인 부재만 idempotent 성공으로 처리한다. 실제 세 cleanup 스크립트를 사용하는 회귀 8개와 legacy workflow 회귀 1개를 추가했다. PR #102 validate run #37413669601과 main validate run #37414123474가 통과했고 DB/Swarm 복구는 위 main 실행에서 재검증했다. Cleanup 변경이 오래된 v1 복구를 자동 재실행하지 않도록 v1은 수동 실행만 유지하며 현재 recovery-v2 및 PR validation은 유지한다. 이는 암호화 복구 성공을 뜻하지 않는다.
 
-2026-10-06 resource contention 준비 대기 보완: 초기/복구 준비 대기는 반환값 기반 확인 함수를 사용하고 부하 샘플의 엄격한 assertion은 유지한다. 실패한 topology 조회는 정상처럼 보이는 출력이 있어도 준비 완료로 인정하지 않는다. 실제 Bash 함수와 Docker/sleep 대역으로 실행하는 회귀 8개를 추가했다. 원본에서는 12개 세부 검증 실패가 재현되고 수정 후 8개가 통과했다. 기존 120회 관찰 한도와 부하 조건은 변경하지 않으며, 이는 Docker 명령 실행시간까지 포함한 120초 제한이라는 뜻은 아니다. 수정 후 실환경 부하 시험 결과는 main 자동 실행에서 확인한다.
+2026-10-06 resource contention 준비 대기 보완: 초기/복구 준비 대기는 반환값 기반 확인 함수를 사용하고 부하 샘플의 엄격한 assertion은 유지한다. 실패한 topology 조회는 정상처럼 보이는 출력이 있어도 준비 완료로 인정하지 않는다. 실제 Bash 함수와 Docker/sleep 대역으로 실행하는 회귀 8개를 추가했다. 원본에서는 12개 세부 검증 실패가 재현되고 수정 후 8개가 통과했다. 기존 120회 관찰 한도와 부하 조건은 변경하지 않으며, 이는 Docker 명령 실행시간까지 포함한 120초 제한이라는 뜻은 아니다. PR #103 이후 main validate #37414696776과 실제 부하 시험 #37414696823이 성공했고 evidence 업로드와 cleanup까지 완료했다.
+
+2026-10-06 unlock/quorum 원인 분리: Engine 28.5.2의 UnlockSwarm과 Init이 공유하는 제어 잠금 및 노드 준비 대기를 실제 진단과 대조했다. 백업 복사 없이 동일 follower의 quorum 유무를 비교하는 [대조 실험](UNLOCK_QUORUM_PROBE.md)을 추가했다. 살아 있는 30초 제한 unlock 한 건에서만 기존 peer를 재개하며, timeout 이후 재전송이나 force-new-cluster는 없다. 이 실험의 성공은 기존 peer 복귀 조건에만 해당하며 단일 암호화 백업 재해 복구 및 recovery runbook 완료 근거로 사용하지 않는다. 새 실환경 결과는 병합 후 PR 체크포인트에 기록하고 다음 작업에서 동기화한다.
 
 PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 미완료다.
 
