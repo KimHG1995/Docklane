@@ -162,7 +162,7 @@ class ProbeRuntimeTests(unittest.TestCase):
                 name, cid = PROBE.NAMES[0], 'a' * 64
                 value = dict(Id=cid, Name='/' + name, HostConfig={'PidMode': ''})
                 value.update(change)
-                docker.call.return_value = json.dumps(value)
+                docker.inspect_resource.return_value = value
                 probe = PROBE.Probe(self.root, docker)
                 probe.own.mkdir(exist_ok=True)
                 marker = probe.own / f'{name}.container-id'
@@ -170,14 +170,14 @@ class ProbeRuntimeTests(unittest.TestCase):
                 probe.ids[name] = cid
                 self.assertFalse(probe.cleanup())
                 self.assertEqual(marker.read_text(), cid)
-                self.assertEqual(len(docker.call.call_args_list), 1)
-                self.assertEqual(docker.call.call_args.args[0][0], 'inspect')
+                docker.inspect_resource.assert_called_once_with('container', cid)
+                docker.call.assert_not_called()
 
     def test_cleanup_remove_failure_retains_id_for_retry(self):
         docker = Mock()
         name, cid = PROBE.NAMES[0], 'a' * 64
-        meta = json.dumps({'Id': cid, 'Name': '/' + name, 'HostConfig': {'PidMode': ''}})
-        docker.call.side_effect = [meta, PROBE.ProbeError('failed'), meta, cid]
+        docker.inspect_resource.return_value = {'Id': cid, 'Name': '/' + name, 'HostConfig': {'PidMode': ''}}
+        docker.call.side_effect = [PROBE.ProbeError('failed'), cid]
         probe = PROBE.Probe(self.root, docker)
         probe.own.mkdir()
         marker = probe.own / f'{name}.container-id'
@@ -255,6 +255,17 @@ class ProbeRuntimeTests(unittest.TestCase):
         key = 'SWMKEY-1-' + 'A' * 43
 
         class FakeDocker:
+            def __init__(self):
+                self.labels = {}
+
+            def inspect_resource(self, kind, rid):
+                events.append(('inspect_resource', kind, rid))
+                if kind == 'network':
+                    return {'Id': rid, 'Name': PROBE.NETWORK, 'Labels': self.labels[rid]}
+                name = next(name for name in names if ids[name] == rid)
+                return {'Id': rid, 'Name': '/' + name, 'HostConfig': {'PidMode': ''},
+                        'Config': {'Labels': self.labels[rid]}}
+
             def absent(self, kind, name):
                 events.append(('absent', kind, name))
 
@@ -264,10 +275,10 @@ class ProbeRuntimeTests(unittest.TestCase):
                     return 'unix:///var/run/docker.sock'
                 if args[0] == 'info':
                     return 'inactive'
-                if args[:2] in (['network', 'create'], ['network', 'inspect']):
-                    return 'd' * 64
-                if args[0] == 'create':
-                    return ids[args[args.index('--name') + 1]]
+                if args[:2] == ['network', 'create'] or args[0] == 'create':
+                    rid = 'd' * 64 if args[0] == 'network' else ids[args[args.index('--name') + 1]]
+                    self.labels[rid] = dict(args[i+1].split('=', 1) for i in range(len(args)-1) if args[i] == '--label')
+                    return rid
                 if args[0] == 'inspect':
                     name = next(name for name in names if ids[name] == args[-1])
                     if '{{json .}}' in args:
