@@ -109,6 +109,11 @@ unlock(){
   else
     status=$?
     printf 'phase=%s\nstatus=failed\nexit=%s\n' "$phase" "$status" >"$LOG/$phase-status.txt"
+    # Preserve failure and collect evidence BEFORE EXIT cleanup removes DinD.
+    # No key is passed to the collector; partial diagnostics never permit retry.
+    if ! timeout --kill-after=2 40 python3 "$ROOT/tests/operational-readiness/recovery-diagnostics.py" "$container" "$phase" "$status"; then
+      log "diagnostics incomplete: $phase (original failure retained)" >&2
+    fi
     fail "$phase: unlock failed or timed out (exit $status); no retry or force-new-cluster continuation"
   fi
 }
