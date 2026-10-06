@@ -202,6 +202,7 @@ class Probe:
         self.ids = {}
         self.network_id = None
         self.creation = None
+        self._cleanup_run_id = None
         self.report = {'schema': 1, 'status': 'not-established',
                        'single_backup_acceptance': False, 'image': IMAGE}
 
@@ -464,6 +465,9 @@ class Probe:
         labels = ['--label', RUN_LABEL + '=' + self.creation['run_id'],
                   '--label', RESOURCE_LABEL + '=' + name]
         index = 2 if name == NETWORK else 1
+        # Arm automatic cleanup only after this run's intent is durable and
+        # immediately before the first possibly successful Docker mutation.
+        self._cleanup_run_id = self.creation['run_id']
         rid = self.docker.call([*args[:index], *labels, *args[index:]], label, seconds)
         self.record_id(name, rid)
         return rid
@@ -558,11 +562,28 @@ class Probe:
         else:
             self.ids.pop(name, None)
 
-    def cleanup(self):
+    def cleanup_current_run(self):
+        # Rejected preflight must not turn into implicit cleanup of an older run.
+        if self._cleanup_run_id is None:
+            return False
+        try:
+            self.require_local_host()
+            return self.cleanup(expected_run_id=self._cleanup_run_id)
+        except (ProbeError, OSError, ValueError, RecursionError):
+            return False
+
+    def cleanup(self, *, expected_run_id=None):
         try:
             self.load_ownership()
         except (ProbeError, OSError, ValueError, RecursionError):
             return False
+        if expected_run_id is not None:
+            if self.creation is None or self.creation['run_id'] != expected_run_id:
+                return False
+            resources = self.creation['resources']
+            if (set(self.ids) - resources.keys()
+                    or self.network_id is not None and NETWORK not in resources):
+                return False  # Mixed legacy/current ownership is not our authority.
         failed = False
         for name in (*reversed(NAMES), NETWORK):
             kind = 'network' if name == NETWORK else 'container'
@@ -623,7 +644,7 @@ def main():
         # No traceback: third-party response/arguments can contain credentials.
         probe.report.update(status='failed', failure='probe interrupted or unexpected local error')
     finally:
-        cleaned = probe.cleanup()
+        cleaned = probe.cleanup_current_run()
         probe.report['cleanup_completed'] = cleaned
         probe.publish('unlock-quorum-probe.json', probe.report)
     print('[unlock-quorum-probe] ' + probe.report['status'])

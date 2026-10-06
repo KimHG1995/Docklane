@@ -217,7 +217,7 @@ class SnapshotTests(unittest.TestCase):
 
         with patch.object(PROBE, 'Probe', return_value=probe), \
                 patch.object(probe, 'execute', side_effect=execute), \
-                patch.object(probe, 'cleanup', return_value=True) as cleanup, \
+                patch.object(probe, 'cleanup_current_run', return_value=True) as cleanup, \
                 patch.object(PROBE.sys, 'argv', ['probe']), patch.object(PROBE.signal, 'signal'), \
                 patch.object(PROBE.os, 'umask'):
             self.assertEqual(PROBE.main(), 1)

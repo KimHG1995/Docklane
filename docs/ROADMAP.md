@@ -243,8 +243,8 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager resource contention — run #37414696823 (PR #103 이후 재검증)
 - [x] Swarm backup/restore drill — run #37414123569 (PR #102 이후 재검증)
 - [x] Docklane DB restore — run #37414123562 (PR #102 이후 재검증)
-- [ ] encryption/trust key restore — 마지막 기존 run #37406102027은 restore-unlock 30초/137 실패. 정지된 단일 복원 사본의 offline quorum rebuild 구현 후 새 실환경 검증 대기 ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
-- [ ] recovery runbook — [버전 한정 복구 절차](COLD_BACKUP_RECOVERY.md) 작성, 전체 실제 acceptance 확인 전 미완료
+- [x] encryption/trust key restore — run #37542402155 SUCCESS, Engine 28.5.2 / disposable Linux-DinD 단일 암호화 cold-backup 신뢰 복구 ([성공 근거](https://github.com/KimHG1995/Docklane/pull/109#issuecomment-6026899132))
+- [x] recovery runbook — [버전 한정 복구 절차](COLD_BACKUP_RECOVERY.md), run #37542402155에서 신뢰 복구 검증. 범용 운영/애플리케이션 볼륨 복구는 범위 밖
 
 2026-10-06 Agent identity 보완: 무기한 endpoint 검증 캐시를 제거하고 모든 보호된 조회와 mutation 대상 선택에서 현재 identity를 확인한다. `/v1/cluster` 응답도 기준 cluster와 대조한다. 최초 정상 identity로 정한 기준 cluster와 전송 후 mutation 재시도 금지를 유지한다. HTTP 회귀 6개를 포함한 API 테스트 130개, 타입 검사, 빌드와 mTLS는 PR #101 validate run #37412630341에서 통과했다. Identity 확인과 후속 요청은 원자적이지 않으므로 요청 도중의 재가입까지 차단하려면 별도 Agent 측 사전조건이 필요하다.
 
@@ -270,7 +270,9 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 2026-10-06 단일 cold backup 경로 구현: 원래 manager 세 ID의 명시적 부재와 복원 Docker 정지를 확인한 뒤 격리된 helper가 동일 Moby vendor의 UnlockKey+ForceNewCluster를 함께 적용한다. 실패한 사본의 자동 재시도는 금지하고, 정상 Docker 재시작 후 기존 키/CA/cluster ID/leader 및 키 회전/재시작/worker 가입을 검증한다. Go 정책8개와 Python 격리/호출10개, Bash/workflow4개, 기존 trust-key8개가 로컬에서 통과했다. 고정 vendor 어댑터는 별도 PR build gate로 검증하고 실제 acceptance는 main recovery-v2 결과 확인 전 미완료로 유지한다. [실행 절차와 제한](COLD_BACKUP_RECOVERY.md)에 기록했다.
 
-PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 새 실제 실행 확인 전 미완료다.
+2026-10-07 PR #109 이후 결과 동기화: main validation #37542401009와 실제 recovery-v2 #37542402155가 성공했다. 원래 manager 세 ID의 부재, 단일 cold backup의 offline quorum 재구성, 정상 Docker에서 원래 키 unlock, cluster ID/root CA/leader, 키 회전과 재시작 후 이전 키 거절/새 키 승인, fresh worker Ready/동일 CA 및 cleanup을 확인했다. Artifact 11449092312의 최종 summary와 [PR #109 체크포인트](https://github.com/KimHG1995/Docklane/pull/109#issuecomment-6026899132)가 완료 근거다. 이전 실패/대기 문단은 당시 이력이며 최신 판정은 위 성공이다. Helper 단독 single_backup_acceptance=false는 전체 drill의 성공과 별개다. 다른 Engine, 실제 workload/volume 일관성과 운영 환경 안전성은 검증하지 않았다.
+
+2026-10-07 자동 cleanup 실행 범위 보완: 사전 검사 거부 시 이전 실행의 소유권 기록을 정리하지 않는다. 이번 실행의 durable intent 이후 실제 생성 호출을 시작한 경우에만 host 조건을 다시 확인하고 동일 run ID의 기록만 정리한다. 이전 기록은 명시적인 --cleanup-only로 처리하며, 다른 run journal 또는 혼합된 legacy 기록은 자동 정리를 거절한다. 실제 main/생성/정리 경로를 사용하는 Docker 대역 회귀 11개를 추가했다. 기존 snapshot의 진단 보존 테스트는 새로운 자동 정리 경계만 대역으로 처리한다. 복구/진단/키 처리의 성공 조건과 제한 시간은 변경하지 않는다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
 
