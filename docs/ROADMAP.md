@@ -201,7 +201,7 @@ worker-02
 
 - [x] normal digest deploy
 - [x] broken release rollback
-- [x] external CLI conflict
+- [x] external conflict
 - [x] API restart during update
 - [x] Agent response loss
 - [x] capacity shortage
@@ -243,8 +243,8 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager resource contention — run #37414696823 (PR #103 이후 재검증)
 - [x] Swarm backup/restore drill — run #37414123569 (PR #102 이후 재검증)
 - [x] Docklane DB restore — run #37414123562 (PR #102 이후 재검증)
-- [ ] encryption/trust key restore — recovery-v2 run #37406102027 failed at restore-unlock (exit 137); PR #100 parser fix and separate node-ready/leader waits verified, real acceptance pending ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
-- [ ] recovery runbook
+- [ ] encryption/trust key restore — 마지막 기존 run #37406102027은 restore-unlock 30초/137 실패. 정지된 단일 복원 사본의 offline quorum rebuild 구현 후 새 실환경 검증 대기 ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
+- [ ] recovery runbook — [버전 한정 복구 절차](COLD_BACKUP_RECOVERY.md) 작성, 전체 실제 acceptance 확인 전 미완료
 
 2026-10-06 Agent identity 보완: 무기한 endpoint 검증 캐시를 제거하고 모든 보호된 조회와 mutation 대상 선택에서 현재 identity를 확인한다. `/v1/cluster` 응답도 기준 cluster와 대조한다. 최초 정상 identity로 정한 기준 cluster와 전송 후 mutation 재시도 금지를 유지한다. HTTP 회귀 6개를 포함한 API 테스트 130개, 타입 검사, 빌드와 mTLS는 PR #101 validate run #37412630341에서 통과했다. Identity 확인과 후속 요청은 원자적이지 않으므로 요청 도중의 재가입까지 차단하려면 별도 Agent 측 사전조건이 필요하다.
 
@@ -266,7 +266,11 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 2026-10-06 대조 실험 소유권 보완: 생성 전에 실행별 nonce와 리소스 intent를 영속화하고 같은 식별 label을 Docker 리소스에 부여한다. 생성 응답을 잃으면 label 조회 후 전체 ID, 이름과 label을 inspect로 검증해 정리한다. 아직 관찰되지 않은 생성은 완료/부재로 단정하지 않고 intent를 유지한다. 삭제 응답 유실 후 정확한 ID의 명시적인 not-found는 정리 완료로 인정하며 연결/권한/timeout/불일치는 기록을 보존한다. 신규 subprocess 회귀 17개와 기존 probe 회귀 23개를 로컬에서 통과했다. [소유권 및 재시도 계약](QUORUM_PROBE_CLEANUP.md)을 참조한다. 복구 경로, unlock 재전송 금지와 단일 백업 acceptance는 변경하지 않는다.
 
-PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 미완료다.
+2026-10-06 PR #108 이후 결과 동기화: PR validation #37436106395(운영 회귀117개), main validation #37436689720과 실제 quorum 대조 실험 #37436689688이 성공했다. 생성/삭제 응답 유실은 실제 subprocess 대역 회귀로 검증했고 실제 Docker 실행은 기존 실험과 정상 cleanup의 호환성 검증이다. [PR #108 체크포인트](https://github.com/KimHG1995/Docklane/pull/108#issuecomment-6013016457)를 근거로 하며 단일 백업 완료로 해석하지 않는다.
+
+2026-10-06 단일 cold backup 경로 구현: 원래 manager 세 ID의 명시적 부재와 복원 Docker 정지를 확인한 뒤 격리된 helper가 동일 Moby vendor의 UnlockKey+ForceNewCluster를 함께 적용한다. 실패한 사본의 자동 재시도는 금지하고, 정상 Docker 재시작 후 기존 키/CA/cluster ID/leader 및 키 회전/재시작/worker 가입을 검증한다. Go 정책8개와 Python 격리/호출10개, Bash/workflow4개, 기존 trust-key8개가 로컬에서 통과했다. 고정 vendor 어댑터는 별도 PR build gate로 검증하고 실제 acceptance는 main recovery-v2 결과 확인 전 미완료로 유지한다. [실행 절차와 제한](COLD_BACKUP_RECOVERY.md)에 기록했다.
+
+PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 새 실제 실행 확인 전 미완료다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
 

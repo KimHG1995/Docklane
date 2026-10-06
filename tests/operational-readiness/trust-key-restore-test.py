@@ -139,7 +139,7 @@ class RecoveryHarnessTests(unittest.TestCase):
     def negative_block(self) -> str:
         # Test the actual executable block, not a separately reimplemented check.
         start = self.source.index('\nBAD_KEY=')
-        end = self.source.index('\nunlock "$RESTORE" "$KEY1" restore-unlock', start)
+        end = self.source.index('\noffline_restore_quorum "$RID"', start)
         return 'KEY1="$TEST_KEY"\n' + self.source[start:end]
 
     def test_bad_key_changes_decoded_bytes(self) -> None:

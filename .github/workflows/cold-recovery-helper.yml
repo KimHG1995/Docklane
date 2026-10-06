@@ -1,0 +1,34 @@
+name: cold-recovery-helper
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/cold-recovery-helper.yml'
+      - '.github/workflows/operational-readiness-recovery-v2.yml'
+      - 'scripts/build-cold-recovery.sh'
+      - 'tests/operational-readiness/cold-recovery/**'
+      - 'tests/operational-readiness/cold-recovery-test.py'
+      - 'tests/operational-readiness/offline-quorum-rebuild*'
+      - 'tests/operational-readiness/trust-key-restore-v2.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-helper-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: actions/checkout@v4
+        with:
+          repository: moby/moby
+          ref: 89c5e8fd66634b6128fc4c0e6f1236e2540e46e0
+          path: _moby/src/github.com/docker/docker
+          persist-credentials: false
+      - name: Typecheck and test against the exact Engine vendor tree
+        run: bash scripts/build-cold-recovery.sh _moby/src/github.com/docker/docker "$RUNNER_TEMP/docklane-cold-recovery"
