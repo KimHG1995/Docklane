@@ -238,7 +238,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager loss — run #36681425236
 - [x] quorum loss — run #36682067172
 - [x] network partition — run #36682848436
-- [x] manager별 Go Agent 배포 — run #36831602534
+- [x] manager별 Go Agent 배포 — run #37412930783 (PR #101 이후 재검증)
 - [x] Agent reconnect/failover — run #36941789676
 - [x] manager resource contention — run #36950209098
 - [x] Swarm backup/restore drill — run #36968255603
@@ -246,7 +246,9 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [ ] encryption/trust key restore — recovery-v2 run #37406102027 failed at restore-unlock (exit 137); PR #100 parser fix and separate node-ready/leader waits verified, real acceptance pending ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
 - [ ] recovery runbook
 
-2026-10-06 Agent identity 보완: 무기한 endpoint 검증 캐시를 제거하고 모든 보호된 조회와 mutation 대상 선택에서 현재 identity를 확인한다. `/v1/cluster` 응답도 기준 cluster와 대조한다. 최초 정상 identity로 정한 기준 cluster와 전송 후 mutation 재시도 금지를 유지한다. HTTP 회귀 6개를 추가했으며 기존 실환경 failover run이 이 추가 조건까지 검증했다는 뜻은 아니다. Identity 확인과 후속 요청은 원자적이지 않으므로 요청 도중의 재가입까지 차단하려면 별도 Agent 측 사전조건이 필요하다.
+2026-10-06 Agent identity 보완: 무기한 endpoint 검증 캐시를 제거하고 모든 보호된 조회와 mutation 대상 선택에서 현재 identity를 확인한다. `/v1/cluster` 응답도 기준 cluster와 대조한다. 최초 정상 identity로 정한 기준 cluster와 전송 후 mutation 재시도 금지를 유지한다. HTTP 회귀 6개를 포함한 API 테스트 130개, 타입 검사, 빌드와 mTLS는 PR #101 validate run #37412630341에서 통과했다. Identity 확인과 후속 요청은 원자적이지 않으므로 요청 도중의 재가입까지 차단하려면 별도 Agent 측 사전조건이 필요하다.
+
+2026-10-06 recovery cleanup 보완: DB/Swarm/trust-key 정리는 inspect 통신 오류, 권한 오류, ID 불일치와 삭제 실패에서 ownership을 보존하고 실패를 반환한다. 기록된 리소스의 명시적인 부재만 idempotent 성공으로 처리한다. 실제 세 cleanup 스크립트를 사용하는 회귀 8개와 legacy workflow 회귀 1개를 추가했다. 이는 전체 복구 acceptance를 새로 통과했다는 뜻은 아니다. Cleanup 변경이 오래된 v1 복구를 자동 재실행하지 않도록 v1은 수동 실행만 유지하며 현재 recovery-v2 및 PR validation은 유지한다.
 
 PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 미완료다.
 

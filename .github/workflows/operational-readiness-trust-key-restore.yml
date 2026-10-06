@@ -2,12 +2,8 @@ name: operational-readiness-trust-key-restore
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/operational-readiness-trust-key-restore.yml'
-      - 'tests/operational-readiness/trust-key-restore.sh'
-      - 'tests/operational-readiness/trust-key-restore-cleanup.sh'
+
+# Legacy v1 is retained for explicit investigation; bounded recovery-v2 is current.
 
 concurrency:
   group: operational-readiness-three-manager
