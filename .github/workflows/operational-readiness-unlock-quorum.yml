@@ -1,0 +1,46 @@
+name: operational-readiness-unlock-quorum
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/operational-readiness-unlock-quorum.yml'
+      - 'tests/operational-readiness/unlock-quorum-probe.py'
+      - 'tests/operational-readiness/recovery-diagnostics.py'
+
+concurrency:
+  group: operational-readiness-three-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  unlock-quorum-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DOCKLANE_OR_DISPOSABLE_HOST: '1'
+      DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-unlock-quorum-probe
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify deterministic preflight
+        run: |
+          python3 -m py_compile tests/operational-readiness/unlock-quorum-probe.py tests/operational-readiness/recovery-diagnostics.py
+          python3 tests/operational-readiness/unlock-quorum-probe-test.py
+      - name: Run differential probe (not backup acceptance)
+        run: python3 tests/operational-readiness/unlock-quorum-probe.py
+      - name: Cleanup owned probe resources
+        if: always()
+        run: python3 tests/operational-readiness/unlock-quorum-probe.py --cleanup-only
+      - name: Upload sanitized probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-unlock-quorum-probe-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/docklane-unlock-quorum-probe/unlock-quorum-probe.json
+            ${{ runner.temp }}/docklane-unlock-quorum-probe/unlock-quorum-pending.json
+          if-no-files-found: error
+          retention-days: 14
