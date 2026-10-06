@@ -24,6 +24,8 @@ NETWORK = 'docklane-or-manager-net'
 IMAGE = 'docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac'
 UNLOCK_SECONDS = 30
 SNAPSHOT_SECONDS = 10
+LOCAL_STATE_HELPER = '/usr/local/bin/docklane-local-swarm-status'
+STATE_SOURCE = 'ping-swarm-header'
 HEX_ID = re.compile(r'[a-f0-9]{64}\Z')
 
 
@@ -33,16 +35,20 @@ class ProbeError(RuntimeError):
 
 def pending_evidence(state, stacks):
     """Classify normalized parser output, never publish arbitrary daemon fields."""
-    unlock = {i for i, stack in enumerate(stacks) if any(
+    unlock = {i for i, stack in enumerate(stacks) if stack.get('state') == 'chan receive' and any(
         f.get('function') == 'github.com/docker/docker/daemon/cluster.(*Cluster).UnlockSwarm'
         for f in stack.get('frames', []))}
-    leader = {i for i, stack in enumerate(stacks) if any(
+    leader = {i for i, stack in enumerate(stacks) if stack.get('state') == 'select' and any(
         f.get('function') == 'github.com/moby/swarmkit/v2/manager/state/raft.WaitForLeader'
+        for f in stack.get('frames', [])) and any(
+        f.get('function') == 'github.com/moby/swarmkit/v2/manager.(*Manager).Run'
         for f in stack.get('frames', []))}
-    if (state.get('LocalNodeState') != 'pending' or state.get('ControlAvailable') is not True
+    if (state.get('LocalNodeState') != 'pending' or state.get('StateSource') != STATE_SOURCE
             or not unlock or not leader or unlock & leader):
         raise ProbeError('expected separate pending-unlock and leader-wait evidence was not established')
-    return {'state': 'pending', 'control_available': True,
+    # Ping reports local node state, not ControlAvailable. Manager startup is
+    # witnessed independently by the selected WaitForLeader stack.
+    return {'state': 'pending', 'control_available': None, 'state_source': STATE_SOURCE,
             'unlock_wait_observed': True, 'leader_wait_observed': True,
             'waits_in_separate_stacks': True}
 
@@ -246,11 +252,13 @@ class Probe:
         state, stacks = {}, []
         state_probe = 'unavailable'
         try:
-            value = json.loads(collect(['docker', 'info', '--format', '{{json .Swarm}}'], 'pending state'))
+            # /_ping -> Cluster.Status reads the node runner locally. /info also
+            # queries Raft-backed cluster/nodes and can block without quorum.
+            value = json.loads(collect([LOCAL_STATE_HELPER], 'local Swarm status'))
             if (isinstance(value, dict)
-                    and value.get('LocalNodeState') in ('inactive', 'pending', 'active', 'error', 'locked')
-                    and isinstance(value.get('ControlAvailable'), bool)):
-                state = {key: value[key] for key in ('LocalNodeState', 'ControlAvailable')}
+                    and value.get('LocalNodeState') in ('inactive', 'pending', 'error', 'locked', 'active/worker', 'active/manager')
+                    and value.get('StateSource') == STATE_SOURCE):
+                state = {key: value[key] for key in ('LocalNodeState', 'StateSource')}
                 state_probe = 'collected'
             else:
                 state_probe = 'invalid-shape'
@@ -285,7 +293,8 @@ class Probe:
         self.report['snapshot'] = {
             'status': 'collected' if state and stacks else 'partial',
             'state': state.get('LocalNodeState', 'unknown'),
-            'control_available': state.get('ControlAvailable'),
+            'control_available': None,  # Not returned by the local ping endpoint.
+            'state_source': state.get('StateSource'),
             'state_probe': state_probe, 'stack_probe': stack_probe,
             'budget_exhausted': time.monotonic() >= deadline,
             'stacks': stacks,
@@ -308,6 +317,10 @@ class Probe:
 
     def execute(self):
         self.require_local_host()
+        helper = Path(os.environ.get('DOCKLANE_OR_LOCAL_STATE_HELPER', ''))
+        if (not helper.is_absolute() or ':' in str(helper) or helper.is_symlink()
+                or not helper.is_file() or not os.access(helper, os.X_OK)):
+            raise ProbeError('build and provide an executable local Swarm status helper')
         if self.own.is_symlink():
             raise ProbeError('ownership directory must not be a symlink')
         if self.own.exists() and any(self.own.iterdir()):
@@ -348,6 +361,9 @@ class Probe:
         rows = self.wait(self.topology, 'initial topology')
         target = 'docklane-or-' + next(row[0] for row in rows if row[3] == 'Reachable')
         peers = [name for name in NAMES if name != target]
+        # Install before the restart/unlock experiment; never into the host.
+        self.docker.call(['cp', str(helper), self.owned(target) + ':' + LOCAL_STATE_HELPER],
+                         'install local Swarm status helper')
         cluster = self.cli(target, ['info', '--format', '{{.Swarm.Cluster.ID}}'], 'cluster identity')
         if not cluster:
             raise ProbeError('cluster identity missing')

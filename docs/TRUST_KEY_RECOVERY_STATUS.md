@@ -23,13 +23,23 @@ Engine 28.5.2의 UnlockSwarm은 제어 mutex를 잡은 채 node runner의 준비
 
 제품 API/Web/Agent, trust-key-restore-v2.sh, 기존 복구 순서와 unlock 제한 시간은 변경하지 않는다. Autolock을 해제하거나 실패를 무시하여 acceptance를 통과시키지 않는다. PR #101~#103의 identity, cleanup, resource contention 보완도 전체 암호화 복구 성공을 뜻하지 않는다. Legacy v1은 PR #102 이후 수동 실행만 남아 있다.
 
-## 대조 실험의 마지막 확인 결과와 진단 수정
+## 대조 실험의 실패 이력과 진단 수정
 
 [run #37419223384](https://github.com/KimHG1995/Docklane/actions/runs/37419223384)는 `main@8e61dbd`에서 실패했다. Quorum이 있는 대조군 unlock은 완료했지만, peer를 pause한 조건에서 진단용 `docker info`가 내부 3초 제한으로 exit 137을 반환했다. 스택 수집과 peer 재개에는 도달하지 못했고, cleanup과 artifact 업로드는 성공했다. 이 결과는 원래 단일 백업 복구의 30초 unlock timeout과 구분한다. [체크포인트](https://github.com/KimHG1995/Docklane/pull/105#issuecomment-6010113874)의 artifact `11392640956`은 결과 JSON 한 개이며 ZIP SHA256은 `84d0ad327011d3eac52850a8e3ca7a3b685cc5cfe6d02636dd03345ba4b3b753`이다.
 
-이번 수정은 `Probe.snapshot()`의 상태 조회와 스택 수집을 분리한다. 조회 timeout 또는 잘못된 JSON/필수 필드 오류는 unknown/partial로 기록하고, ownership이 확인된 daemon의 스택은 남은 예산 내에서 별도로 수집한다. 정상 조회 결과도 상태와 control boolean만 보존한다. 재개 판정 전에 기존 결과 JSON의 `snapshot` 필드에 정규화한 프레임을 저장하므로 이후 판정 실패와 cleanup에도 증거가 남는다.
+PR #106은 `Probe.snapshot()`의 상태 조회와 스택 수집을 분리했다. 조회 timeout 또는 잘못된 JSON/필수 필드 오류는 unknown/partial로 기록하고, ownership이 확인된 daemon의 스택은 남은 예산 내에서 별도로 수집한다. 당시 정상 info 조회 결과는 상태와 control boolean만 보존했다. 재개 판정 전에 기존 결과 JSON의 `snapshot` 필드에 정규화한 프레임을 저장하므로 이후 판정 실패와 cleanup에도 증거가 남는다.
 
 상태가 unknown이면 스택이 있어도 기존 `pending_evidence` 검증은 실패한다. 정보 부족을 pending으로 추정하거나 재개 조건을 완화하지 않는다. 진단 명령은 ownership 확인부터 공유 10초 예산, 각 외부 명령 최대 4초와 내부 명령 3초 제한을 사용한다. 이 예산은 unlock의 30초 예산에 포함되며 별도로 추가하지 않는다. 소유권 검증 실패 시 exec/signal을 금지하고, signal 실패 후에는 이전 dump를 읽지 않는다. 전체 대조 실험 또는 단일 백업 복구 성공은 새 실제 실행으로만 판단한다.
+
+## 로컬 준비 상태 조회
+
+[PR #106 이후 run #37422751815](https://github.com/KimHG1995/Docklane/actions/runs/37422751815)는 info 상태 조회가 unavailable인 상태에서도 스택 요약 62개를 보존했다. 별도 UnlockSwarm과 WaitForLeader/Manager.Run 대기를 확인했지만 unknown 상태 때문에 peer 재개 전에 실패했다. Cleanup과 artifact 업로드는 성공했고 main validate #37422751838 및 운영 회귀 80개가 통과했다. Artifact `11393194019`의 ZIP SHA256은 `e705c7a33cfc135348b0eb7ba6e515419d695f4e86718541078ed4abf303702a`다. 이 실행의 info 종료 코드는 보존되지 않았다.
+
+Moby의 [Info](https://github.com/moby/moby/blob/v28.5.2/daemon/cluster/swarm.go#L432-L498)는 Raft-backed cluster/nodes 조회를 포함한다. 반면 [HEAD /_ping](https://github.com/moby/moby/blob/v28.5.2/api/server/router/system/system_routes.go#L39-L67)의 Swarm 헤더는 [Cluster.Status](https://github.com/moby/moby/blob/v28.5.2/daemon/cluster/swarm.go#L496-L515)를 통해 node runner 상태를 로컬에서 읽는다. 대조 실험의 snapshot만 후자로 전환한다. 이를 즉시 응답의 절대 보장으로 간주하지 않고 helper 2초, 내부 exec 3초, 외부 명령 최대 4초와 공유 진단 10초 제한을 유지한다.
+
+`local-swarm-status.go`는 Go 표준 라이브러리만 사용하며 owned follower에 복사한 정적 바이너리가 `/var/run/docker.sock`에 HEAD 요청 하나만 보낸다. TCP/프록시/Docker 환경변수, redirect, retry, info fallback은 사용하지 않는다. HTTP 200과 단일 Swarm 헤더, 문서화된 여섯 값만 허용한다. 누락/중복/비정상/시간 초과는 unknown이며 원시 응답을 출력하지 않는다.
+
+재개 판정은 `StateSource=ping-swarm-header`의 실제 pending과 별도 스택의 chan receive UnlockSwarm 및 select WaitForLeader + Manager.Run을 요구한다. Ping은 ControlAvailable을 제공하지 않으므로 이를 true로 합성하지 않고 null로 남긴다. 동일한 살아 있는 unlock과 남은 시간 확인, 성공 후 topology/cluster ID/key 보존 검증을 계속 수행한다. 대기 함수 이름만 있거나 unknown/active/locked 상태이면 재개하지 않는다. 이 변경은 기존 peer 복귀 대조 실험만 다루며 단일 백업의 강제 quorum 복구를 구현한 것은 아니다.
 
 ## 유지하는 복구 검증
 
@@ -57,6 +67,7 @@ Goroutine 헤더 경계와 상태 문자열 파싱은 분리돼 있다. 미지�
 PR #103의 진단 13개, 파서 9개, 복구 Bash 8개, cleanup/legacy trigger 9개, 준비 대기 8개로 총 47개 회귀가 통과했다. [검증 체크포인트](https://github.com/KimHG1995/Docklane/pull/103#issuecomment-6009469585)를 참조한다. 새 대조 실험의 21개 회귀는 Python 오케스트레이션과 실제 자식 프로세스를 실행하되 Docker는 대역이다. 이를 실환경 복구 성공 근거로 사용하지 않는다.
 
 ```bash
+python3 tests/operational-readiness/local-swarm-status-test.py
 python3 tests/operational-readiness/unlock-quorum-probe-test.py
 python3 tests/operational-readiness/unlock-quorum-snapshot-test.py
 python3 tests/operational-readiness/recovery-diagnostics-test.py

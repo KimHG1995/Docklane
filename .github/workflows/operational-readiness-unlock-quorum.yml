@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/operational-readiness-unlock-quorum.yml'
       - 'tests/operational-readiness/unlock-quorum-probe.py'
+      - 'tests/operational-readiness/local-swarm-status.go'
       - 'tests/operational-readiness/recovery-diagnostics.py'
 
 concurrency:
@@ -24,12 +25,23 @@ jobs:
       DOCKLANE_OR_DISPOSABLE_HOST: '1'
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
       - name: Verify deterministic preflight
         run: |
           python3 -m py_compile tests/operational-readiness/unlock-quorum-probe.py tests/operational-readiness/recovery-diagnostics.py
           python3 tests/operational-readiness/unlock-quorum-probe-test.py
+      - name: Build and verify local Swarm status reader
+        run: |
+          test -z "$(gofmt -l tests/operational-readiness/local-swarm-status.go)"
+          python3 tests/operational-readiness/local-swarm-status-test.py
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/docklane-local-swarm-status" tests/operational-readiness/local-swarm-status.go
+          test -x "$RUNNER_TEMP/docklane-local-swarm-status"
       - name: Run differential probe (not backup acceptance)
         env:
+          DOCKLANE_OR_LOCAL_STATE_HELPER: ${{ runner.temp }}/docklane-local-swarm-status
           DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-unlock-quorum-probe
         run: python3 tests/operational-readiness/unlock-quorum-probe.py
       - name: Cleanup owned probe resources
