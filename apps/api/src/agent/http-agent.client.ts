@@ -78,7 +78,6 @@ export class HttpAgentClient implements AgentClient {
   private readonly registry: ManagerAgentConfig;
   private activeId: string;
   private referenceClusterId: string | null = null;
-  private readonly verifiedClusters = new Map<string, string>();
   private readonly unavailableUntil = new Map<string, number>();
 
   constructor(
@@ -104,7 +103,13 @@ export class HttpAgentClient implements AgentClient {
   }
 
   inspectCluster(): Promise<ClusterResponse> {
-    return this.safeRequest('GET', '/v1/cluster', ClusterResponseSchema);
+    return this.safeRequest(
+      'GET',
+      '/v1/cluster',
+      ClusterResponseSchema,
+      undefined,
+      (value) => value.cluster.id,
+    );
   }
 
   listServices(): Promise<ServiceSummary[]> {
@@ -394,6 +399,7 @@ export class HttpAgentClient implements AgentClient {
     path: string,
     schema: z.ZodType<T>,
     body?: unknown,
+    responseClusterId?: (value: T) => string,
   ): Promise<T> {
     let lastError: unknown = new Error('No manager Agent is available');
 
@@ -401,6 +407,9 @@ export class HttpAgentClient implements AgentClient {
       try {
         await this.verifyAgent(config);
         const value = await this.requestTo(config, method, path, schema, body);
+        if (responseClusterId) {
+          this.assertClusterIdentity(config, responseClusterId(value));
+        }
         this.markActive(config);
         return value;
       } catch (error) {
@@ -488,14 +497,8 @@ export class HttpAgentClient implements AgentClient {
   }
 
   private async verifyAgent(config: AgentConfig): Promise<void> {
-    const cachedClusterId = this.verifiedClusters.get(config.id);
-    if (
-      cachedClusterId &&
-      (this.referenceClusterId === null ||
-        cachedClusterId === this.referenceClusterId)
-    ) {
-      return;
-    }
+    // An endpoint can rejoin another Swarm without an observed outage.
+    // Never use a previous identity to authorize this read or mutation selection.
     await this.readIdentity(config);
   }
 
@@ -521,22 +524,22 @@ export class HttpAgentClient implements AgentClient {
       );
     }
 
-    const referenceClusterId = this.referenceClusterId;
-    if (
-      referenceClusterId !== null &&
-      identity.clusterId !== referenceClusterId
-    ) {
-      throw new AgentIdentityError(
-        config.id,
-        `cluster ${identity.clusterId} does not match ${referenceClusterId}`,
-      );
-    }
+    this.assertClusterIdentity(config, identity.clusterId);
 
     if (this.referenceClusterId === null) {
       this.referenceClusterId = identity.clusterId;
     }
-    this.verifiedClusters.set(config.id, identity.clusterId);
     return identity;
+  }
+
+  private assertClusterIdentity(config: AgentConfig, clusterId: string): void {
+    const referenceClusterId = this.referenceClusterId;
+    if (referenceClusterId !== null && clusterId !== referenceClusterId) {
+      throw new AgentIdentityError(
+        config.id,
+        `cluster ${clusterId} does not match ${referenceClusterId}`,
+      );
+    }
   }
 
   private markActive(config: AgentConfig): void {
@@ -549,7 +552,6 @@ export class HttpAgentClient implements AgentClient {
       config.id,
       Date.now() + AGENT_FAILURE_COOLDOWN_MS,
     );
-    this.verifiedClusters.delete(config.id);
   }
 
   private async requestTo<T>(
