@@ -36,9 +36,19 @@ python3 tests/operational-readiness/unlock-quorum-probe.py
 
 실제 실행은 `operational-readiness-unlock-quorum`의 main push 또는 수동 실행이다. PR에서는 기존 validate의 빠른 Python 회귀만 실행한다. 원래 recovery-v2와 legacy v1 workflow는 바꾸지 않는다. 문서 변경만으로 heavy 실험을 재실행하지 않는다.
 
-업로드 대상은 `unlock-quorum-probe.json`과 `unlock-quorum-pending.json` 두 파일뿐이다. 명령 stdout/stderr는 익명 임시 파일에서 받고 원시 스택은 기존 정규화기로 해석한다. 공개 JSON은 판정 boolean, 제한된 상태, image/version, 경과 시간, 안전한 오류 분류와 cleanup 결과로 제한한다. Unlock key는 stdin으로 전달하며 key, join token, 개인키, 임의 daemon 오류와 함수 인자를 업로드하지 않는다. 이는 모든 기존 artifact의 일반적인 비밀정보 감사 완료를 뜻하지 않는다.
+업로드 대상은 `unlock-quorum-probe.json`과 `unlock-quorum-pending.json` 두 파일뿐이다. 명령 stdout/stderr는 익명 임시 파일에서 받고 원시 스택은 기존 정규화기로 해석한다. 공개 JSON은 판정 boolean, 제한된 상태, image/version, 경과 시간, 안전한 오류 분류, cleanup 결과와 기존 정규화기가 허용한 함수명/파일명/줄 번호 프레임으로 제한한다. Unlock key는 stdin으로 전달하며 key, join token, 개인키, 임의 daemon 오류와 함수 인자를 업로드하지 않는다. 이는 모든 기존 artifact의 일반적인 비밀정보 감사 완료를 뜻하지 않는다.
 
 `--cleanup-only`도 disposable opt-in과 local Unix Docker endpoint를 확인한다. 알 수 없는 소유권이나 원격 context로 정리 명령을 보내지 않는다. 이 실험은 외부에서 동시에 자원을 변경하지 않는 전용 runner를 전제로 한다.
+
+## 부분 진단 보존
+
+`Probe.snapshot()`은 상태 조회 실패를 스택 수집의 선행 실패로 취급하지 않는다. 명령 실패, 잘못된 JSON 또는 필수 상태 필드 오류는 `state=unknown`, `control_available=null`로 기록하고 스택은 독립적으로 시도한다. 진단 명령은 소유권 확인부터 공유 10초 예산으로 제한하며, 각 외부 명령은 최대 4초, 내부 명령은 3초 제한이다. 새 예산은 unlock의 30초를 늘리지 않는다.
+
+소유권 확인 실패 시 exec와 signal을 보내지 않는다. Signal 실패 시 과거 dump를 읽지 않는다. 스택은 최대 3회 읽고 시간 예산이 소진되면 새 명령을 시작하지 않는다. 획득한 프레임은 기존 파서의 인자 제거 및 256개 요약/요약당 40개 프레임 제한을 그대로 적용한다.
+
+`unlock-quorum-probe.json`의 `snapshot`에 수집 상태, 상태 조회/스택 probe 분류, 예산 소진 여부와 정규화한 스택을 재개 판정 전에 기록한다. 판정 실패 후 main이 결과를 다시 저장해도 이 필드는 보존된다. 임의 명령 stdout/stderr 또는 예외 원문은 추가하지 않는다. `snapshot.status=collected`도 peer 재개 허가를 뜻하지 않는다. 상태 조회가 unknown이거나 필요한 별도 대기 스택이 없으면 기존 판정은 실패하며, 만료되거나 시간이 부족한 unlock도 재개하지 않는다.
+
+원본에서 새 회귀 10개의 세부 assertion 20개가 실패했고 수정 후 10개가 통과했다. 기존 probe 회귀 21개도 통과했다. Docker 대역으로 실제 snapshot, 파서, 실패 처리와 재개 판정을 실행한 결과이며 실환경 복구 성공의 근거는 아니다.
 
 ## 운영 판단과 남은 검증
 

@@ -23,6 +23,7 @@ NAMES = tuple(f'docklane-or-manager-{i:02d}' for i in range(1, 4))
 NETWORK = 'docklane-or-manager-net'
 IMAGE = 'docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac'
 UNLOCK_SECONDS = 30
+SNAPSHOT_SECONDS = 10
 HEX_ID = re.compile(r'[a-f0-9]{64}\Z')
 
 
@@ -180,12 +181,12 @@ class Probe:
             out.write('\n')
         temporary.replace(self.log / name)
 
-    def owned(self, name):
+    def owned(self, name, seconds=10):
         cid = self.ids[name]
         if not HEX_ID.fullmatch(cid):
             raise ProbeError('invalid container ownership ID')
         value = json.loads(self.docker.call(
-            ['inspect', '--type', 'container', '--format', '{{json .}}', cid], 'ownership'))
+            ['inspect', '--type', 'container', '--format', '{{json .}}', cid], 'ownership', seconds))
         if (value.get('Id') != cid or value.get('Name') != '/' + name
                 or value.get('HostConfig', {}).get('PidMode') not in ('', 'private')):
             raise ProbeError('container ownership or private PID namespace mismatch')
@@ -227,19 +228,70 @@ class Probe:
         spec = importlib.util.spec_from_file_location('recovery_diagnostics', HERE / 'recovery-diagnostics.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        cid = self.owned(target)
-        state = json.loads(self.docker.inner(cid, ['info', '--format', '{{json .Swarm}}'], 'pending state', 3))
-        self.docker.call(['exec', cid, 'timeout', '-s', 'KILL', '3', 'sh', '-c', module.STACK_SIGNAL], 'stack signal', 4)
-        for _ in range(3):
-            try:
-                raw = self.docker.call(['exec', cid, 'timeout', '-s', 'KILL', '3', 'sh', '-c', module.STACK_READ], 'stack read', 4)
-                stacks = module.stack_summary(raw)
-                if stacks:
-                    return state, stacks
-            except ProbeError:
-                pass
-            time.sleep(0.1)
-        raise ProbeError('no normalized stack evidence')
+        deadline = time.monotonic() + SNAPSHOT_SECONDS
+
+        def budget():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProbeError('snapshot diagnostic budget exhausted')
+            return min(4, remaining)
+
+        # Ownership is still mandatory; unavailable Swarm state is not ownership.
+        cid = self.owned(target, seconds=budget())
+
+        def collect(args, label):
+            return self.docker.call(
+                ['exec', cid, 'timeout', '-s', 'KILL', '3', *args], label, budget())
+
+        state, stacks = {}, []
+        state_probe = 'unavailable'
+        try:
+            value = json.loads(collect(['docker', 'info', '--format', '{{json .Swarm}}'], 'pending state'))
+            if (isinstance(value, dict)
+                    and value.get('LocalNodeState') in ('inactive', 'pending', 'active', 'error', 'locked')
+                    and isinstance(value.get('ControlAvailable'), bool)):
+                state = {key: value[key] for key in ('LocalNodeState', 'ControlAvailable')}
+                state_probe = 'collected'
+            else:
+                state_probe = 'invalid-shape'
+        except ProbeError:
+            pass  # A timed-out read must not prevent independent stack capture.
+        except (ValueError, RecursionError):
+            state_probe = 'invalid-json'
+
+        stack_probe = 'signal-failed'
+        try:
+            collect(['sh', '-c', module.STACK_SIGNAL], 'stack signal')
+        except ProbeError:
+            pass  # Without a successful signal, do not consume a stale dump.
+        else:
+            stack_probe = 'unavailable'
+            for attempt in range(3):
+                if time.monotonic() >= deadline:
+                    break
+                try:
+                    raw = collect(['sh', '-c', module.STACK_READ], 'stack read')
+                    stacks = module.stack_summary(raw)
+                    if stacks:
+                        stack_probe = 'collected'
+                        break
+                except ProbeError:
+                    pass
+                if attempt < 2:
+                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+
+        # Persist before the strict resume gate can reject unknown/partial data.
+        # Only allowlisted state and the existing argument-free parser survive.
+        self.report['snapshot'] = {
+            'status': 'collected' if state and stacks else 'partial',
+            'state': state.get('LocalNodeState', 'unknown'),
+            'control_available': state.get('ControlAvailable'),
+            'state_probe': state_probe, 'stack_probe': stack_probe,
+            'budget_exhausted': time.monotonic() >= deadline,
+            'stacks': stacks,
+        }
+        self.publish('unlock-quorum-probe.json', self.report)
+        return state, stacks
 
     def require_local_host(self):
         if sys.platform != 'linux' or os.environ.get('DOCKLANE_OR_DISPOSABLE_HOST') != '1':

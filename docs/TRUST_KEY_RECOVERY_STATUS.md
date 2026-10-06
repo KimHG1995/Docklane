@@ -23,6 +23,14 @@ Engine 28.5.2의 UnlockSwarm은 제어 mutex를 잡은 채 node runner의 준비
 
 제품 API/Web/Agent, trust-key-restore-v2.sh, 기존 복구 순서와 unlock 제한 시간은 변경하지 않는다. Autolock을 해제하거나 실패를 무시하여 acceptance를 통과시키지 않는다. PR #101~#103의 identity, cleanup, resource contention 보완도 전체 암호화 복구 성공을 뜻하지 않는다. Legacy v1은 PR #102 이후 수동 실행만 남아 있다.
 
+## 대조 실험의 마지막 확인 결과와 진단 수정
+
+[run #37419223384](https://github.com/KimHG1995/Docklane/actions/runs/37419223384)는 `main@8e61dbd`에서 실패했다. Quorum이 있는 대조군 unlock은 완료했지만, peer를 pause한 조건에서 진단용 `docker info`가 내부 3초 제한으로 exit 137을 반환했다. 스택 수집과 peer 재개에는 도달하지 못했고, cleanup과 artifact 업로드는 성공했다. 이 결과는 원래 단일 백업 복구의 30초 unlock timeout과 구분한다. [체크포인트](https://github.com/KimHG1995/Docklane/pull/105#issuecomment-6010113874)의 artifact `11392640956`은 결과 JSON 한 개이며 ZIP SHA256은 `84d0ad327011d3eac52850a8e3ca7a3b685cc5cfe6d02636dd03345ba4b3b753`이다.
+
+이번 수정은 `Probe.snapshot()`의 상태 조회와 스택 수집을 분리한다. 조회 timeout 또는 잘못된 JSON/필수 필드 오류는 unknown/partial로 기록하고, ownership이 확인된 daemon의 스택은 남은 예산 내에서 별도로 수집한다. 정상 조회 결과도 상태와 control boolean만 보존한다. 재개 판정 전에 기존 결과 JSON의 `snapshot` 필드에 정규화한 프레임을 저장하므로 이후 판정 실패와 cleanup에도 증거가 남는다.
+
+상태가 unknown이면 스택이 있어도 기존 `pending_evidence` 검증은 실패한다. 정보 부족을 pending으로 추정하거나 재개 조건을 완화하지 않는다. 진단 명령은 ownership 확인부터 공유 10초 예산, 각 외부 명령 최대 4초와 내부 명령 3초 제한을 사용한다. 이 예산은 unlock의 30초 예산에 포함되며 별도로 추가하지 않는다. 소유권 검증 실패 시 exec/signal을 금지하고, signal 실패 후에는 이전 dump를 읽지 않는다. 전체 대조 실험 또는 단일 백업 복구 성공은 새 실제 실행으로만 판단한다.
+
 ## 유지하는 복구 검증
 
 - Negative fixture는 실제로 다른 32바이트 키를 만든다. 마지막 base64 문자의 무시되는 padding bit만 바꾸지 않는다.
@@ -40,7 +48,7 @@ Engine 28.5.2의 UnlockSwarm은 제어 mutex를 잡은 채 node runner의 준비
 
 원본 로그/stack은 익명 임시 파일에서 읽고 artifact 경로에 쓰지 않는다. 함수 인자, 메모리 주소, 임의 오류 원문, 환경변수, unlock/join key와 개인키는 진단 JSON에 복사하지 않는다. collected는 수집 완료이지 복구 성공이 아니며 전체 goroutine이나 모든 비밀정보를 빠짐없이 검사했다는 보장도 아니다. 이 설명은 진단 경로에 대한 것으로 전체 기존 artifact의 보안 감사 완료를 뜻하지 않는다.
 
-새 대조 실험은 별도의 JSON 두 개로 artifact를 제한하며 원래 복구 수집기의 실패 코드나 acceptance 필드를 위조하지 않는다. 원시 stack 대신 기존 정규화기로 확인한 별도 대기 위치의 판정만 공개한다.
+새 대조 실험은 별도의 JSON 두 개로 artifact를 제한하며 원래 복구 수집기의 실패 코드나 acceptance 필드를 위조하지 않는다. 원시 stack 대신 기존 정규화기로 확인한 별도 대기 위치의 판정과, 제한된 함수명/파일명/줄 번호 프레임을 `snapshot` 필드에 보존한다. 이 필드의 collected/partial은 수집 상태이며 복구 성공이나 peer 재개 승인이 아니다.
 
 ## 파서 및 회귀 검증
 
@@ -50,6 +58,7 @@ PR #103의 진단 13개, 파서 9개, 복구 Bash 8개, cleanup/legacy trigger 9
 
 ```bash
 python3 tests/operational-readiness/unlock-quorum-probe-test.py
+python3 tests/operational-readiness/unlock-quorum-snapshot-test.py
 python3 tests/operational-readiness/recovery-diagnostics-test.py
 python3 tests/operational-readiness/recovery-stack-test.py
 python3 tests/operational-readiness/trust-key-restore-test.py

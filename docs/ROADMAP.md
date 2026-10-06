@@ -256,6 +256,8 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 2026-10-06 대조 실험 workflow 보완: PR #104의 첫 main 실행 #37418741530은 job이 생성되기 전에 실패해 실제 Swarm 실험을 수행하지 못했다. job 수준 env에서 허용되지 않는 runner.temp 참조를 probe/cleanup step 수준 env로 이동하고 표현식 범위 및 artifact 경로 일치 회귀 2개를 추가했다. 원래 암호화 복구의 실패와 구분하며 후속 대조 실험 결과도 확인 전 성공으로 처리하지 않는다.
 
+2026-10-06 대조 실험 진단 분리: [PR #105 체크포인트](https://github.com/KimHG1995/Docklane/pull/105#issuecomment-6010113874)의 실제 run #37419223384는 quorum이 있는 unlock에 성공했지만, 격리 조건의 진단용 info가 3초 제한에서 exit 137로 실패해 스택 수집에 도달하지 못했다. Cleanup과 artifact 업로드는 성공했다. 이 실패는 원래 recovery-v2의 30초 restore-unlock 실패와 별개다. 이번 수정은 상태 조회 실패/잘못된 응답에서도 독립적인 스택을 수집하고, 엄격한 재개 판정 전에 정규화한 partial 증거를 저장한다. 진단 명령은 ownership 확인부터 공유 10초 예산을 사용한다. 상태가 unknown이면 스택이 있어도 peer를 재개하지 않으며 기존 30초 unlock, 재전송 금지와 단일 백업 acceptance는 유지한다. 새 회귀 10개와 기존 probe 회귀 21개가 Docker 대역 로컬 검증에서 통과했다. 전체 실환경 대조 실험 및 암호화 복구 완료를 뜻하지 않는다. 병합 후 결과는 해당 PR 체크포인트에 기록한다.
+
 PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 미완료다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
