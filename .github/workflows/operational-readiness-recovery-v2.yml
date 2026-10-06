@@ -8,6 +8,8 @@ on:
       - '.github/workflows/operational-readiness-recovery-v2.yml'
       - 'tests/operational-readiness/trust-key-restore-v2.sh'
       - 'tests/operational-readiness/trust-key-restore-test.py'
+      - 'tests/operational-readiness/recovery-diagnostics.py'
+      - 'tests/operational-readiness/recovery-diagnostics-test.py'
 
 concurrency:
   group: operational-readiness-three-manager
@@ -27,6 +29,7 @@ jobs:
         run: |
           bash -n tests/operational-readiness/trust-key-restore-v2.sh
           python3 tests/operational-readiness/trust-key-restore-test.py
+          python3 tests/operational-readiness/recovery-diagnostics-test.py
 
       - name: Verify disposable Docker host
         run: |
@@ -47,7 +50,7 @@ jobs:
         with:
           name: docklane-operational-readiness-recovery-v2-${{ github.run_id }}
           path: ${{ runner.temp }}/docklane-operational-readiness
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Cleanup

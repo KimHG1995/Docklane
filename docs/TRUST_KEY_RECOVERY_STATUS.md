@@ -1,41 +1,64 @@
 # Swarm 암호화 복구 검증 상태
 
-## 기준과 범위
+## 기준과 실제 실패
 
-기준 소스는 `main@5f8b010849baf6187848892e5dd682af327702f7`이다.
-[recovery-v2 run #36984088600](https://github.com/KimHG1995/Docklane/actions/runs/36984088600)은 **cancelled**이며 acceptance 성공 근거가 아니다. 실행 로그의 마지막 시나리오 메시지는 `restoring encrypted state`다. 이 로그만으로 어느 Docker 명령에서 멈췄는지, daemon 내부 원인이 무엇인지 확정할 수 없다.
+기준 소스는 `main@5be09fffb48e420933185287300f4ec3ecca4bc4`다.
+[recovery-v2 run #37385891177](https://github.com/KimHG1995/Docklane/actions/runs/37385891177)은 **failure**다. 원본 manager 정상 키 unlock, 복원 manager의 locked 상태, 잘못된 키 거절은 통과했다. 모든 원본 manager가 사라진 뒤 복원 manager의 `restore-unlock`은 30초 제한에서 종료 코드 137로 중단됐다. 후속 `force-new-cluster`는 실행하지 않았다. 137만으로 OOM을 단정하지 않는다.
 
-이번 변경은 `trust-key-restore-v2.sh`의 검증 정확성과 중단 동작을 보완한다. 제품 API/Agent 코드, 원본 `trust-key-restore.sh`, 기존 cleanup은 변경하지 않는다. Autolock을 끄거나 잠금 해제 실패를 무시해서 복구 성공으로 처리하지 않는다.
+이전 [run #36984088600](https://github.com/KimHG1995/Docklane/actions/runs/36984088600)은 cancelled이며 성공 근거가 아니다. 일반 Swarm 복구에서 확인한 manager 주소 불일치는 별도 실행의 증거다. 암호화 복구의 daemon 내부 원인을 그 자료로 확정하지 않는다.
 
-## 로컬에서 확인한 결함
+이번 작업은 **진단 및 사전 검증 보강**이다. 제품 API/Agent, 원본 `trust-key-restore.sh`, 기존 cleanup, unlock 제한 시간과 복구 순서는 바꾸지 않는다. Autolock을 끄거나 실패를 무시하여 acceptance를 통과시키지 않는다.
 
-- 잘못된 키를 만들 때 마지막 base64 문자만 바꾸면 문자열은 달라도 디코딩한 키가 같을 수 있다. 32바이트 synthetic fixture의 마지막 문자 `U`를 `X`로 바꾼 경우 동일한 바이트로 디코딩됐다. 새 방식은 첫 유효 base64 문자를 변경한다.
-- 기존 locked/invalid-key 검증은 명령의 모든 실패를 기대한 거절로 받아들였다. 새 검증은 local state, 종료 코드, 구체적인 오류 메시지를 확인하며 타임아웃과 Docker 연결 오류는 실패로 처리한다.
-- 기존 v2에도 시간 제한 없는 unlock 호출이 남아 있었다. 새 wrapper는 DinD 내부 CLI와 외부 `docker exec`를 모두 제한한다. 기본 내부 제한은 30초이며 `DOCKLANE_OR_RECOVERY_CALL_TIMEOUT_SECONDS`로 1~60초를 지정할 수 있다.
+## 유지하는 검증
 
-클라이언트 타임아웃은 daemon 측 작업 취소를 증명하지 않는다. unlock 타임아웃은 단계명과 종료 코드를 남기고 시나리오를 중단한다. 같은 unlock을 재전송하거나 이어서 `--force-new-cluster`를 호출하지 않는다.
+- 실제로 다른 32바이트 키를 만드는 negative fixture를 사용한다. 마지막 base64 문자의 padding bit만 변경하는 방식은 사용하지 않는다.
+- locked/invalid-key는 local state, 종료 코드와 Docker 오류 문구로 판정한다. 연결 오류와 timeout은 기대한 거절이 아니다.
+- DinD 내부 CLI와 외부 exec를 모두 제한한다. 기본 unlock 제한은 30초다.
+- CLI 종료는 daemon 요청 취소를 증명하지 않는다. timeout 뒤 unlock 재전송이나 `force-new-cluster`를 시도하지 않는다.
 
-## 검증 방법
+## 실패 시 진단
+
+정상 키 unlock이 실패하면 원래 단계/종료 코드를 먼저 기록한다. 이어 `recovery-diagnostics.py`를 실행하고, 그 뒤 EXIT cleanup으로 넘어간다. 진단 실패나 일부 자료 누락은 원래 복구 실패를 성공으로 바꾸지 않는다.
+
+수집 대상은 하네스가 기록한 전체 container ID다. 소유권 파일, inspect ID와 container 이름이 일치하고 private PID namespace인 경우에만 내부 exec를 허용한다. 공식 DinD의 PID 1은 `docker-init`일 수 있으므로 `/var/run/docker.pid`의 양수 PID와 `/proc/<pid>/comm == dockerd`를 확인한 뒤 컨테이너 안에서 `SIGUSR1`으로 stack dump를 요청한다. 호스트 Docker나 PID 1을 무조건 신호 대상으로 삼지 않는다.
+
+진단의 전체 예산은 35초, 외부 Python 실행 제한은 40초다. 각 외부 probe는 최대 4초, DinD 내부 프로세스는 3초로 제한한다. 준비 상태 조회가 멈추어도 stack/로그 수집을 가능한 범위에서 계속하고 `partial`을 기록한다.
+
+업로드하는 `recovery-diagnostics-<phase>.json`에는 다음만 남긴다.
+
+- 내부 Engine/API 버전, Git commit과 image ID/digest
+- container ID, 노드 IP와 OOMKilled 여부
+- 읽을 수 있는 local Swarm 상태와 manager 주소
+- daemon 오류의 분류별 횟수
+- goroutine 대기 상태, 함수명, 소스 파일명과 줄 번호
+- probe별 종료 코드, timeout, 파싱/자료 누락 상태
+
+원본 daemon 로그와 stack은 익명 임시 파일에서 읽고 닫으며 artifact 경로에는 쓰지 않는다. Go 함수 인자, 메모리 주소, 임의 오류 원문, 환경변수, unlock/join key와 개인키는 새 JSON에 복사하지 않는다. 수집기에 키를 인자로 전달하지 않는다. 이 보장은 새 진단 경로에 대한 것이며 기존 전체 artifact의 일반적인 비밀정보 감사 완료를 뜻하지 않는다.
+
+`collected`는 진단 수집 완료일 뿐 복구 성공이 아니다. `partial`은 일부 자료가 부족하고 `ownership-unverified`는 안전하게 대상을 확인하지 못했다는 의미다. 어떤 값도 acceptance 성공을 나타내지 않는다.
+
+## 로컬 및 PR 검증
 
 ```bash
 bash -n tests/operational-readiness/trust-key-restore-v2.sh
 python3 tests/operational-readiness/trust-key-restore-test.py
+python3 tests/operational-readiness/recovery-diagnostics-test.py
 ```
 
-Python 회귀 테스트는 실제 Bash 함수와 negative-key 실행 블록을 읽어 실행한다. Docker 프로세스 경계만 대역으로 바꾸고 timeout은 실제 실행 파일을 사용한다. 테스트는 8개이며 base64 바이트 구분, locked/invalid-key의 정확한 판정, 무한 대기 제한, 재시도/후속 mutation 차단, 단계별 evidence, 새 helper의 키 미출력을 검증한다. 테스트에 사용하는 키는 synthetic 데이터다.
+기존 하네스 회귀 8개와 새 진단 회귀 13개를 실행한다. 새 회귀는 실제 수집기와 Bash 실패 경로를 사용하며 Docker 프로세스만 대역이다. 소유권 누락/불일치, 제한 시간, 비정상 JSON, 인자 없는 stack, synthetic secret 미노출, 진단 실패 후 cleanup 순서, 후속 mutation 차단을 확인한다. 실제 signal guard는 가상 PID/proc 읽기와 kill을 대역으로 하여 `docker-init`과 `dockerd`를 구분하는지 별도 실행한다. 실제 Docker daemon 복구를 증명하는 테스트는 아니다.
 
-기존 소스에서는 17개 assertion/subtest가 실패했고, 수정 소스에서는 8개 테스트가 모두 통과했다. 이는 하네스 회귀 검증이지 실제 Docker Swarm 복구 acceptance가 아니다.
+기존 `validate`는 `*-test.py`를 동적으로 실행하므로 새 테스트도 PR gate에 포함된다. heavy recovery-v2는 계속 main push 또는 명시적인 수동 실행만 사용한다. 변경된 helper/test도 해당 workflow의 경로 필터에 포함한다. artifact가 비어 있으면 업로드 성공으로 처리하지 않는다.
 
-기존 `validate`의 Operational Readiness job에서도 `*-test.py`를 실행한다. heavy `recovery-v2` workflow는 기존처럼 main push 또는 수동 실행이며 PR sync마다 실행하지 않는다.
+## 다음 실환경 판정
 
-## 다음 acceptance 판정
+이번 변경 후 main의 실제 실행은 한 번 확인한다. 실패하면 수집된 stack의 `UnlockSwarm`, node readiness, mutex/dispatcher/Raft 대기를 실제 소스와 대조한다. `partial`이면 없는 자료를 추정하여 채우지 않는다. 같은 원인의 반복 push/재실행 대신 최소 재현과 진단 근거를 먼저 검토한다.
 
-다음 실제 실행에서 `source-unlock-status.txt`, `restore-unlock-status.txt`, `rotated-unlock-status.txt`와 단계별 오류를 확인한다. `status=started`만 남거나 `status=failed`이면 완료로 표시하지 않는다. 잠금/키 거절, 올바른 키 복원, root CA 보존, rotation 이후 검증, fresh worker join까지 실제로 통과한 run만 ROADMAP 완료 근거로 사용한다.
-
-복구가 다시 실패하면 해당 단계와 실제 엔진 버전을 먼저 확인한다. 대기 시간을 반복해서 늘리거나, 보호 기능을 비활성화하거나, 단순 preflight green을 복구 완료로 간주하지 않는다. 전체 암호화 복구와 recovery runbook은 아직 미완료다.
+잠금/잘못된 키 거절, 올바른 키 복원, root CA 보존, 키 회전 후 검증과 fresh worker join까지 실제로 통과한 run만 ROADMAP 완료 근거가 된다. 전체 암호화 복구와 recovery runbook은 **미완료**다. merge 후 새로 확인된 run 결과는 PR 체크포인트에 기록하고, 다음 작업에서 ROADMAP과 이 문서에 먼저 동기화한다.
 
 ## 참고 자료
 
+- [Docker daemon 로그 및 SIGUSR1 stack](https://docs.docker.com/engine/daemon/logs/)
+- [Docker DinD entrypoint](https://github.com/docker-library/docker/blob/master/dockerd-entrypoint.sh)
 - [Docker Swarm backup/restore](https://docs.docker.com/engine/swarm/admin_guide/)
 - [Docker Swarm autolock](https://docs.docker.com/engine/swarm/swarm_manager_locking/)
 - [SwarmKit key encoding](https://github.com/moby/swarmkit/blob/1fd637ba5cc32ff30d1dd2bdb14997bd4f424b46/manager/encryption/encryption.go)
