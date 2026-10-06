@@ -6,6 +6,9 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/operational-readiness-recovery-v2.yml'
+      - 'scripts/build-cold-recovery.sh'
+      - 'tests/operational-readiness/cold-recovery/**'
+      - 'tests/operational-readiness/offline-quorum-rebuild*'
       - 'tests/operational-readiness/trust-key-restore-v2.sh'
       - 'tests/operational-readiness/trust-key-restore-test.py'
       - 'tests/operational-readiness/recovery-diagnostics.py'
@@ -22,14 +25,30 @@ jobs:
   recovery-v2:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      DOCKLANE_OR_DISPOSABLE_HOST: '1'
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: actions/checkout@v4
+        with:
+          repository: moby/moby
+          ref: 89c5e8fd66634b6128fc4c0e6f1236e2540e46e0
+          path: _moby/src/github.com/docker/docker
+          persist-credentials: false
+      - name: Build pinned offline helper
+        run: bash scripts/build-cold-recovery.sh _moby/src/github.com/docker/docker "$RUNNER_TEMP/docklane-cold-recovery"
 
       - name: Verify harness preflight
         run: |
           bash -n tests/operational-readiness/trust-key-restore-v2.sh
           python3 tests/operational-readiness/trust-key-restore-test.py
           python3 tests/operational-readiness/recovery-diagnostics-test.py
+          python3 tests/operational-readiness/offline-quorum-rebuild-test.py
+          python3 tests/operational-readiness/cold-recovery-test.py
 
       - name: Verify disposable Docker host
         run: |
@@ -42,14 +61,23 @@ jobs:
         env:
           DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
           DOCKLANE_OR_PRIVATE_BACKUP_DIR: ${{ runner.temp }}/docklane-trust-backup-private-${{ github.run_id }}
+          DOCKLANE_OR_COLD_HELPER: ${{ runner.temp }}/docklane-cold-recovery
         run: bash tests/operational-readiness/trust-key-restore-v2.sh
+
+      - name: Cleanup offline helper
+        if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-operational-readiness
+        run: python3 tests/operational-readiness/offline-quorum-rebuild.py --cleanup-only
 
       - name: Upload sanitized evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: docklane-operational-readiness-recovery-v2-${{ github.run_id }}
-          path: ${{ runner.temp }}/docklane-operational-readiness
+          path: |
+            ${{ runner.temp }}/docklane-operational-readiness
+            !${{ runner.temp }}/docklane-operational-readiness/offline-helper/ownership-trust-key/**
           if-no-files-found: error
           retention-days: 14
 

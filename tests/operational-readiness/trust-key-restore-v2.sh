@@ -13,7 +13,7 @@ M2="docklane-or-manager-02"
 M3="docklane-or-manager-03"
 RESTORE="docklane-or-trust-restore"
 WORKER="docklane-or-trust-worker"
-IMG="${DOCKLANE_OR_DIND_IMAGE:-docker:28-dind}"
+IMG="${DOCKLANE_OR_DIND_IMAGE:-docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac}"
 
 export DOCKLANE_OR_LOG_DIR="$LOG"
 export DOCKLANE_OR_PRIVATE_BACKUP_DIR="$BACKUP"
@@ -156,6 +156,21 @@ wait_worker(){
   fail "worker did not become Ready"
 }
 
+# Rebuild only on a stopped copy, before sending any correct-key restore unlock.
+# A failure never restarts Docker or retries the partially rebuilt copy.
+offline_restore_quorum(){
+  local rid="$1" key="$2" ca="$3"
+  log "rebuilding single-backup quorum on stopped isolated copy"
+  docker stop "$rid" >"$LOG/offline-restore-stop.log"
+  if ! printf '%s\n' "$key" | timeout --kill-after=3 55 \
+      python3 "$ROOT/tests/operational-readiness/offline-quorum-rebuild.py" "$rid" "$ca"; then
+    fail "offline quorum rebuild failed; no restart or unlock continuation"
+  fi
+  docker start "$rid" >"$LOG/offline-restore-start.log"
+  wait_dind "$RESTORE"
+  assert_locked "$RESTORE" rebuilt-still-locked
+}
+
 for name in "$M1" "$M2" "$M3" "$RESTORE" "$WORKER"; do
   docker inspect "$name" >/dev/null 2>&1 && fail "container already exists: $name"
 done
@@ -171,6 +186,7 @@ printf '%s\n' "$NET_ID" >"$OWN/manager-network.network-id"
 start_fresh "$M1" manager-01
 start_fresh "$M2" manager-02
 start_fresh "$M3" manager-03
+[[ "$(swarm_call "$M1" version --format '{{.Server.Version}}')" == 28.5.2 ]] || fail "pinned recovery helper requires Engine 28.5.2"
 
 IP1="$(ip "$M1")"; IP2="$(ip "$M2")"; IP3="$(ip "$M3")"
 swarm_call "$M1" swarm init --autolock --advertise-addr "$IP1" >"$BACKUP/swarm-init-private.log"
@@ -182,6 +198,9 @@ TOKEN="$(swarm_call "$M1" swarm join-token -q manager)"
 swarm_call "$M2" swarm join --token "$TOKEN" --advertise-addr "$IP2" "$IP1:2377" >"$LOG/manager-02-join.log"
 swarm_call "$M3" swarm join --token "$TOKEN" --advertise-addr "$IP3" "$IP1:2377" >"$LOG/manager-03-join.log"
 wait_three "$M1" "$LOG/topology-before-backup.txt"
+SOURCE_CLUSTER_ID="$(swarm_call "$M1" info --format '{{.Swarm.Cluster.ID}}')"
+[[ -n "$SOURCE_CLUSTER_ID" ]] || fail "source cluster ID missing"
+printf '%s\n' "$SOURCE_CLUSTER_ID" >"$LOG/source-cluster-id.txt"
 
 CA1="$(docker exec "$M1" sha256sum /var/lib/docker/swarm/certificates/swarm-root-ca.crt | awk '{print $1}')"
 printf '%s\n' "$CA1" >"$LOG/source-root-ca.sha256"
@@ -207,6 +226,7 @@ assert_locked "$BM" source-locked
 unlock "$BM" "$KEY1" source-unlock
 wait_three "$M1" "$LOG/topology-after-source-unlock.txt"
 
+cat "$OWN/$M1.container-id" "$OWN/$M2.container-id" "$OWN/$M3.container-id" >"$LOG/original-managers.ids"
 docker rm -fv "$M3" "$M2" "$M1" >"$LOG/source-managers-remove.log"
 rm -f "$OWN/$M1.container-id" "$OWN/$M2.container-id" "$OWN/$M3.container-id"
 
@@ -220,12 +240,17 @@ assert_locked "$RESTORE" restore-locked
 
 BAD_KEY="$(different_unlock_key "$KEY1")"
 reject_unlock "$RESTORE" "$BAD_KEY" wrong-key
+
+offline_restore_quorum "$RID" "$KEY1" "$CA1"
 unlock "$RESTORE" "$KEY1" restore-unlock
 
 RESTORE_IP="$(ip "$RESTORE")"
-log "reinitializing restored quorum"
-swarm_call "$RESTORE" swarm init --force-new-cluster --advertise-addr "$RESTORE_IP" >"$BACKUP/force-new-cluster-private.log"
+log "verifying rebuilt quorum with the normal Docker API"
 wait_control "$RESTORE"
+[[ "$(swarm_call "$RESTORE" info --format '{{.Swarm.Cluster.ID}}')" == "$SOURCE_CLUSTER_ID" ]] || fail "restored cluster ID mismatch"
+SELF="$(swarm_call "$RESTORE" info --format '{{.Swarm.NodeID}}')"
+[[ "$(swarm_call "$RESTORE" node inspect "$SELF" --format '{{.ManagerStatus.Leader}}')" == true ]] || fail "restored manager is not elected leader"
+printf '%s\n' "$SOURCE_CLUSTER_ID" >"$LOG/restored-cluster-id.txt"
 
 CA2="$(docker exec "$RESTORE" sha256sum /var/lib/docker/swarm/certificates/swarm-root-ca.crt | awk '{print $1}')"
 [[ "$CA2" == "$CA1" ]] || fail "root CA changed during restore"
@@ -257,7 +282,12 @@ source autolock enabled: PASS
 source manager restart required unlock: PASS
 restored manager started locked: PASS
 wrong unlock key rejected: PASS
+all original manager IDs confirmed absent: PASS
+offline quorum rebuild on stopped copy: PASS
+rebuilt manager still required original unlock key: PASS
 original unlock key restored encrypted state: PASS
+original cluster ID preserved: PASS
+restored manager elected leader: PASS
 root CA preserved across restore: PASS
 unlock key rotated: PASS
 old unlock key rejected after rotation: PASS
