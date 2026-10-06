@@ -254,6 +254,8 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 2026-10-06 unlock/quorum 원인 분리: Engine 28.5.2의 UnlockSwarm과 Init이 공유하는 제어 잠금 및 노드 준비 대기를 실제 진단과 대조했다. 백업 복사 없이 동일 follower의 quorum 유무를 비교하는 [대조 실험](UNLOCK_QUORUM_PROBE.md)을 추가했다. 살아 있는 30초 제한 unlock 한 건에서만 기존 peer를 재개하며, timeout 이후 재전송이나 force-new-cluster는 없다. 이 실험의 성공은 기존 peer 복귀 조건에만 해당하며 단일 암호화 백업 재해 복구 및 recovery runbook 완료 근거로 사용하지 않는다. 새 실환경 결과는 병합 후 PR 체크포인트에 기록하고 다음 작업에서 동기화한다.
 
+2026-10-06 대조 실험 workflow 보완: PR #104의 첫 main 실행 #37418741530은 job이 생성되기 전에 실패해 실제 Swarm 실험을 수행하지 못했다. job 수준 env에서 허용되지 않는 runner.temp 참조를 probe/cleanup step 수준 env로 이동하고 표현식 범위 및 artifact 경로 일치 회귀 2개를 추가했다. 원래 암호화 복구의 실패와 구분하며 후속 대조 실험 결과도 확인 전 성공으로 처리하지 않는다.
+
 PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 미완료다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
