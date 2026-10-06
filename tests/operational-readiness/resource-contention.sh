@@ -64,11 +64,12 @@ capture_topology() {
     >"$output"
 }
 
-assert_three_managers_ready() {
+three_managers_ready() {
   local observer="$1"
   local output="$2"
 
-  capture_topology "$observer" "$output"
+  # A condition disables errexit inside called functions; check capture explicitly.
+  capture_topology "$observer" "$output" || return 1
 
   local total ready_active leaders reachable
   total="$(wc -l <"$output" | tr -d ' ')"
@@ -76,10 +77,13 @@ assert_three_managers_ready() {
   leaders="$(grep -c '|Leader$' "$output" || true)"
   reachable="$(grep -c '|Reachable$' "$output" || true)"
 
-  [[ "$total" == "3" ]] || fail "expected three managers, got $total"
-  [[ "$ready_active" == "3" ]] || fail "expected three Ready/Active managers, got $ready_active"
-  [[ "$leaders" == "1" ]] || fail "expected one leader, got $leaders"
-  [[ "$reachable" == "2" ]] || fail "expected two reachable followers, got $reachable"
+  [[ "$total" == "3" && "$ready_active" == "3" &&
+     "$leaders" == "1" && "$reachable" == "2" ]]
+}
+
+assert_three_managers_ready() {
+  # Pressure samples are assertions, unlike bootstrap/recovery readiness polling.
+  three_managers_ready "$@" || fail "expected three Ready/Active managers, one leader and two reachable followers"
 }
 
 wait_three_managers_ready() {
@@ -87,7 +91,7 @@ wait_three_managers_ready() {
   local output="$2"
 
   for _ in {1..120}; do
-    if assert_three_managers_ready "$observer" "$output" 2>/dev/null; then
+    if three_managers_ready "$observer" "$output" 2>/dev/null; then
       return 0
     fi
     sleep 1
