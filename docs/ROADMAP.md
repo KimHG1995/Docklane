@@ -243,8 +243,12 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager resource contention — run #36950209098
 - [x] Swarm backup/restore drill — run #36968255603
 - [x] Docklane DB restore — run #36972631705
-- [ ] encryption/trust key restore — recovery-v2 run #37396470008 failed at restore-unlock (exit 137); node-ready/leader waits recorded in PR #99, stack-boundary parser regressions added, real acceptance pending ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
+- [ ] encryption/trust key restore — recovery-v2 run #37406102027 failed at restore-unlock (exit 137); PR #100 parser fix and separate node-ready/leader waits verified, real acceptance pending ([검증 상태](TRUST_KEY_RECOVERY_STATUS.md))
 - [ ] recovery runbook
+
+2026-10-06 Agent identity 보완: 무기한 endpoint 검증 캐시를 제거하고 모든 보호된 조회와 mutation 대상 선택에서 현재 identity를 확인한다. `/v1/cluster` 응답도 기준 cluster와 대조한다. 최초 정상 identity로 정한 기준 cluster와 전송 후 mutation 재시도 금지를 유지한다. HTTP 회귀 6개를 추가했으며 기존 실환경 failover run이 이 추가 조건까지 검증했다는 뜻은 아니다. Identity 확인과 후속 요청은 원자적이지 않으므로 요청 도중의 재가입까지 차단하려면 별도 Agent 측 사전조건이 필요하다.
+
+PR #100 이후 복구 결과는 [체크포인트](https://github.com/KimHG1995/Docklane/pull/100#issuecomment-6008373060)를 기준으로 동기화했다. 파서 수정은 완료됐지만 암호화 복구와 runbook은 미완료다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
 
