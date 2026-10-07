@@ -6,6 +6,7 @@ import { AgentRequestError, type AgentClient } from './agent-client.js';
 import {
   MANAGER_AGENT_CONFIG,
   loadManagerAgentConfig,
+  resolveExpectedClusterId,
   type AgentConfig,
   type ManagerAgentConfig,
 } from './agent-config.js';
@@ -90,6 +91,12 @@ export class HttpAgentClient implements AgentClient {
     if (!primary) {
       throw new Error('Primary manager Agent configuration disappeared');
     }
+    // Validate injected registries too; secure startup must never trust the
+    // first responder, including after a Control Plane process restart.
+    this.referenceClusterId = resolveExpectedClusterId(
+      registry.expectedClusterId,
+      registry.agents.every((agent) => agent.insecureDev === true),
+    );
     this.registry = registry;
     this.activeId = primary.id;
   }

@@ -238,9 +238,9 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager loss — run #36681425236
 - [x] quorum loss — run #36682067172
 - [x] network partition — run #36682848436
-- [x] manager별 Go Agent 배포 — run #37412930783 (PR #101 이후 재검증)
+- [x] manager별 Go Agent 배포 — run #37560542111 (PR #112 이후 재검증)
 - [x] Agent reconnect/failover — run #36941789676
-- [x] manager resource contention — run #37414696823 (PR #103 이후 재검증)
+- [x] manager resource contention — run #37560542015 (PR #112 이후 재검증)
 - [x] Swarm backup/restore drill — run #37414123569 (PR #102 이후 재검증)
 - [x] Docklane DB restore — run #37414123562 (PR #102 이후 재검증)
 - [x] encryption/trust key restore — run #37542402155 SUCCESS, Engine 28.5.2 / disposable Linux-DinD 단일 암호화 cold-backup 신뢰 복구 ([성공 근거](https://github.com/KimHG1995/Docklane/pull/109#issuecomment-6026899132))
@@ -281,6 +281,10 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-07 PR #111 이후 결과 동기화: main validation #37549974143과 단일 암호화 복구 #37549974144가 성공했다. 운영 Python 회귀142개, Go 정책13개와 고정 vendor build를 확인했고, 결과 intent 유지 후에도 원래 manager 부재/CA/cluster ID/키 회전/신규 worker/cleanup까지 통과했다. [PR #111 체크포인트](https://github.com/KimHG1995/Docklane/pull/111#issuecomment-6027880611)가 근거이며 Engine 28.5.2/disposable Linux-DinD 신뢰 복구라는 범위는 유지한다.
 
 2026-10-07 Agent mutation admission 보완: Control Plane은 검증한 cluster ID를 필수 헤더로 전달하고 실제 변경 7종에만 v2 경로를 사용한다. Agent는 본문 검증 후 현재 manager identity를 재조회하여 불일치/누락/확인 불가에서 DockerReader 변경 호출을 거절한다. 기존 v1 변경 경로에도 같은 guard를 적용하며, v1 downgrade와 전송 후 mutation 재시도는 없다. 조회와 계획 API 및 version/spec 조건은 유지한다. [프로토콜과 업그레이드 절차](AGENT_MUTATION_PRECONDITION.md)에 동기화했다. HTTP 경계까지의 cluster 전환 방어이며, 이 identity 조회와 실제 Docker 갱신 사이의 외부 CLI 재가입을 원자적으로 직렬화한 것은 아니다. 해당 최종 경쟁 조건과 cluster registration은 별도 미완료 범위다. 로컬 HTTP/파일 대역 회귀와 실제 의존성 CI, 실환경 acceptance를 구분하고 병합 후 결과는 이 PR 체크포인트에 기록한다.
+
+2026-10-07 PR #112 이후 결과 동기화: PR validate #37560329658와 main validate #37560541980에서 실제 API 145개 테스트/타입 검사/빌드, Go Agent 전체 검증, mTLS와 Functional harness 회귀가 통과했다. 실제 resource contention #37560542015와 manager-agents #37560542111도 cleanup까지 성공했다. [PR #112 체크포인트](https://github.com/KimHG1995/Docklane/pull/112#issuecomment-6029436836)가 근거다. 두 운영 실행은 기존 조회/failover 호환성 증거이며, cross-cluster mutation 또는 전체 Functional acceptance를 새로 수행했다는 뜻은 아니다.
+
+2026-10-07 Control Plane 시작 기준 보완: secure 모드는 운영자가 고정한 실제 Swarm ID인 DOCKLANE_EXPECTED_CLUSTER_ID를 필수로 요구하며 논리적 DOCKLANE_CLUSTER_ID와 구분한다. 환경 설정과 직접 주입 registry 모두 검증하고, 첫 응답이나 프로세스 재시작으로 기준을 다시 선택하지 않는다. 누락은 명시적 insecure 개발 모드에서만 기존 자동 인식을 허용하고, 명시적인 빈 값/개행/잘못된 값은 모든 모드에서 거절한다. 신규 회귀14개는 첫 접속, 별도 Node 프로세스 재시작, failover, 혼합 registry, 설정 경계와 mutation 재전송 금지를 다룬다. [설정 및 업그레이드 절차](AGENT_MUTATION_PRECONDITION.md)에 반영했다. DB 기반 cluster registration과 최종 Docker 갱신 시점의 외부 rejoin 경쟁 조건은 여전히 별도 미완료 범위이며, 실제 의존성 CI 결과와 선택된 운영 검증은 이 작업의 PR 체크포인트에 기록한다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
 

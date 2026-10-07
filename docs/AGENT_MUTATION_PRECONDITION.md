@@ -6,7 +6,35 @@ Control Plane의 `/v1/identity` 확인이 끝난 뒤 Agent가 실제 변경 요�
 
 이 검사는 Docker의 cluster 조회와 service/node update를 하나의 원자적 연산으로 만들지 않는다. Agent의 identity 확인 **이후** DockerReader 내부에서 최종 Docker 갱신을 호출하기 전까지 발생하는 외부 CLI 재가입은 여전히 별도 경쟁 조건이다. 이 작업으로 해당 경쟁 조건이나 cluster registration을 완료 처리하지 않는다. 운영 중 수동 rejoin은 진행 중인 mutation과 분리해야 한다.
 
-mTLS, API 측 RBAC와 resource scope, canonical resource ID, version/spec 조건, operation 기록과 reconciliation은 그대로 유지한다. 헤더는 인증 수단이 아니며, 클라이언트가 cluster를 임의로 변경하도록 허용하는 API도 아니다. Control Plane은 기존처럼 최초 정상 identity로 고정한 cluster를 사용하고 불일치가 발생해도 새 값으로 재설정하지 않는다.
+mTLS, API 측 RBAC와 resource scope, canonical resource ID, version/spec 조건, operation 기록과 reconciliation은 그대로 유지한다. 헤더는 인증 수단이 아니며, 클라이언트가 cluster를 임의로 변경하도록 허용하는 API도 아니다. Control Plane은 운영 설정의 실제 Swarm cluster ID를 기준으로 사용하고 불일치가 발생해도 새 값으로 재설정하지 않는다. 명시적인 insecure 개발 모드에서 기준값을 생략한 경우에만 최초 정상 identity로 고정한다.
+
+## 재시작에도 유지되는 운영 기준값
+
+운영 Control Plane에는 `DOCKLANE_EXPECTED_CLUSTER_ID`를 반드시 설정한다. 값은 실제 Swarm cluster ID이며, API 경로 및 권한 범위의 논리 이름인 `DOCKLANE_CLUSTER_ID=default`와 다르다. 두 값을 서로 대체하거나 기본값으로 사용하지 않는다.
+
+정상 quorum을 가진 신뢰할 수 있는 manager에서 아래 읽기 명령으로 ID를 확인하고, 운영자가 대상과 값을 검증한 뒤 배포 환경 설정에 고정한다. 임의 endpoint에서 가져온 값을 시작 스크립트가 매번 자동 저장하면 이 보호가 무효화된다. 장애 중 `info` 응답으로 기준값을 복구하거나 변경하지 않는다.
+
+```bash
+# Verify the Docker context/host and manager before running this read.
+docker info --format '{{.Swarm.Cluster.ID}}'
+```
+
+배포 설정 예시는 다음과 같다. `actual-swarm-cluster-id`는 실제 확인한 값으로 교체한다.
+
+```dotenv
+DOCKLANE_CLUSTER_ID=default
+DOCKLANE_EXPECTED_CLUSTER_ID=actual-swarm-cluster-id
+```
+
+형식은 기존 헤더와 같은 길이 1~128의 `[A-Za-z0-9_-]`이고, 공백/개행/쉼표/빈 문자열을 정규화하거나 허용하지 않는다. 운영 모드의 값 누락이나 모든 모드의 명시적인 잘못된 값은 자격증명 파일 읽기 전에 설정 로딩을 실패시킨다. 직접 주입한 `ManagerAgentConfig.expectedClusterId`에도 같은 검사를 적용하며, manager 목록에 secure Agent가 하나라도 있으면 생략할 수 없다.
+
+`HttpAgentClient`를 구성할 때 기준 문자열을 복사한다. 이후의 첫 접속, health 조회, primary 장애, API 재시작과 새 client 생성에서도 원격 identity로 설정값을 덮어쓰지 않는다. 다른 cluster만 응답하면 보호된 조회 및 변경 요청을 전송하지 않는다. 전송 전의 기존 identity failover는 설정한 cluster에 대해서만 유지하며, 변경 전송 이후의 자동 재시도 금지도 유지한다. Health 성공은 전송 경로의 생존 여부일 뿐 cluster 검증 완료가 아니다.
+
+`DOCKLANE_AGENT_INSECURE_DEV=true`로 명시한 개발 환경에서만 기준값을 **아예 생략**해 기존 최초 identity 인식을 사용할 수 있다. 이 경우 재시작 후 재인식 위험은 그대로이므로 운영에 사용하지 않는다. `.env.example`의 빈 설정을 둔 채 개발 모드로 바꾸면 오류가 나므로, 실제 값을 채우거나 개발용 환경에서 해당 항목을 제거해야 한다.
+
+업그레이드 전에 정상 manager의 실제 ID를 모든 Control Plane 인스턴스의 환경 설정에 동일하게 배포한다. 잘못된 설정으로 접속이 거부되더라도 자동으로 관찰된 ID로 바꾸지 않는다. 대상 cluster 교체는 기존 작업/권한/DB 바인딩의 처리 정책을 확인한 별도 운영 변경으로 수행한다. 이 작업은 DB 기반 cluster registration, 등록/변경 감사 API, 최초 환경 설정의 신뢰성 검증이나 마지막 Docker update와 외부 rejoin 사이의 원자성을 구현하지 않는다.
+
+별도 Node 프로세스를 두 번 시작해 첫 프로세스의 정상 조회 후 endpoint의 cluster를 바꾸고, 두 번째 프로세스가 같은 설정으로 변경 요청을 거절하는 회귀를 추가했다. 로컬 HTTP 서버를 쓰는 테스트이므로 실제 Swarm 재가입 시험과는 구분한다. mTLS PoC의 `mtls-health-only` 값은 Swarm 없이 transport/liveness만 검증하는 테스트용 sentinel이며 운영 설정 예시가 아니다.
 
 ## 요청 계약
 
@@ -50,3 +78,4 @@ API와 Agent를 함께 바꾸는 하나의 작업이며, 별도의 heavy workflo
 - [Control Plane HTTP client](../apps/api/src/agent/http-agent.client.ts)
 - [HTTP header values](https://pkg.go.dev/net/http#Header.Values)
 - [요청 context](https://pkg.go.dev/net/http#Request.Context)
+- [Docker system info와 출력 형식](https://docs.docker.com/reference/cli/docker/system/info/)
