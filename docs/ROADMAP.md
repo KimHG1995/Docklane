@@ -274,6 +274,10 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 
 2026-10-07 자동 cleanup 실행 범위 보완: 사전 검사 거부 시 이전 실행의 소유권 기록을 정리하지 않는다. 이번 실행의 durable intent 이후 실제 생성 호출을 시작한 경우에만 host 조건을 다시 확인하고 동일 run ID의 기록만 정리한다. 이전 기록은 명시적인 --cleanup-only로 처리하며, 다른 run journal 또는 혼합된 legacy 기록은 자동 정리를 거절한다. 실제 main/생성/정리 경로를 사용하는 Docker 대역 회귀 11개를 추가했다. 기존 snapshot의 진단 보존 테스트는 새로운 자동 정리 경계만 대역으로 처리한다. 복구/진단/키 처리의 성공 조건과 제한 시간은 변경하지 않는다.
 
+2026-10-07 PR #110 이후 결과 동기화: PR validation #37548732617의 운영 회귀142개, main validation #37549139813과 실제 quorum probe #37549137498이 성공했다. 자동 cleanup의 사전 검사 거부/현재 실행 구분은 회귀로 확인했고 정상 Docker 대조 실험과 정리의 호환성도 유지했다. 동일 SHA에 별도의 push 실행이 추가 관찰됐으며 여기서는 완료된 실행을 근거로 한다. 수동 dispatch/재실행은 추가하지 않았다.
+
+2026-10-07 cold-recovery 결과 전달 보완: 같은 사본의 rebuild는 결과 출력 성공 여부와 무관하게 한 번만 허용한다. Exclusive intent를 완료 뒤에도 유지하고 CA 확인 후 비밀정보 없는 완료 JSON을 같은 파일에 Sync/Close한 다음 stdout에 출력한다. 결과 Writer의 오류/부분 출력/재진입과 정상 출력 후 재호출에도 재실행을 거절한다. 새 회귀5개를 포함한 Go 정책13개가 실제 파일/Writer를 이용한 로컬 race test와 vet에서 통과했다. 복구 순서, 고정 Engine/vendor, 키 취급, 30초 unlock과 helper 출력 계약은 유지하며 변경 후 실제 복구 결과는 이 PR의 main 실행 체크포인트에 남긴다.
+
 이 단계 통과 전 production adoption을 권장하지 않는다.
 
 ## Later

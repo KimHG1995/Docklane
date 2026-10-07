@@ -54,8 +54,9 @@ func TestValidCopyRunsOnceAndPreservesCA(t *testing.T) {
 	if strings.Contains(output.String(), "SWMKEY") {
 		t.Fatal("key leaked")
 	}
-	if _, err := os.Stat(filepath.Join(dir, intentFile)); !os.IsNotExist(err) {
-		t.Fatal("successful intent not cleared")
+	record, err := os.ReadFile(filepath.Join(dir, intentFile))
+	if err != nil || !bytes.HasSuffix(record, output.Bytes()) {
+		t.Fatal("successful completion record not retained")
 	}
 }
 
@@ -147,5 +148,92 @@ func TestExtraArgsAndDuplicateIntentAreRejected(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatal("rebuild called")
+	}
+}
+
+// Delivery failure must never authorize another mutation of a completed copy.
+type resultWriter func([]byte) (int, error)
+
+func (w resultWriter) Write(data []byte) (int, error) { return w(data) }
+
+func TestOutputFailureRetainsCompletedResultAndBlocksRebuild(t *testing.T) {
+	for _, written := range []int{0, 8, -1} {
+		t.Run(fmt.Sprint(written), func(t *testing.T) {
+			dir, args, key := fixture(t)
+			calls := 0
+			rebuild := func(options, []byte) error { calls++; return nil }
+			writer := resultWriter(func(data []byte) (int, error) {
+				n := written
+				if n < 0 {
+					n = len(data)
+				}
+				return n, fmt.Errorf("synthetic delivery error")
+			})
+			if err := execute(args, strings.NewReader(key), writer, rebuild); err == nil {
+				t.Error("lost output was reported as success")
+			}
+			data, err := os.ReadFile(filepath.Join(dir, intentFile))
+			if err != nil || !bytes.Contains(data, []byte(`"status":"offline-quorum-rebuilt"`)) {
+				t.Error("completed result not retained after delivery failure")
+			}
+			if err := execute(args, strings.NewReader(key), &bytes.Buffer{}, rebuild); err == nil || calls != 1 {
+				t.Errorf("delivery failure allowed rebuild: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestCompletedResultExistsBeforeOutputDelivery(t *testing.T) {
+	dir, args, key := fixture(t)
+	writer := resultWriter(func(data []byte) (int, error) {
+		record, err := os.ReadFile(filepath.Join(dir, intentFile))
+		if err != nil || !bytes.HasSuffix(record, data) {
+			t.Error("output preceded the retained completion record")
+		}
+		if bytes.Contains(record, []byte("SWMKEY")) {
+			t.Error("completion record leaked the key")
+		}
+		return len(data), nil
+	})
+	if err := execute(args, strings.NewReader(key), writer, func(options, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSuccessfulDeliveryStillBlocksSecondRebuild(t *testing.T) {
+	_, args, key := fixture(t)
+	calls := 0
+	rebuild := func(options, []byte) error { calls++; return nil }
+	if err := execute(args, strings.NewReader(key), &bytes.Buffer{}, rebuild); err != nil {
+		t.Fatal(err)
+	}
+	if err := execute(args, strings.NewReader(key), &bytes.Buffer{}, rebuild); err == nil || calls != 1 {
+		t.Fatalf("completed copy rebuilt again: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestReentrantOutputCannotRebuildTheSameCopy(t *testing.T) {
+	_, args, key := fixture(t)
+	calls := 0
+	rebuild := func(options, []byte) error { calls++; return nil }
+	writer := resultWriter(func(data []byte) (int, error) {
+		if err := execute(args, strings.NewReader(key), &bytes.Buffer{}, rebuild); err == nil {
+			t.Error("reentrant output rebuilt the copy")
+		}
+		return len(data), nil
+	})
+	if err := execute(args, strings.NewReader(key), writer, rebuild); err != nil || calls != 1 {
+		t.Fatalf("result=%v calls=%d", err, calls)
+	}
+}
+
+func TestShortOutputCannotReportDeliverySuccess(t *testing.T) {
+	dir, args, key := fixture(t)
+	writer := resultWriter(func(data []byte) (int, error) { return len(data) - 1, nil })
+	if err := execute(args, strings.NewReader(key), writer, func(options, []byte) error { return nil }); err == nil {
+		t.Error("short output reported success")
+	}
+	if _, err := os.Stat(filepath.Join(dir, intentFile)); err != nil {
+		t.Error("short output lost the rebuild fence")
 	}
 }
