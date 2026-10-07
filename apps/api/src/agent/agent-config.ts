@@ -24,6 +24,7 @@ export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 export interface ManagerAgentConfig {
   primaryId: string;
   agents: AgentConfig[];
+  expectedClusterId?: string;
 }
 
 export const MANAGER_AGENT_CONFIG = Symbol('MANAGER_AGENT_CONFIG');
@@ -84,6 +85,10 @@ function validateTransport(config: AgentConfig): void {
 
 export function loadManagerAgentConfig(): ManagerAgentConfig {
   const insecureDev = process.env.DOCKLANE_AGENT_INSECURE_DEV === 'true';
+  const expectedClusterId = resolveExpectedClusterId(
+    process.env.DOCKLANE_EXPECTED_CLUSTER_ID,
+    insecureDev,
+  );
   const primaryOverride = process.env.DOCKLANE_AGENT_PRIMARY_ID;
   const fallbackId = primaryOverride ?? 'primary';
   const fallbackUrl =
@@ -143,6 +148,7 @@ export function loadManagerAgentConfig(): ManagerAgentConfig {
   return {
     primaryId,
     agents,
+    ...(expectedClusterId === null ? {} : { expectedClusterId }),
   };
 }
 
@@ -155,4 +161,25 @@ export function loadAgentConfig(): AgentConfig {
     throw new Error('Primary manager Agent configuration disappeared');
   }
   return primary;
+}
+
+// The binding is operator-owned configuration, never learned from an endpoint
+// in secure mode. Explicit malformed values must not enable discovery.
+export function resolveExpectedClusterId(
+  value: unknown,
+  allowDevelopmentDiscovery: boolean,
+): string | null {
+  if (value === undefined && allowDevelopmentDiscovery) {
+    return null;
+  }
+  if (
+    typeof value !== 'string' || value.length < 1 || value.length > 128 ||
+    /[^A-Za-z0-9_-]/.test(value)
+  ) {
+    throw new Error(
+      'DOCKLANE_EXPECTED_CLUSTER_ID must be an explicit 1-128 character identifier ' +
+      'using A-Z, a-z, 0-9, _ or -; required outside insecure development mode',
+    );
+  }
+  return value;
 }

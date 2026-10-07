@@ -116,7 +116,10 @@ if curl -fsS \
   fail "Agent accepted a TLS connection without a client certificate"
 fi
 
+# This fixture checks transport/liveness only and does not create a Swarm.
+# The configured sentinel is not evidence that cluster identity was verified.
 CONTROL_PLANE_HEALTH="$(
+  DOCKLANE_EXPECTED_CLUSTER_ID="mtls-health-only" \
   DOCKLANE_AGENT_URL="$AGENT_URL" \
   DOCKLANE_AGENT_CA_FILE="$CA_CERT" \
   DOCKLANE_AGENT_CERT_FILE="$CLIENT_CERT" \

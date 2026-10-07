@@ -335,6 +335,8 @@ unique_nodes="$(printf '%s\n' "${node_ids[@]}" | sort -u | wc -l | tr -d ' ')"
   || fail "expected exactly one Agent to observe itself as leader, got $leader_count"
 
 log "verifying Control Plane Agent failover after primary Agent loss"
+# This disposable fixture already checked the ID against all three Docker managers.
+DOCKLANE_EXPECTED_CLUSTER_ID="$cluster_id" \
 DOCKLANE_MANAGER_AGENT_URLS="$(printf '[{"id":"manager-01","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-02","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-03","baseUrl":"https://127.0.0.1:%s"}]' "$MANAGER_01_AGENT_PORT" "$MANAGER_02_AGENT_PORT" "$MANAGER_03_AGENT_PORT")" \
 DOCKLANE_AGENT_CA_FILE="$CA_CERT" \
 DOCKLANE_AGENT_CERT_FILE="$CLIENT_CERT" \
@@ -353,6 +355,7 @@ const cert = readFileSync(process.env.DOCKLANE_AGENT_CERT_FILE);
 const key = readFileSync(process.env.DOCKLANE_AGENT_KEY_FILE);
 const registry = {
   primaryId: 'manager-01',
+  expectedClusterId: process.env.DOCKLANE_EXPECTED_CLUSTER_ID,
   agents: definitions.map((definition) => ({
     ...definition,
     insecureDev: false,
