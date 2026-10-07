@@ -10,6 +10,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+API_VERSION = "v1"
+
 
 def free_port():
     with socket.socket() as sock:
@@ -19,9 +21,11 @@ def free_port():
 
 class BackendHandler(BaseHTTPRequestHandler):
     requests = 0
+    cluster_headers = []
 
     def do_POST(self):
         BackendHandler.requests += 1
+        BackendHandler.cluster_headers.append(self.headers.get("X-Docklane-Expected-Cluster-ID"))
         length = int(self.headers.get("content-length", "0"))
         if length:
             self.rfile.read(length)
@@ -81,9 +85,9 @@ def post_image(port, image):
     try:
         connection.request(
             "POST",
-            "/v1/services/service-1/image",
+            f"/{API_VERSION}/services/service-1/image",
             body=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "X-Docklane-Expected-Cluster-ID": "cluster-a"},
         )
         response = connection.getresponse()
         payload = response.read()
@@ -292,7 +296,12 @@ def run_connect_failure_regression(root):
                 process.wait(timeout=3)
 
 
-def main():
+def main(version="v1"):
+    global API_VERSION
+    API_VERSION = version
+    BackendHandler.requests = 0
+    BackendHandler.cluster_headers = []
+    BrokenThenConflictHandler.requests = 0
     root = Path(__file__).resolve().parents[2]
     backend_port = free_port()
     proxy_port = free_port()
@@ -372,6 +381,9 @@ def main():
                     f"backend expected 2 mutation requests, got {BackendHandler.requests}"
                 )
 
+            if BackendHandler.cluster_headers != ["cluster-a", "cluster-a"]:
+                raise AssertionError("expected cluster header was not forwarded unchanged")
+
             drops = drop_log.read_text(encoding="utf-8").splitlines()
             if len(drops) != 1:
                 raise AssertionError(f"expected 1 drop log line, got {len(drops)}")
@@ -389,8 +401,9 @@ def main():
 
     run_incomplete_response_regression(root)
     run_connect_failure_regression(root)
-    print("Agent proxy mutation-count regressions: PASS")
+    print(f"Agent proxy mutation-count/header regressions ({version}): PASS")
 
 
 if __name__ == "__main__":
-    main()
+    for version in ("v1", "v2"):
+        main(version)

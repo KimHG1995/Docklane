@@ -63,18 +63,25 @@ func New(cfg config.Config, reader DockerReader) *Server {
 	mux.HandleFunc("GET /v1/nodes/{nodeId}", s.node)
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/plan-drain", s.planDrainNode)
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/drain", s.drainNode)
+	mux.HandleFunc("POST /v2/nodes/{nodeId}/drain", s.drainNode)
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/plan-activate", s.planActivateNode)
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/activate", s.activateNode)
+	mux.HandleFunc("POST /v2/nodes/{nodeId}/activate", s.activateNode)
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/plan-labels", s.planNodeLabels)
 	mux.HandleFunc("POST /v1/nodes/{nodeId}/labels", s.updateNodeLabels)
+	mux.HandleFunc("POST /v2/nodes/{nodeId}/labels", s.updateNodeLabels)
 	mux.HandleFunc("POST /v1/services/{serviceId}/plan-scale", s.planScaleService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/plan-restart", s.planRestartService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/plan-image-update", s.planImageUpdate)
 	mux.HandleFunc("POST /v1/services/{serviceId}/plan-rollback", s.planRollbackService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/scale", s.scaleService)
+	mux.HandleFunc("POST /v2/services/{serviceId}/scale", s.scaleService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/restart", s.restartService)
+	mux.HandleFunc("POST /v2/services/{serviceId}/restart", s.restartService)
 	mux.HandleFunc("POST /v1/services/{serviceId}/image", s.updateServiceImage)
+	mux.HandleFunc("POST /v2/services/{serviceId}/image", s.updateServiceImage)
 	mux.HandleFunc("POST /v1/services/{serviceId}/rollback", s.rollbackService)
+	mux.HandleFunc("POST /v2/services/{serviceId}/rollback", s.rollbackService)
 
 	s.server = &http.Server{
 		Addr:              cfg.Addr,
@@ -234,6 +241,10 @@ func (s *Server) drainNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.requireMutationCluster(w, r) {
+		return
+	}
+
 	result, err := s.reader.DrainNode(r.Context(), id, input)
 	if err != nil {
 		writeMutationError(w, err)
@@ -273,6 +284,10 @@ func (s *Server) activateNode(w http.ResponseWriter, r *http.Request) {
 	var input model.NodeMutationRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if !s.requireMutationCluster(w, r) {
 		return
 	}
 
@@ -319,6 +334,10 @@ func (s *Server) updateNodeLabels(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.TargetLabels == nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("targetLabels is required"))
+		return
+	}
+
+	if !s.requireMutationCluster(w, r) {
 		return
 	}
 
@@ -457,6 +476,10 @@ func (s *Server) scaleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.requireMutationCluster(w, r) {
+		return
+	}
+
 	result, err := s.reader.ScaleService(r.Context(), id, input)
 	if err != nil {
 		writeMutationError(w, err)
@@ -475,6 +498,10 @@ func (s *Server) restartService(w http.ResponseWriter, r *http.Request) {
 	var input model.ServiceMutationRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if !s.requireMutationCluster(w, r) {
 		return
 	}
 
@@ -503,6 +530,10 @@ func (s *Server) updateServiceImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.requireMutationCluster(w, r) {
+		return
+	}
+
 	result, err := s.reader.UpdateServiceImage(r.Context(), id, input)
 	if err != nil {
 		writeMutationError(w, err)
@@ -521,6 +552,10 @@ func (s *Server) rollbackService(w http.ResponseWriter, r *http.Request) {
 	var input model.ServiceMutationRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if !s.requireMutationCluster(w, r) {
 		return
 	}
 

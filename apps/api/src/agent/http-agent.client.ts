@@ -184,7 +184,7 @@ export class HttpAgentClient implements AgentClient {
   ): Promise<NodeMutationResponse> {
     return this.mutationRequest(
       'POST',
-      `/v1/nodes/${encodeURIComponent(nodeId)}/drain`,
+      `/v2/nodes/${encodeURIComponent(nodeId)}/drain`,
       NodeMutationResponseSchema,
       input,
     );
@@ -213,7 +213,7 @@ export class HttpAgentClient implements AgentClient {
   ): Promise<NodeMutationResponse> {
     return this.mutationRequest(
       'POST',
-      `/v1/nodes/${encodeURIComponent(nodeId)}/activate`,
+      `/v2/nodes/${encodeURIComponent(nodeId)}/activate`,
       NodeMutationResponseSchema,
       input,
     );
@@ -247,7 +247,7 @@ export class HttpAgentClient implements AgentClient {
   ): Promise<NodeMutationResponse> {
     return this.mutationRequest(
       'POST',
-      `/v1/nodes/${encodeURIComponent(nodeId)}/labels`,
+      `/v2/nodes/${encodeURIComponent(nodeId)}/labels`,
       NodeMutationResponseSchema,
       input,
     );
@@ -314,7 +314,7 @@ export class HttpAgentClient implements AgentClient {
   ): Promise<ServiceMutationResponse> {
     return this.mutationRequest(
       'POST',
-      `/v1/services/${encodeURIComponent(serviceId)}/scale`,
+      `/v2/services/${encodeURIComponent(serviceId)}/scale`,
       ServiceMutationResponseSchema,
       input,
     );
@@ -330,7 +330,7 @@ export class HttpAgentClient implements AgentClient {
   ): Promise<ServiceMutationResponse> {
     return this.mutationRequest(
       'POST',
-      `/v1/services/${encodeURIComponent(serviceId)}/restart`,
+      `/v2/services/${encodeURIComponent(serviceId)}/restart`,
       ServiceMutationResponseSchema,
       input,
     );
@@ -347,7 +347,7 @@ export class HttpAgentClient implements AgentClient {
   ): Promise<ServiceMutationResponse> {
     return this.mutationRequest(
       'POST',
-      `/v1/services/${encodeURIComponent(serviceId)}/image`,
+      `/v2/services/${encodeURIComponent(serviceId)}/image`,
       ServiceMutationResponseSchema,
       input,
     );
@@ -363,7 +363,7 @@ export class HttpAgentClient implements AgentClient {
   ): Promise<ServiceMutationResponse> {
     return this.mutationRequest(
       'POST',
-      `/v1/services/${encodeURIComponent(serviceId)}/rollback`,
+      `/v2/services/${encodeURIComponent(serviceId)}/rollback`,
       ServiceMutationResponseSchema,
       input,
     );
@@ -431,9 +431,17 @@ export class HttpAgentClient implements AgentClient {
     body: unknown,
   ): Promise<T> {
     const config = await this.selectMutationAgent();
+    const expectedClusterId = this.referenceClusterId;
+    if (expectedClusterId === null || !/^[A-Za-z0-9_-]{1,128}$/.test(expectedClusterId)) {
+      throw new AgentIdentityError(config.id, 'expected cluster is not a bounded identifier');
+    }
 
+    // Only v2 mutations: an older Agent must fail closed, not ignore the header.
+    // Never downgrade or resend after this request, even on a precondition error.
     try {
-      const value = await this.requestTo(config, method, path, schema, body);
+      const value = await this.requestTo(
+        config, method, path, schema, body, expectedClusterId,
+      );
       this.markActive(config);
       return value;
     } catch (error) {
@@ -560,6 +568,7 @@ export class HttpAgentClient implements AgentClient {
     path: string,
     schema: z.ZodType<T>,
     body?: unknown,
+    expectedClusterId?: string,
   ): Promise<T> {
     const url = new URL(path, config.baseUrl);
     const options: RequestOptions = {
@@ -665,6 +674,9 @@ export class HttpAgentClient implements AgentClient {
         rejectOnce(toTransportError(config.id, 'request error', error)),
       );
 
+      if (expectedClusterId !== undefined) {
+        req.setHeader('X-Docklane-Expected-Cluster-ID', expectedClusterId);
+      }
       if (body !== undefined) {
         req.setHeader('Content-Type', 'application/json');
         req.end(JSON.stringify(body));
