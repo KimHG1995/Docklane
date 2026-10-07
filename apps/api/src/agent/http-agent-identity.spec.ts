@@ -40,7 +40,7 @@ async function startAgent() {
         },
         nodes: [],
       }));
-    } else if (request.method === 'POST' && request.url === '/v1/services/svc/scale') {
+    } else if (request.method === 'POST' && request.url === '/v2/services/svc/scale') {
       state.mutationCalls += 1;
       if (state.loseMutationResponse) {
         request.socket.destroy();

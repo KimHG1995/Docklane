@@ -61,7 +61,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         is_image_mutation = (
             self.command == "POST"
-            and self.path.startswith("/v1/services/")
+            and self.path.startswith(("/v1/services/", "/v2/services/"))
             and self.path.endswith("/image")
         )
         should_drop = is_image_mutation and DROP_MARKER.exists()

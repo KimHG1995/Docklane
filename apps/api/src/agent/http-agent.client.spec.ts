@@ -248,7 +248,7 @@ test('mutation transport failure is not blindly retried on another manager Agent
     }
     if (
       request.method === 'POST' &&
-      request.url === '/v1/services/svc/scale'
+      request.url === '/v2/services/svc/scale'
     ) {
       primaryMutationCalls += 1;
       request.socket.destroy();
@@ -262,7 +262,7 @@ test('mutation transport failure is not blindly retried on another manager Agent
     }
     if (
       request.method === 'POST' &&
-      request.url === '/v1/services/svc/scale'
+      request.url === '/v2/services/svc/scale'
     ) {
       secondaryMutationCalls += 1;
       writeJson(response, {

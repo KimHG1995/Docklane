@@ -478,6 +478,7 @@ func TestMissingServiceReturnsNotFound(t *testing.T) {
 			},
 		},
 	)
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/services/missing", nil)
 	res := httptest.NewRecorder()
 
@@ -511,6 +512,7 @@ func TestRollback(t *testing.T) {
 		"/v1/services/service-1/rollback",
 		strings.NewReader(`{"expectedVersion":2,"expectedSpecHash":"current","targetSpecHash":"previous"}`),
 	)
+	req.Header.Set(expectedClusterHeader, "cluster-1")
 	res := httptest.NewRecorder()
 
 	s.server.Handler.ServeHTTP(res, req)

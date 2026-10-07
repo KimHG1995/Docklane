@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Docklane Swarm Agent API
-  version: 0.12.0
+  version: 0.13.0
   description: Stable contract between the Docklane Control Plane and Go Agent.
 servers:
   - url: https://127.0.0.1:9443
@@ -80,8 +80,11 @@ paths:
 
   /v1/nodes/{nodeId}/labels:
     post:
+      deprecated: true
+      description: Guarded legacy alias. New clients must use v2; never downgrade to this path on errors.
       operationId: updateNodeLabels
       parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
         - $ref: '#/components/parameters/NodeId'
       requestBody:
         required: true
@@ -98,6 +101,14 @@ paths:
                 $ref: '#/components/schemas/NodeMutationResponse'
         '409':
           description: Node version, spec, or cluster service-set precondition failed.
+        '400':
+          description: Invalid request body or malformed/duplicate expected cluster header.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
 
   /v1/nodes/{nodeId}/plan-drain:
     post:
@@ -122,8 +133,11 @@ paths:
 
   /v1/nodes/{nodeId}/drain:
     post:
+      deprecated: true
+      description: Guarded legacy alias. New clients must use v2; never downgrade to this path on errors.
       operationId: drainNode
       parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
         - $ref: '#/components/parameters/NodeId'
       requestBody:
         required: true
@@ -140,6 +154,14 @@ paths:
                 $ref: '#/components/schemas/NodeMutationResponse'
         '409':
           description: Node version, spec, or affected task-set precondition failed.
+        '400':
+          description: Invalid request body or malformed/duplicate expected cluster header.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
 
   /v1/nodes/{nodeId}/plan-activate:
     post:
@@ -164,8 +186,11 @@ paths:
 
   /v1/nodes/{nodeId}/activate:
     post:
+      deprecated: true
+      description: Guarded legacy alias. New clients must use v2; never downgrade to this path on errors.
       operationId: activateNode
       parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
         - $ref: '#/components/parameters/NodeId'
       requestBody:
         required: true
@@ -182,6 +207,14 @@ paths:
                 $ref: '#/components/schemas/NodeMutationResponse'
         '409':
           description: Node version or spec precondition failed.
+        '400':
+          description: Invalid request body or malformed/duplicate expected cluster header.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
 
   /v1/services:
     get:
@@ -325,8 +358,11 @@ paths:
 
   /v1/services/{serviceId}/image:
     post:
+      deprecated: true
+      description: Guarded legacy alias. New clients must use v2; never downgrade to this path on errors.
       operationId: updateServiceImage
       parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
         - $ref: '#/components/parameters/ServiceId'
       requestBody:
         required: true
@@ -342,9 +378,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/ServiceMutationResponse'
         '400':
-          description: Image is not digest-pinned or service mode is unsupported.
+          description: Image is not digest-pinned or service mode is unsupported. Also returned for a malformed or duplicate expected cluster header.
         '409':
           description: Version, spec, or target precondition failed.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
 
   /v1/services/{serviceId}/plan-rollback:
     post:
@@ -371,8 +413,11 @@ paths:
 
   /v1/services/{serviceId}/rollback:
     post:
+      deprecated: true
+      description: Guarded legacy alias. New clients must use v2; never downgrade to this path on errors.
       operationId: rollbackService
       parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
         - $ref: '#/components/parameters/ServiceId'
       requestBody:
         required: true
@@ -388,14 +433,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/ServiceMutationResponse'
         '400':
-          description: Service has no supported previous spec.
+          description: Service has no supported previous spec. Also returned for a malformed or duplicate expected cluster header.
         '409':
           description: Version, current spec, or previous spec precondition failed.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
 
   /v1/services/{serviceId}/scale:
     post:
+      deprecated: true
+      description: Guarded legacy alias. New clients must use v2; never downgrade to this path on errors.
       operationId: scaleService
       parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
         - $ref: '#/components/parameters/ServiceId'
       requestBody:
         required: true
@@ -411,14 +465,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/ServiceMutationResponse'
         '400':
-          description: Invalid service mode or request.
+          description: Invalid service mode or request. Also returned for a malformed or duplicate expected cluster header.
         '409':
           description: Version or spec precondition failed.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
 
   /v1/services/{serviceId}/restart:
     post:
+      deprecated: true
+      description: Guarded legacy alias. New clients must use v2; never downgrade to this path on errors.
       operationId: restartService
       parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
         - $ref: '#/components/parameters/ServiceId'
       requestBody:
         required: true
@@ -435,6 +498,224 @@ paths:
                 $ref: '#/components/schemas/ServiceMutationResponse'
         '409':
           description: Version or spec precondition failed.
+        '400':
+          description: Invalid request body or malformed/duplicate expected cluster header.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
+
+  /v2/nodes/{nodeId}/labels:
+    post:
+      operationId: updateNodeLabelsV2
+      parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeLabelsMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned node label update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationResponse'
+        '409':
+          description: Node version, spec, or cluster service-set precondition failed.
+        '400':
+          description: Invalid request body or malformed/duplicate expected cluster header.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
+
+  /v2/nodes/{nodeId}/drain:
+    post:
+      operationId: drainNodeV2
+      parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned node drain.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationResponse'
+        '409':
+          description: Node version, spec, or affected task-set precondition failed.
+        '400':
+          description: Invalid request body or malformed/duplicate expected cluster header.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
+
+  /v2/nodes/{nodeId}/activate:
+    post:
+      operationId: activateNodeV2
+      parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned node activation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMutationResponse'
+        '409':
+          description: Node version or spec precondition failed.
+        '400':
+          description: Invalid request body or malformed/duplicate expected cluster header.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
+
+  /v2/services/{serviceId}/image:
+    post:
+      operationId: updateServiceImageV2
+      parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned digest-pinned image update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationResponse'
+        '400':
+          description: Image is not digest-pinned or service mode is unsupported. Also returned for a malformed or duplicate expected cluster header.
+        '409':
+          description: Version, spec, or target precondition failed.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
+
+  /v2/services/{serviceId}/rollback:
+    post:
+      operationId: rollbackServiceV2
+      parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestartMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted native rollback to the planned previous spec.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationResponse'
+        '400':
+          description: Service has no supported previous spec. Also returned for a malformed or duplicate expected cluster header.
+        '409':
+          description: Version, current spec, or previous spec precondition failed.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
+
+  /v2/services/{serviceId}/scale:
+    post:
+      operationId: scaleServiceV2
+      parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScaleMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned service update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationResponse'
+        '400':
+          description: Invalid service mode or request. Also returned for a malformed or duplicate expected cluster header.
+        '409':
+          description: Version or spec precondition failed.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
+
+  /v2/services/{serviceId}/restart:
+    post:
+      operationId: restartServiceV2
+      parameters:
+        - $ref: '#/components/parameters/ExpectedClusterId'
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestartMutationRequest'
+      responses:
+        '200':
+          description: Docker accepted the exact planned forced update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceMutationResponse'
+        '409':
+          description: Version or spec precondition failed.
+        '400':
+          description: Invalid request body or malformed/duplicate expected cluster header.
+        '412':
+          $ref: '#/components/responses/ClusterPreconditionFailed'
+        '428':
+          $ref: '#/components/responses/ClusterPreconditionRequired'
+        '503':
+          $ref: '#/components/responses/ClusterIdentityUnavailable'
 
 components:
   securitySchemes:
@@ -442,6 +723,17 @@ components:
       type: mutualTLS
 
   parameters:
+    ExpectedClusterId:
+      name: X-Docklane-Expected-Cluster-ID
+      in: header
+      required: true
+      description: Exactly one verified cluster identifier. Checked after body validation before mutation dispatch; not atomic with external Docker rejoin.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9_-]{1,128}$'
+
     NodeId:
       name: nodeId
       in: path
@@ -457,6 +749,40 @@ components:
       schema:
         type: string
         minLength: 1
+
+  responses:
+    ClusterPreconditionFailed:
+      description: Current cluster differs; no mutation was dispatched by this guard.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, error]
+            properties:
+              code: { type: string, const: CLUSTER_PRECONDITION_FAILED }
+              error: { type: string }
+
+    ClusterPreconditionRequired:
+      description: Required expected cluster header is missing.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, error]
+            properties:
+              code: { type: string, const: CLUSTER_PRECONDITION_REQUIRED }
+              error: { type: string }
+
+    ClusterIdentityUnavailable:
+      description: Current manager identity could not be verified; no mutation dispatch.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, error]
+            properties:
+              code: { type: string, const: CLUSTER_IDENTITY_UNAVAILABLE }
+              error: { type: string }
 
   schemas:
     HealthResponse:
