@@ -4,7 +4,7 @@
 
 이 절차는 Docklane의 폐기 가능한 Linux/DinD 검증 환경, Docker Engine 28.5.2와 동일 버전의 SwarmKit에 한정한다. 원래 manager 세 대가 모두 제거된 뒤 하나의 cold backup과 해당 unlock key로 신뢰 도메인을 복원하는 실험이다. 일반 운영 호스트에서 직접 실행하는 범용 복구 도구가 아니며 제품 API에 자동 복구 명령을 추가하지 않는다.
 
-이번 변경의 실제 acceptance는 병합 후 `operational-readiness-recovery-v2` 실행으로 판정한다. 구현, helper 빌드 또는 quorum pause/unpause 성공만으로 완료 처리하지 않는다. 최신 성공/실패 실행은 이 변경 PR의 체크포인트를 확인한다. Root CA, cluster ID, 키 회전 및 fresh worker 가입이 모두 통과해야 전체 신뢰 복구 완료다.
+PR #109 이후 [recovery-v2 #37542402155](https://github.com/KimHG1995/Docklane/actions/runs/37542402155)가 성공했다. 원래 manager의 부재, 정상 Docker에서 원래 키 unlock, root CA/cluster ID/leader, 키 회전과 재시작 후 이전 키 거절/새 키 승인, fresh worker 가입 및 cleanup을 확인했다. [검증 체크포인트](https://github.com/KimHG1995/Docklane/pull/109#issuecomment-6026899132)와 최종 summary가 이 버전 한정 신뢰 복구의 완료 근거다. 구현, helper 빌드 또는 quorum pause/unpause 성공만으로 완료 처리하지 않는다. 이후 코드 변경의 검증은 해당 PR 체크포인트를 확인한다.
 
 ## 기존 교착 경로와 새 방식
 
@@ -22,7 +22,7 @@ Helper의 task executor는 비활성화하고 노드 availability는 Pause로 �
 
 `offline-quorum-rebuild.py`는 다음 조건을 모두 확인한다. 기록된 원래 manager full ID가 정확히 세 개이고, Docker의 명시적인 not-found로 모두 부재여야 한다. 복원 컨테이너는 ID/이름/소유권 marker가 일치하고 Running/Paused/Restarting/Dead가 모두 false이며 private PID namespace여야 한다. Docker context override 및 원격 endpoint는 거절한다. 통신 오류를 부재로 처리하지 않는다.
 
-Go helper는 명시적인 disposable-copy opt-in, clean absolute state path, 필수 certificate/key/docker-state.json 및 기존 Raft 디렉터리, 예상 CA fingerprint와 정규 인코딩된 32바이트 unlock key를 확인한다. 경로의 symlink와 누락된 백업을 거절한다. 작업 전 exclusive intent를 영속화하고 불명확한 실패에는 intent를 남긴다. 같은 사본을 자동 재시도하지 않는다.
+Go helper는 명시적인 disposable-copy opt-in, clean absolute state path, 필수 certificate/key/docker-state.json 및 기존 Raft 디렉터리, 예상 CA fingerprint와 정규 인코딩된 32바이트 unlock key를 확인한다. 경로의 symlink와 누락된 백업을 거절한다. 작업 전 exclusive intent를 영속화하고 성공/실패 모두에서 유지한다. 같은 사본의 helper 재호출은 거절한다.
 
 ## 실제 drill 순서
 
@@ -54,9 +54,15 @@ bash tests/operational-readiness/trust-key-restore-v2.sh
 
 키를 CLI argument, 환경변수, 로그 또는 PR 댓글에 넣지 않는다. 위 drill 내부에서 key는 private 파일/메모리와 stdin 경로로 전달한다. Helper의 원시 로그는 업로드하지 않으며 고정된 phase 이름과 결과만 기록한다. 이 제한은 전체 저장소의 모든 artifact를 보안 감사했다는 뜻은 아니다.
 
+## 완료 기록과 결과 전달
+
+`.docklane-offline-rebuild.intent`는 작업 시작 전에 exclusive create와 fsync로 저장하고 완료 뒤에도 삭제하지 않는다. 첫 줄의 시작 기록 뒤에 CA 보존을 확인한 성공 JSON을 추가하고, 같은 파일의 Sync와 Close가 끝난 다음에만 stdout으로 결과를 전달한다. 완료 JSON은 기존 stdout과 같은 세 필드이며 키나 인증서 원문을 포함하지 않는다.
+
+결과 Writer가 전체/일부 출력 후 실패하거나 일부만 쓰는 경우, helper는 오류를 반환하되 완료 기록과 재실행 차단은 유지한다. 정상 출력 뒤 재호출도 거절한다. 실패 중 불완전한 기록이 남아도 marker가 있는 사본은 다시 rebuild하지 않는다. 이는 결과 자동 재전송 기능이 아니며, marker의 성공 JSON만으로 wrapper의 다음 단계나 전체 acceptance를 허용하지 않는다. 정상 Docker의 후속 검증은 계속 필요하다.
+
 ## 중단과 재시도
 
-원래 manager가 하나라도 존재하거나 복원 Docker가 실행 중이거나 증거/키/CA가 맞지 않으면 즉시 중단한다. Offline helper timeout/비정상 종료/CA 변경에는 working copy를 신뢰하지 말고 원본 백업을 보존한다. Intent를 삭제해 같은 사본을 강제로 재사용하지 않는다. 전용 환경을 정리한 뒤 원본 tar에서 새로운 복원 사본을 만드는 것은 별도의 명시적인 새 drill이다.
+원래 manager가 하나라도 존재하거나 복원 Docker가 실행 중이거나 증거/키/CA가 맞지 않으면 즉시 중단한다. Offline helper timeout/비정상 종료/CA 변경에는 working copy를 신뢰하지 말고 원본 백업을 보존한다. 결과 전달 실패도 성공으로 바꾸지 않는다. Intent 또는 완료 기록을 삭제해 같은 사본을 강제로 재사용하지 않는다. 전용 환경을 정리한 뒤 원본 tar에서 새로운 복원 사본을 만드는 것은 별도의 명시적인 새 drill이다.
 
 정리만 재시도할 때는 `offline-quorum-rebuild.py --cleanup-only`를 사용한다. Label/ID 검증에 실패하면 ownership을 보존한다. 종료된 unlock의 자동 재전송, autolock=false, 기존 manager 복귀로 단일 백업 조건 대체, 실패를 무시한 worker 가입은 금지한다.
 

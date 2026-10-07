@@ -82,19 +82,19 @@ func execute(args []string, input io.Reader, output io.Writer, rebuild func(opti
 		return errors.New("invalid unlock key encoding")
 	}
 	defer clear(key)
-	// A failed/aborted rebuild leaves this marker. Never retry on an uncertain copy;
-	// discard the copy and start with the original immutable backup instead.
+	// Retain this fence after failure AND completion. A lost result must never
+	// authorize another rebuild on the same copy.
 	marker := filepath.Join(*root, intentFile)
 	record, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return errors.New("prior or concurrent rebuild intent exists")
 	}
+	defer record.Close()
 	_, err = record.WriteString("moby-v28.5.2 isolated offline rebuild\n")
 	if err == nil {
 		err = record.Sync()
 	}
-	closeErr := record.Close()
-	if err != nil || closeErr != nil {
+	if err != nil {
 		return errors.New("could not persist rebuild intent")
 	}
 	directory, err := os.Open(*root)
@@ -113,8 +113,25 @@ func execute(args []string, input io.Reader, output io.Writer, rebuild func(opti
 	if err != nil || after != before {
 		return errors.New("root CA changed during rebuild; discard working copy")
 	}
-	if err := os.Remove(marker); err != nil {
-		return errors.New("could not finalize rebuilt copy")
+	// Persist the exact result on the already-exclusive descriptor before stdout.
+	// Failed writes/sync/close retain the fence, even if the journal is partial.
+	result, err := json.Marshal(map[string]any{"status": "offline-quorum-rebuilt", "root_ca_preserved": true, "single_backup_acceptance": false})
+	if err != nil {
+		return errors.New("could not encode rebuild completion")
 	}
-	return json.NewEncoder(output).Encode(map[string]any{"status": "offline-quorum-rebuilt", "root_ca_preserved": true, "single_backup_acceptance": false})
+	result = append(result, '\n')
+	if _, err := record.Write(result); err != nil {
+		return errors.New("could not persist rebuild completion; rebuild remains blocked")
+	}
+	if err := record.Sync(); err != nil {
+		return errors.New("could not sync rebuild completion; rebuild remains blocked")
+	}
+	if err := record.Close(); err != nil {
+		return errors.New("could not close rebuild completion; rebuild remains blocked")
+	}
+	n, err := output.Write(result)
+	if err != nil || n != len(result) {
+		return errors.New("completed rebuild result delivery failed; rebuild remains blocked")
+	}
+	return nil
 }
