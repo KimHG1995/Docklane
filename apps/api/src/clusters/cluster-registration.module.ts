@@ -1,13 +1,12 @@
 import { Module } from '@nestjs/common';
 import { AgentModule } from '../agent/agent.module.js';
-import { DbModule } from '../db/db.module.js';
+import { ClusterBindingModule } from './cluster-binding.module.js';
 import { ClusterRegistrationController } from './cluster-registration.controller.js';
-import { ClusterRegistrationRepository } from './cluster-registration.repository.js';
 import { ClusterRegistrationService } from './cluster-registration.service.js';
 
 @Module({
-  imports: [AgentModule, DbModule],
+  imports: [AgentModule, ClusterBindingModule],
   controllers: [ClusterRegistrationController],
-  providers: [ClusterRegistrationRepository, ClusterRegistrationService],
+  providers: [ClusterRegistrationService],
 })
 export class ClusterRegistrationModule {}

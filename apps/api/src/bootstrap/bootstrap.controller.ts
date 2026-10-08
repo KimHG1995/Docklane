@@ -22,6 +22,7 @@ import {
   CreateBootstrapTokenRequestSchema,
 } from './bootstrap.dto.js';
 import { BootstrapService } from './bootstrap.service.js';
+import { RequireClusterBinding } from '../clusters/cluster-binding.guard.js';
 import type {
   BootstrapClaimResponse,
   BootstrapCompleteResponse,
@@ -51,6 +52,7 @@ export class BootstrapController {
   }
 
   @Post('bootstrap/complete')
+  @RequireClusterBinding()
   @HttpCode(200)
   @Public()
   complete(@Body() body: unknown): Promise<BootstrapCompleteResponse> {
@@ -60,6 +62,7 @@ export class BootstrapController {
   }
 
   @Post('bootstrap/claim')
+  @RequireClusterBinding()
   @HttpCode(200)
   @Public()
   claim(@Body() body: unknown): Promise<BootstrapClaimResponse> {

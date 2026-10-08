@@ -11,6 +11,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { AGENT_CLIENT, type AgentClient } from '../agent/agent-client.js';
 import type { Principal } from '../auth/auth.types.js';
 import { NodeMutationService } from '../operations/node-mutation.service.js';
+import { ClusterBindingPolicy } from '../clusters/cluster-binding.policy.js';
 import type {
   BootstrapClaimRequest,
   BootstrapCompleteRequest,
@@ -40,6 +41,7 @@ export class BootstrapService {
     private readonly agentClient: AgentClient,
     @Inject(NodeMutationService)
     private readonly nodeMutations: NodeMutationService,
+    @Inject(ClusterBindingPolicy) private readonly binding: ClusterBindingPolicy,
   ) {}
 
   async issue(
@@ -48,6 +50,7 @@ export class BootstrapService {
     principal: Principal,
   ): Promise<BootstrapTokenIssueResponse> {
     this.assertCluster(clusterId);
+    await this.binding.assertRegistered(clusterId);
     this.requireSwarmJoinCredentials(clusterId, input.nodeRole);
 
     const token = `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
@@ -80,6 +83,7 @@ export class BootstrapService {
       );
     }
     this.assertCluster(pending.clusterId);
+    await this.binding.assertRegistered(pending.clusterId);
 
     const swarmJoin = this.requireSwarmJoinCredentials(
       pending.clusterId,
@@ -128,6 +132,7 @@ export class BootstrapService {
       );
     }
     this.assertCluster(record.clusterId);
+    await this.binding.assertRegistered(record.clusterId);
 
     let observed;
     try {

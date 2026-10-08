@@ -2,6 +2,7 @@ import {
   BadRequestException, Body, Controller, Get, HttpCode, Inject, Param, Put, Req, UnauthorizedException,
 } from '@nestjs/common';
 import { RequireRole } from '../auth/auth.decorators.js';
+import { SkipClusterBinding } from './cluster-binding.guard.js';
 import type { AuthenticatedRequest, Principal } from '../auth/auth.types.js';
 import { RegisterClusterRequestSchema } from './cluster-registration.dto.js';
 import { ClusterRegistrationService } from './cluster-registration.service.js';
@@ -9,6 +10,7 @@ import type { ClusterRegistrationRecord, ClusterRegistrationView } from './clust
 
 @Controller('v1/clusters/:clusterId/registration')
 @RequireRole('ADMIN')
+@SkipClusterBinding()
 export class ClusterRegistrationController {
   constructor(@Inject(ClusterRegistrationService) private readonly registrations: ClusterRegistrationService) {}
 
