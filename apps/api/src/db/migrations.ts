@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { migrateClusterRegistration } from './cluster-registration.migration.js';
 import type {
   PoolConnection,
   RowDataPacket,
@@ -40,6 +41,12 @@ export const DATABASE_MIGRATIONS: readonly Migration[] = [
     name: 'backfill-bootstrap-completed-node-id',
     signature: '2026-10-01-backfill-bootstrap-completed-node-id-v1',
     up: backfillBootstrapCompletedNodeId,
+  },
+  {
+    version: 3,
+    name: 'cluster-registration',
+    signature: '2026-10-08-cluster-registration-v1',
+    up: migrateClusterRegistration,
   },
 ];
 

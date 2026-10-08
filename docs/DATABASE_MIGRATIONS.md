@@ -30,7 +30,7 @@ Rules:
 
 Migration v1 is `baseline-current-schema`.
 
-It converges both a fresh database and a pre-migration Docklane database to the current schema:
+It converges both a fresh database and a pre-migration Docklane database to the baseline schema:
 
 - `audit_events`
 - `applications`
@@ -44,6 +44,12 @@ It converges both a fresh database and a pre-migration Docklane database to the 
 Historical additive columns and indexes that were previously created from repository `onModuleInit()` hooks are now handled by the migration runner.
 
 Repositories no longer own `CREATE TABLE` or `ALTER TABLE` behavior.
+
+## Cluster registration migration
+
+Migration v3, `cluster-registration`, adds `cluster_registrations` with unique logical and actual Swarm identities. It does not change v1/v2, backfill registrations or rebind existing deployment targets and operations. ADMIN registration and audit behavior are described in [Cluster registration](CLUSTER_REGISTRATION.md).
+
+After v3 is applied, a binary that knows only v2 is rejected by the existing future-schema check. Prepare database backup and binary/schema rollback plans before upgrading; deleting migration metadata is not a supported downgrade.
 
 ## Adding a migration
 
@@ -78,3 +84,5 @@ The PoC verifies:
 - migration history persistence
 - required current tables and additive columns
 - startup rejection when the database contains a future migration version
+- concurrent cluster registration, one audit, replay and identity uniqueness
+- registration rollback when a server-side trigger rejects its audit insert

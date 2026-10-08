@@ -37,6 +37,8 @@ Exit criteria:
 ## v0.1 — Swarm Read Model
 
 - [ ] cluster registration
+  - [x] immutable ADMIN registration/read API, configured/live identity check, DB mapping and atomic audit — [1단계 범위](CLUSTER_REGISTRATION.md)
+  - [ ] registered binding enforcement across runtime operations and explicit legacy-data rollout
 - [x] manager quorum
 - [x] node list/detail
 - [x] service list/detail
@@ -238,7 +240,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager loss — run #36681425236
 - [x] quorum loss — run #36682067172
 - [x] network partition — run #36682848436
-- [x] manager별 Go Agent 배포 — run #37574849359 (PR #113 이후 재검증)
+- [x] manager별 Go Agent 배포 — run #37716190531 (PR #114 이후 재검증)
 - [x] Agent reconnect/failover — run #36941789676
 - [x] manager resource contention — run #37560542015 (PR #112 이후 재검증)
 - [x] Swarm backup/restore drill — run #37414123569 (PR #102 이후 재검증)
@@ -289,6 +291,10 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-08 PR #113 이후 결과 동기화: main validate #37574849436에서 API 159개 테스트/타입 검사/빌드, Go Agent와 mTLS, 운영 Python 회귀144개가 통과했고 실제 manager-agents #37574849359도 cleanup까지 성공했다. [PR #113 체크포인트](https://github.com/KimHG1995/Docklane/pull/113#issuecomment-6031401217)를 근거로 한다. 실제 매니저 검증은 기존 identity/failover 호환성이며 전체 배포/롤백이나 cross-cluster 재가입 acceptance를 새로 수행한 결과는 아니다.
 
 2026-10-08 Agent 사전 거절 종료 처리: 변경 요청의 412/CLUSTER_PRECONDITION_FAILED, 428/CLUSTER_PRECONDITION_REQUIRED, 503/CLUSTER_IDENTITY_UNAVAILABLE 쌍만 공통 분류로 확정 거절에 추가한다. 서비스/노드/배포/과거 재배포와 수동 롤백 operation은 FAILED 및 audit을 함께 저장하고, 거절된 rollback의 deployment는 요청 전 FAILED 상태로 복귀시킨다. 실제 롤백 실행 후 수렴 실패는 기존 보호를 유지한다. 일반 503/응답 유실/잘못된 envelope는 불확실성 처리를 유지하며, 증거 없는 과거 NEEDS_ATTENTION 기록은 자동 해제하지 않는다. [거절 및 재시도 계약](AGENT_REJECTION_HANDLING.md)에 범위를 기록했다. 실제 coordinator를 사용하는 대역 회귀와 분류 단위 테스트를 추가했고, 실제 의존성 CI 결과는 이 작업의 PR 체크포인트에 기록한다.
+
+2026-10-08 PR #114 이후 결과 동기화: PR validate #37716041070과 main validate #37716190480에서 실제 API 265개 테스트/타입 검사/빌드 및 mTLS가 통과했고, 실제 manager-agents #37716190531도 업로드와 cleanup까지 성공했다. [PR #114 체크포인트](https://github.com/KimHG1995/Docklane/pull/114#issuecomment-6050713689)가 근거다. 운영 회귀/Go 전체 suite/전체 Functional/cold recovery를 이번에 다시 실행했다는 뜻은 아니다.
+
+2026-10-08 클러스터 등록 1단계: scoped ADMIN의 현재 논리 ID와 명시적인 환경 Swarm pin 및 manager identity를 대조한 뒤 등록과 감사를 같은 트랜잭션에 저장한다. 등록 metadata는 불변이며 동일 재호출/동시 INSERT는 기존 결과와 하나의 감사를 유지한다. 조회는 저장 정보와 설정 일치 여부만 반환하고 live health로 해석하지 않는다. 기존 migration을 바꾸지 않는 3번 schema와 기존 MySQL PoC의 등록/중복/감사 rollback 검증을 추가했다. [등록 API와 제한](CLUSTER_REGISTRATION.md)을 참조한다. 등록 테이블을 기존 조회/배포/노드/reconciliation의 필수 조건으로 연결하는 후속 작업이 남으므로 전체 cluster registration은 미완료다. 기존 mutation 거절/응답 유실 정책과 암호화 복구 범위는 유지한다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
 

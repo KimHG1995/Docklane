@@ -51,6 +51,7 @@ cd "$ROOT_DIR"
 DOCKLANE_DATABASE_URL="$DATABASE_URL" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { Database } from './apps/api/dist/db/database.js';
+import { ClusterRegistrationRepository } from './apps/api/dist/clusters/cluster-registration.repository.js';
 
 const db = new Database();
 
@@ -174,12 +175,13 @@ try {
   const [migrationRows] = await db.pool.query(
     'SELECT version, name, checksum FROM schema_migrations ORDER BY version',
   );
-  assert.equal(migrationRows.length, 2);
+  assert.equal(migrationRows.length, 3);
   assert.deepEqual(
     migrationRows.map((row) => [Number(row.version), row.name]),
     [
       [1, 'baseline-current-schema'],
       [2, 'backfill-bootstrap-completed-node-id'],
+      [3, 'cluster-registration'],
     ],
   );
   for (const row of migrationRows) {
@@ -190,6 +192,7 @@ try {
     'applications',
     'audit_events',
     'bootstrap_tokens',
+    'cluster_registrations',
     'deployment_targets',
     'deployments',
     'node_operations',
@@ -252,6 +255,46 @@ try {
   }
 
   await db.pool.execute('DELETE FROM schema_migrations WHERE version = 999');
+
+  // Reuse this MySQL instance to exercise the actual registration repository.
+  // No new Docker topology, workflow or network configuration is introduced.
+  const registrations = new ClusterRegistrationRepository(db);
+  const registrationInput = { clusterId: 'default', swarmClusterId: 'swarm-test-a',
+    displayName: '등록 검증', registeredBy: 'admin-test', verifiedNodeId: 'manager-test' };
+  const concurrent = await Promise.all(Array.from({ length: 4 }, () => registrations.register(registrationInput)));
+  assert.equal(new Set(concurrent.map((row) => row.id)).size, 1);
+  const registration = concurrent[0];
+  assert.equal(registration.displayName, registrationInput.displayName);
+  assert.match(registration.createdAt, /Z$/);
+  assert.deepEqual(await new ClusterRegistrationRepository(db).find('default'), registration);
+  const [registrationAudits] = await db.query(
+    "SELECT * FROM audit_events WHERE action = 'CLUSTER_REGISTERED' AND operation_id = ?", [registration.id]);
+  assert.equal(registrationAudits.length, 1);
+  assert.equal(registrationAudits[0].resource_type, 'cluster');
+  const snapshot = typeof registrationAudits[0].after_json === 'string'
+    ? JSON.parse(registrationAudits[0].after_json) : registrationAudits[0].after_json;
+  assert.equal(snapshot.swarmClusterId, registrationInput.swarmClusterId);
+  for (const change of [{ swarmClusterId: 'swarm-other' }, { clusterId: 'other' }, { displayName: 'changed' }]) {
+    await assert.rejects(registrations.register({ ...registrationInput, ...change }), /already registered/);
+  }
+  assert.equal(await registrations.find('Default'), null, 'logical IDs must be case-sensitive');
+  // Inject a real server-side audit error, then verify the registration INSERT rolled back.
+  await db.query(`CREATE TRIGGER reject_test_cluster_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_REGISTERED' AND NEW.resource_id = 'audit-failure' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'registration audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(registrations.register({ ...registrationInput,
+      clusterId: 'audit-failure', swarmClusterId: 'swarm-audit-failure' }), /registration audit failure/);
+    assert.equal(await registrations.find('audit-failure'), null);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_cluster_audit');
+  }
+  const [unchanged] = await db.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = 'CLUSTER_REGISTERED'");
+  assert.equal(Number(unchanged[0].count), 1);
+  console.log('cluster registration MySQL transaction/replay/uniqueness: PASS');
 
   console.log('database migration PoC: PASS');
 } finally {
