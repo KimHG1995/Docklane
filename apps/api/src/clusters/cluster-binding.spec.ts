@@ -109,3 +109,80 @@ test('registration remains accessible while other scoped and public bootstrap re
   assert.equal(await guard.canActivate(context(worker, 'claim')), true);
   assert.equal(await guard.canActivate(context(scoped, 'services', 'default')), true);
 });
+
+test('concurrent locked Agent calls use one pooled connection each, even at pool capacity', async () => {
+  const max = 10;
+  let active = 0;
+  let checkouts = 0;
+  let admissionReads = 0;
+  let mutations = 0;
+  const queue: Array<() => void> = [];
+  const dbSource = {
+    getConnection: async () => {
+      checkouts++;
+      if (active >= max) await new Promise<void>((resolve) => queue.push(resolve));
+      active++;
+      return {
+        query: async (sql: string, _params?: unknown[]) => {
+          if (sql.startsWith('SELECT GET_LOCK')) return [[{ acquired: 1 }], []];
+          if (sql.startsWith('SELECT RELEASE_LOCK')) return [[{ released: 1 }], []];
+          if (sql.startsWith('SELECT * FROM cluster_registrations')) {
+            admissionReads++;
+            return [[{ id: record.id, cluster_id: record.clusterId, swarm_cluster_id: record.swarmClusterId,
+              display_name: record.displayName, registered_by: record.registeredBy,
+              verified_node_id: record.verifiedNodeId, created_at: new Date(record.createdAt) }], []];
+          }
+          throw Error('unexpected SQL');
+        },
+        release: () => { active--; queue.shift()?.(); },
+        destroy: () => { active--; queue.shift()?.(); },
+      };
+    },
+  };
+  const database = {
+    ...dbSource,
+    query: async (sql: string, params: unknown[]) => {
+      const connection = await dbSource.getConnection();
+      try { return await connection.query(sql, params); }
+      finally { connection.release(); }
+    },
+  } as unknown as Database;
+  const registrations = new (await import('./cluster-registration.repository.js')).ClusterRegistrationRepository(database);
+  const policy = new ClusterBindingPolicy(registrations, settings);
+  const locks = new RegisteredOperationLock(database, policy);
+  const agent = registeredAgentClient({ inspectService: async () => { mutations++; return {} as never; } } as AgentClient, policy);
+  const requests = Array.from({ length: max }, (_, i) => locks.withServiceLock(
+    'default', 'service-' + i, async () => { await agent.inspectService('service-' + i); },
+  ));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([Promise.all(requests),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error('pool exhausted by nested registration reads')), 2000);
+      })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  assert.equal(mutations, max);
+  assert.equal(checkouts, 20);
+  assert.equal(admissionReads, 20);
+  assert.equal(active, 0);
+});
+
+test('same lock connection is used for registration and never reused after scope ends', async () => {
+  const f = fixture();
+  let lockedReads = 0;
+  const connection = { query: async () => {
+    lockedReads++;
+    return [[{ id: record.id, cluster_id: record.clusterId, swarm_cluster_id: record.swarmClusterId,
+      display_name: record.displayName, registered_by: record.registeredBy,
+      verified_node_id: record.verifiedNodeId, created_at: new Date(record.createdAt) }], []];
+  } };
+  await f.policy.withLockedConnection(connection as never, async () => {
+    await f.policy.assertRegistered();
+    assert.equal(f.state.reads, 0);
+  });
+  await f.policy.assertRegistered();
+  assert.equal(lockedReads, 1);
+  assert.equal(f.state.reads, 1);
+});

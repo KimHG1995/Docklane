@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Inject, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import type { PoolConnection } from 'mysql2/promise';
 import { ClusterRegistrationRepository } from './cluster-registration.repository.js';
 import { isBoundedIdentifier } from './cluster-registration.types.js';
 
@@ -38,7 +40,15 @@ export class ClusterBindingPolicy {
     @Inject(CLUSTER_BINDING_SETTINGS) readonly settings: ClusterBindingSettings,
   ) {}
 
+  private readonly lockedScope = new AsyncLocalStorage<{ connection: PoolConnection; active: boolean }>();
   get clusterId(): string { return this.settings.logicalClusterId; }
+  async withLockedConnection<T>(connection: PoolConnection, callback: () => Promise<T>): Promise<T> {
+    const scope = { connection, active: true };
+    return this.lockedScope.run(scope, async () => {
+      try { return await callback(); }
+      finally { scope.active = false; }
+    });
+  }
 
   async assertRegistered(clusterId: string = this.clusterId): Promise<void> {
     if (clusterId !== this.clusterId) throw new NotFoundException('Cluster not found');
@@ -46,7 +56,10 @@ export class ClusterBindingPolicy {
     let record;
     try {
       // Deliberately no successful-registration cache across requests or restarts.
-      record = await this.registrations.find(clusterId);
+      const scope = this.lockedScope.getStore();
+      record = scope?.active
+        ? await this.registrations.findWithConnection(scope.connection, clusterId)
+        : await this.registrations.find(clusterId);
     } catch {
       throw new ClusterBindingUnavailable('CLUSTER_REGISTRATION_UNAVAILABLE');
     }
