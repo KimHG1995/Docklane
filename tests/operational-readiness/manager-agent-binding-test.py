@@ -44,5 +44,20 @@ class ManagerAgentBindingTests(unittest.TestCase):
         self.assertIn("'CLUSTER_REGISTRATION_MISMATCH'", helper)
         self.assertNotIn("expectedClusterId: process.env.DOCKLANE_CLUSTER_ID", helper)
 
+
+    def test_registration_db_requires_host_tcp_and_not_local_socket_ping(self):
+        shell = (HERE / 'manager-agents.sh').read_text()
+        self.assertIn('-p "127.0.0.1:${REGISTRATION_DB_PORT}:3306"', shell)
+        self.assertIn('mysql --protocol=TCP -h127.0.0.1', shell)
+        self.assertIn("-e 'SELECT 1'", shell)
+        self.assertIn('/dev/tcp/127.0.0.1/$REGISTRATION_DB_PORT', shell)
+        self.assertIn('registration_db_ready=true', shell)
+        self.assertIn('registration_db_ready" == "true"', shell)
+        self.assertIn('DOCKLANE_DATABASE_URL="mysql://docklane:docklane-test@127.0.0.1:${REGISTRATION_DB_PORT}/docklane"', shell)
+        self.assertNotIn('REGISTRATION_DB_IP', shell)
+        self.assertNotIn('mysqladmin ping -uroot', shell)
+        self.assertLess(shell.index('registration_db_ready=true'), shell.index('node "$ROOT_DIR/tests/operational-readiness/manager-agents-registration.mjs"'))
+        self.assertIn('remove_owned_container manager-db', (HERE / 'cleanup.sh').read_text())
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

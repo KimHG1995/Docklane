@@ -9,6 +9,7 @@ MANAGER_01_CONTAINER="docklane-or-manager-01"
 MANAGER_02_CONTAINER="docklane-or-manager-02"
 MANAGER_03_CONTAINER="docklane-or-manager-03"
 REGISTRATION_DB_CONTAINER="docklane-or-manager-db"
+REGISTRATION_DB_PORT=33307
 MANAGER_01_AGENT_PORT="19443"
 MANAGER_02_AGENT_PORT="19444"
 MANAGER_03_AGENT_PORT="19445"
@@ -340,22 +341,29 @@ unique_nodes="$(printf '%s\n' "${node_ids[@]}" | sort -u | wc -l | tr -d ' ')"
 
 
 log "starting disposable MySQL registration store on isolated manager network"
-REGISTRATION_DB_ID="$(docker run -d --name "$REGISTRATION_DB_CONTAINER" --network "$NETWORK_NAME" -e MYSQL_ROOT_PASSWORD=docklane-root -e MYSQL_DATABASE=docklane -e MYSQL_USER=docklane -e MYSQL_PASSWORD=docklane-test mysql:8.4)"
+REGISTRATION_DB_ID="$(docker run -d --name "$REGISTRATION_DB_CONTAINER" --network "$NETWORK_NAME" -p "127.0.0.1:${REGISTRATION_DB_PORT}:3306" -e MYSQL_ROOT_PASSWORD=docklane-root -e MYSQL_DATABASE=docklane -e MYSQL_USER=docklane -e MYSQL_PASSWORD=docklane-test mysql:8.4)"
 printf '%s\n' "$REGISTRATION_DB_ID" >"$OWNERSHIP_DIR/manager-db.container-id"
+# A local mysqladmin ping can succeed against the temporary --skip-networking
+# initialization server. Require final TCP availability and a working SQL user.
+registration_db_ready=false
 for _ in {1..90}; do
-  if docker exec "$REGISTRATION_DB_CONTAINER" mysqladmin ping -uroot -pdocklane-root --silent >/dev/null 2>&1; then break; fi
+  if docker exec "$REGISTRATION_DB_CONTAINER" mysql --protocol=TCP -h127.0.0.1 \
+      -udocklane -pdocklane-test docklane --batch --skip-column-names \
+      -e 'SELECT 1' 2>/dev/null | grep -qx '1' &&
+      ( : >"/dev/tcp/127.0.0.1/$REGISTRATION_DB_PORT" ) 2>/dev/null; then
+    registration_db_ready=true
+    break
+  fi
   sleep 1
 done
-docker exec "$REGISTRATION_DB_CONTAINER" mysqladmin ping -uroot -pdocklane-root --silent >/dev/null 2>&1 || fail "registration DB not ready"
-REGISTRATION_DB_IP="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$NETWORK_NAME\"}}{{.IPAddress}}{{end}}" "$REGISTRATION_DB_CONTAINER")"
-[[ -n "$REGISTRATION_DB_IP" ]] || fail "registration DB IP missing"
+[[ "$registration_db_ready" == "true" ]] || fail "registration DB TCP on host loopback did not become ready"
 
 log "verifying Control Plane Agent failover after primary Agent loss"
 # This disposable fixture already checked the ID against all three Docker managers.
 DOCKLANE_EXPECTED_CLUSTER_ID="$cluster_id" \
 DOCKLANE_CLUSTER_ID=default \
 DOCKLANE_CLUSTER_REGISTRATION_MODE=enforce \
-DOCKLANE_DATABASE_URL="mysql://docklane:docklane-test@${REGISTRATION_DB_IP}:3306/docklane" \
+DOCKLANE_DATABASE_URL="mysql://docklane:docklane-test@127.0.0.1:${REGISTRATION_DB_PORT}/docklane" \
 DOCKLANE_MANAGER_AGENT_URLS="$(printf '[{"id":"manager-01","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-02","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-03","baseUrl":"https://127.0.0.1:%s"}]' "$MANAGER_01_AGENT_PORT" "$MANAGER_02_AGENT_PORT" "$MANAGER_03_AGENT_PORT")" \
 DOCKLANE_AGENT_CA_FILE="$CA_CERT" \
 DOCKLANE_AGENT_CERT_FILE="$CLIENT_CERT" \
