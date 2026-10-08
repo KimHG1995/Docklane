@@ -73,3 +73,26 @@
 - [Agent 거절과 불확실성](AGENT_REJECTION_HANDLING.md)
 - [MySQL 8.4 unique constraints](https://dev.mysql.com/doc/refman/8.4/en/constraint-primary-key.html)
 - [MySQL 8.4 transaction rollback](https://dev.mysql.com/doc/refman/8.4/en/commit.html)
+
+
+## 등록 바인딩 실행 검증과 수동 활성화
+
+`DOCKLANE_CLUSTER_REGISTRATION_MODE=compat`(기본값)는 기존 환경을 위한 명시적 이행 모드다. `enforce`를 설정하면 등록된 논리 ID와 현재 고정된 실제 Swarm ID를 매번 DB로 검증한다. 이 단계에서 전환을 자동으로 활성화하지 않는다. 유효하지 않은 mode나 실제 Swarm ID 미설정은 시작 시 거절한다.
+
+Enforce의 범위는 클러스터 HTTP 조회/변경, Agent 조회·계획·변경(health 제외), operation lock 경계, bootstrap 발급·claim·complete(인증 전 공개 API 포함)이다. scoped ADMIN 등록 PUT/GET은 등록 전에도 접근 가능하지만 기존 AuthGuard를 우회하지 않는다. 미등록은 CLUSTER_REGISTRATION_REQUIRED, 불일치는 CLUSTER_REGISTRATION_MISMATCH, DB 실패는 CLUSTER_REGISTRATION_UNAVAILABLE로 503 반환한다. DB 성공 캐시를 사용하지 않으며, 장애에서 기존 intent를 임의로 terminal 처리하지 않는다.
+
+1. DB 백업과 schema3 바이너리 호환성을 점검하고 여러 Control Plane의 DOCKLANE_CLUSTER_ID 및 DOCKLANE_EXPECTED_CLUSTER_ID를 일치시킨다.
+2. **읽기 전용**으로 operations, node_operations, deployment_targets, bootstrap_tokens, audit_events의 DISTINCT cluster_id 값을 조회해 등록할 현재 논리 ID와 대조한다. 외부 또는 미확인 ID가 있으면 운영 전환을 중단한다. 기존 데이터는 자동으로 바꾸지 않는다.
+3. 안전한 manager에서 실제 Swarm ID를 확인해 환경에 고정하고, compat 모드에서 ADMIN 등록 API를 호출해 응답과 DB 감사 기록을 확인한다.
+4. 진행 중 mutation/claim을 정지하거나 기록을 확인한 후, 모든 Control Plane 인스턴스를 enforce로 동시에 전환한다. 미해결 NEEDS_ATTENTION을 상태 조회만으로 해제하지 않는다.
+5. 정상 조회, 배포 계획, 요청 거절, bootstrap 중단 및 API 재시작 후 reconciliation을 점검한다. 실제 다중 노드 Functional acceptance 통과는 별도 검증이다.
+
+```sql
+SELECT 'operations' AS source, cluster_id FROM operations
+UNION SELECT 'node_operations', cluster_id FROM node_operations
+UNION SELECT 'deployment_targets', cluster_id FROM deployment_targets
+UNION SELECT 'bootstrap_tokens', cluster_id FROM bootstrap_tokens
+UNION SELECT 'audit_events', cluster_id FROM audit_events;
+```
+
+설정 강제화는 Docker 내부 update와 외부 rejoin 사이의 원자성을 보장하지 않는다. 등록 관리 API의 재호출 성공은 새로운 live identity 검증이 아니다.

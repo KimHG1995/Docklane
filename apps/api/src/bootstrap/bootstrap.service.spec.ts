@@ -46,6 +46,7 @@ test('bootstrap token is returned once while only its hash and TTL are persisted
     swarmJoin as never,
     {} as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
    const issued = await service.issue(
     'cluster-1',
@@ -127,6 +128,7 @@ test('bootstrap claim replays only for the same claimId', async () => {
     swarmJoin as never,
     {} as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
   const request = {
     token: 'docklane_bootstrap_test_token_1234567890',
@@ -172,6 +174,7 @@ test('bootstrap issue fails before persistence when Swarm credentials are missin
     swarmJoin as never,
     {} as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   await assert.rejects(
@@ -222,6 +225,7 @@ test('bootstrap claim does not consume token when native credentials are unavail
     swarmJoin as never,
     {} as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   await assert.rejects(
@@ -281,6 +285,7 @@ test('bootstrap completion verifies joined node role through Agent', async () =>
     {} as never,
     agent as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   const result = await service.complete({
@@ -332,6 +337,7 @@ test('bootstrap completion rejects node role mismatch', async () => {
     {} as never,
     agent as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   await assert.rejects(
@@ -425,6 +431,7 @@ test('bootstrap completion applies scoped labels through node mutation coordinat
     {} as never,
     agent as never,
     nodeMutations as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   const result = await service.complete({
@@ -499,6 +506,7 @@ test('bootstrap label completion reuses persisted operation expectedVersion on r
     {} as never,
     agent as never,
     nodeMutations as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   await service.complete({
@@ -561,6 +569,7 @@ test('bootstrap completion rejects labels that are not observed after mutation',
     {} as never,
     agent as never,
     nodeMutations as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   await assert.rejects(
@@ -598,6 +607,7 @@ test('bootstrap issue rejects cluster outside configured Agent scope', async () 
     swarmJoin as never,
     {} as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   await assert.rejects(
@@ -650,6 +660,7 @@ test('bootstrap completion rejects foreign cluster before Agent lookup', async (
     {} as never,
     agent as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   await assert.rejects(
@@ -725,6 +736,7 @@ test('bootstrap completion binds one canonical node and rejects a different retr
     {} as never,
     agent as never,
     {} as never,
+    { assertRegistered: async () => {} } as never,
   );
 
   const first = await service.complete({

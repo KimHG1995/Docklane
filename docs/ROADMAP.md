@@ -38,7 +38,8 @@ Exit criteria:
 
 - [ ] cluster registration
   - [x] immutable ADMIN registration/read API, configured/live identity check, DB mapping and atomic audit — [1단계 범위](CLUSTER_REGISTRATION.md)
-  - [ ] registered binding enforcement across runtime operations and explicit legacy-data rollout
+  - [x] opt-in registered binding enforcement at HTTP, Agent, operation-lock and bootstrap boundaries (PR #116)
+  - [ ] operator activation, legacy-data scope review and new end-to-end acceptance
 - [x] manager quorum
 - [x] node list/detail
 - [x] service list/detail
@@ -314,3 +315,6 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [ ] metrics/logging integrations
 - [ ] image vulnerability integration
 - [ ] multi-cluster overview
+2026-10-08 PR #115 증거 동기화: main validate #37725655470(API 293, MySQL migration, mTLS), DB restore #37725655440 통과. 이 복구는 등록된 legacy row 복원 검증이 아니다.
+
+2026-10-08 등록 실행 정책 2단계: DOCKLANE_CLUSTER_REGISTRATION_MODE=enforce일 때 cluster HTTP/Agent/operation lock/bootstrap entry를 매번 DB 조회로 검증한다. 등록 관리 API에는 scoped ADMIN 유지. 기존 기본 compat는 수동 전환용이고, 레코드/설정 불일치나 DB 장애면 fail closed. 새 등록을 자동 생성하거나 기존 cluster_id를 재기록하지 않는다. 실제 운영 전환과 신규 전체 functional acceptance는 미완료로 유지한다.

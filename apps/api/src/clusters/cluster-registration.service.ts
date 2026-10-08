@@ -7,7 +7,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AGENT_CLIENT, type AgentClient } from '../agent/agent-client.js';
+import type { AgentClient } from '../agent/agent-client.js';
+import { HttpAgentClient } from '../agent/http-agent.client.js';
 import {
   MANAGER_AGENT_CONFIG,
   resolveExpectedClusterId,
@@ -30,7 +31,7 @@ export class ClusterRegistrationService {
   private readonly expectedClusterId: string | null;
 
   constructor(
-    @Inject(AGENT_CLIENT) private readonly agent: AgentClient,
+    @Inject(HttpAgentClient) private readonly agent: AgentClient,
     @Inject(ClusterRegistrationRepository) private readonly registrations: ClusterRegistrationRepository,
     @Inject(MANAGER_AGENT_CONFIG) registry: ManagerAgentConfig,
   ) {
