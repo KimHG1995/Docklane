@@ -102,3 +102,6 @@ UNION SELECT 'audit_events', cluster_id FROM audit_events;
 
 ### 실제 MySQL 포화 검증 범위
 기존 `tests/database-migration-poc.sh`의 폐기 가능한 MySQL 8.4에서 pool 10개를 서로 다른 서비스 lock으로 모두 점유하고, lock 안에서 Agent proxy의 등록 admission을 통과해 모든 요청이 끝나는지를 검증한다. 추가 SQL로 세션 ID가 실제로 10개인지 확인하며, 제한 시간 초과 시 성공으로 처리하지 않는다. 이는 실제 MySQL 연결 재사용과 pool 교착 검증이며 실제 Swarm 배포·롤백이나 등록 강제 모드 운영 전환을 의미하지 않는다.
+
+### 3노드 enforce acceptance 범위
+기존 manager-01과 worker-01/02의 disposable DinD를 재사용한다. 실제 manager Swarm ID를 환경 pin으로 고정하고, 미등록 503, VIEWER 403, ADMIN 등록 후 service 조회 및 drain/activate, LB 트래픽, worker 장애 중 등록 일치와 실제 클러스터 ID 유지 검증을 수행한다. 이 검증은 다중 manager failover가 아니며 실제 main 성공 근거가 있어야 acceptance 완료로 기록한다.
