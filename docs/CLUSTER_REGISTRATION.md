@@ -105,3 +105,6 @@ UNION SELECT 'audit_events', cluster_id FROM audit_events;
 
 ### 3노드 enforce acceptance 범위
 기존 manager-01과 worker-01/02의 disposable DinD를 재사용한다. 실제 manager Swarm ID를 환경 pin으로 고정하고, 미등록 503, VIEWER 403, ADMIN 등록 후 service 조회 및 drain/activate, LB 트래픽, worker 장애 중 등록 일치와 실제 클러스터 ID 유지 검증을 수행한다. 이 검증은 다중 manager failover가 아니며 실제 main 성공 근거가 있어야 acceptance 완료로 기록한다.
+
+### 3-manager failover 실제 TCP 접속 검사
+등록 DB의 초기화 중 `mysqladmin ping`은 임시 socket 기반 서버에서도 성공하므로 운영 readiness로 사용하지 않는다. 테스트 전용 DB는 기존 isolated Docker bridge 안에 두고 러너 호스트에서만 접속 가능한 `127.0.0.1:33307`에 매핑한다. 최종 SQL 계정으로 컨테이너 내부 TCP `SELECT 1`과 호스트의 loopback TCP 연결을 모두 확인해야 failover 테스트로 진입한다. 외부 인터페이스나 Swarm 내부 Docker API 포트를 공개하지 않으며 DB 자원은 기존 ownership cleanup을 그대로 따른다.
