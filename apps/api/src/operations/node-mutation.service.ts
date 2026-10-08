@@ -11,6 +11,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import {
   AGENT_CLIENT,
   AgentRequestError,
+  isDeterministicAgentRejection,
   type AgentClient,
 } from '../agent/agent-client.js';
 import type {
@@ -758,15 +759,6 @@ function sameStrings(left: string[], right: string[]): boolean {
 
 function isTerminal(operation: NodeOperationRecord): boolean {
   return operation.status === 'SUCCESS' || operation.status === 'FAILED';
-}
-
-function isDeterministicAgentRejection(
-  error: unknown,
-): error is AgentRequestError {
-  return (
-    error instanceof AgentRequestError &&
-    (error.statusCode === 400 || error.statusCode === 409)
-  );
 }
 
 function mapAgentError(error: AgentRequestError): Error {

@@ -143,3 +143,32 @@ export class AgentRequestError extends Error {
     super(`Agent request failed with ${statusCode}`);
   }
 }
+
+// Only use for the response to the mutation request itself, never to infer the
+// outcome of an earlier request from a later read or from an unchanged spec.
+export function isDeterministicAgentRejection(
+  error: unknown,
+): error is AgentRequestError {
+  if (!(error instanceof AgentRequestError)) return false;
+  // Preserve the existing validation/version-conflict rejection contract.
+  if (error.statusCode === 400 || error.statusCode === 409) return true;
+  if (![412, 428, 503].includes(error.statusCode)) return false;
+  if (typeof error.responseBody !== 'string') return false;
+
+  let body: unknown;
+  try {
+    body = JSON.parse(error.responseBody);
+  } catch {
+    return false;
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !('code' in body)) {
+    return false;
+  }
+  // These exact status/code pairs are emitted by the Agent admission guard
+  // before DockerReader mutation dispatch. A generic 503 is still uncertain.
+  return (
+    (error.statusCode === 412 && body.code === 'CLUSTER_PRECONDITION_FAILED') ||
+    (error.statusCode === 428 && body.code === 'CLUSTER_PRECONDITION_REQUIRED') ||
+    (error.statusCode === 503 && body.code === 'CLUSTER_IDENTITY_UNAVAILABLE')
+  );
+}
