@@ -338,3 +338,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-08 PR #121 병합 후 검증 동기화: PR #37740933017(API 305/305, mTLS), main #37741051045 SUCCESS. 기존 A rollback의 지연 재조회는 lock 내부에서도 A의 terminal 결과를 반환한다. 대역 회귀이며 실제 Docker 동시 rollback 주입 시험은 별개다.
 
 2026-10-08 등록 강제 3노드 Functional PoC 준비: 기존 manager 1대/worker 2대 DinD topology에서 실제 manager Swarm ID pin, 미등록 503, VIEWER 등록 403, ADMIN 등록·재호출과 감사 1건, drain/activate, 외부 LB 트래픽, worker 장애 후 실제 ID 유지 검증을 수행한다. 기존 topology/워크플로 사용, 실제 main 실행 성공 전 체크 미완료 유지. 3-manager failover는 이번 범위가 아니다.
+
+2026-10-08 PR #122 사후 검증 동기화: main #37742889401과 실제 1-manager/2-worker enforce 3노드 Functional PoC #37742889402가 성공했다. 137건 LB 요청, drain/activate, worker 장애 재배치, immutable 등록/감사 및 cleanup 통과. [PR #122 증거](https://github.com/KimHG1995/Docklane/pull/122#issuecomment-6054835506). 이것은 3-manager failover가 아니다.
+
+2026-10-08 3-manager 등록 강제 failover 검증: 기존 mTLS manager Agent 실환경 harness에 disposable MySQL 등록 DB를 붙여 미등록 거절, 설정 불일치 거절, 불변 등록/감사 단일화, primary Agent 종료 후 대체 manager의 보호된 identity/cluster 조회와 새로운 Control Plane client의 등록 DB 재사용을 확인한다. 성공 여부는 main workflow의 실제 결과에 따르며, manager 노드 장애/leader 선출이나 최종 Docker mutation 재가입 경쟁 검증은 아니다.

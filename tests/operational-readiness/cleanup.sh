@@ -95,6 +95,7 @@ remove_owned_network() {
 }
 
 if command -v docker >/dev/null 2>&1; then
+  remove_owned_container manager-db || true
   remove_owned_container manager-03 || true
   remove_owned_container manager-02 || true
   remove_owned_container manager-01 || true
