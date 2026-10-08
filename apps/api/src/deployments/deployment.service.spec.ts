@@ -2196,3 +2196,49 @@ test('terminal rollback retry refreshes the latest deployment row', async () => 
   assert.equal(deploymentFindCalls, 2);
   assert.equal(agentCalls, 0);
 });
+
+test('rejected rollback A stays replayable after rollback B replaces the current deployment pointer', async () => {
+  const original: DeploymentRecord = {
+    kind: 'DEPLOY', sourceDeploymentId: null, id: 'deployment-a',
+    releaseId: 'new-release', previousReleaseId: 'old-release', deploymentTargetId: 'target-1',
+    operationId: 'deploy-op', rollbackOperationId: 'rollback-B', status: 'FAILED',
+    reason: 'B was rejected', noOp: false, beforeSpec: {}, targetSpec: {},
+    health: { url: 'https://health.example.com/ready', intervalMs: 100, timeoutMs: 1000,
+      retries: 1, stabilityWindowMs: 500, expectedStatus: 200 },
+    expectedServiceVersion: 10, startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(), createdBy: 'operator-1', createdAt: new Date(0).toISOString(),
+  };
+  const operations = new Map([
+    ['rollback-A', { ...deploymentOperation, id: 'rollback-A', type: 'ROLLBACK' as const,
+      status: 'FAILED' as const, actorId: 'operator-1', clusterId: 'default',
+      serviceId: 'service-1', errorMessage: 'guard A rejected' }],
+    ['rollback-B', { ...deploymentOperation, id: 'rollback-B', type: 'ROLLBACK' as const,
+      status: 'FAILED' as const, actorId: 'operator-1', clusterId: 'default',
+      serviceId: 'service-1', errorMessage: 'guard B rejected' }],
+  ]);
+  let agentCalls = 0;
+  const repository = {
+    find: async () => ({ ...original }),
+    findByRollbackOperation: async (id: string) =>
+      operations.has(id) ? { ...original } : null,
+  };
+  const service = new DeploymentService(
+    { findDeploymentTarget: async () => ({
+      id: 'target-1', applicationId: 'app-1', clusterId: 'default', dockerServiceId: 'service-1',
+    }), findRelease: async () => ({ id: 'old-release', applicationId: 'app-1' }) } as never,
+    repository as never,
+    { inspectService: async () => { agentCalls++; throw Error('must not contact Agent'); } } as never,
+    { find: async (id: string) => operations.get(id) ?? null } as never,
+    {} as never, {} as never, {} as never, {} as never,
+  );
+  const principal = { actorId: 'operator-1', role: 'OPERATOR' as const, clusters: ['default'] };
+  const old = await service.rollback('default', original.id, { operationId: 'rollback-A' }, principal);
+  const next = await service.rollback('default', original.id, { operationId: 'rollback-B' }, principal);
+  const again = await service.rollback('default', original.id, { operationId: 'rollback-A' }, principal);
+  assert.equal(old.rollbackOperationId, 'rollback-A');
+  assert.equal(old.status, 'FAILED');
+  assert.equal(old.reason, 'guard A rejected');
+  assert.equal(next.rollbackOperationId, 'rollback-B');
+  assert.deepEqual(old, again);
+  assert.equal(agentCalls, 0);
+});
