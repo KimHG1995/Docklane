@@ -291,19 +291,33 @@ export class DeploymentService
     }
 
     const latestDeployment = await this.deployments.find(deployment.id);
+    const historicalDeployment = await this.deployments.findByRollbackOperation(input.operationId);
     if (
       !latestDeployment ||
+      !historicalDeployment ||
       operation.type !== 'ROLLBACK' ||
       operation.clusterId !== clusterId ||
       operation.actorId !== principal.actorId ||
       operation.serviceId !== serviceId ||
-      latestDeployment.rollbackOperationId !== input.operationId
+      historicalDeployment.id !== deployment.id
     ) {
       throw new ConflictException(
         'operationId was already used for a different rollback',
       );
     }
 
+    if (latestDeployment.rollbackOperationId !== input.operationId) {
+      // The stored deployment describes the newer attempt. Preserve the
+      // original operation ID and terminal failure for historical replay.
+      return {
+        ...latestDeployment,
+        rollbackOperationId: input.operationId,
+        status: operation.status === 'FAILED' ? 'FAILED' : latestDeployment.status,
+        reason: operation.status === 'FAILED'
+          ? (operation.errorMessage ?? latestDeployment.reason)
+          : latestDeployment.reason,
+      };
+    }
     return latestDeployment;
   }
 
@@ -888,6 +902,7 @@ export class DeploymentService
         targetRuntimeSpecHash: plan.targetRuntimeSpecHash,
       });
       await this.operations.markRunning(connection, operationId);
+      await this.deployments.recordRollbackAttempt(connection, deployment.id, operationId);
       await this.deployments.markRollingBack(
         connection,
         deployment.id,
