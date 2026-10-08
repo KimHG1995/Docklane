@@ -8,6 +8,7 @@ NETWORK_NAME="docklane-or-manager-net"
 MANAGER_01_CONTAINER="docklane-or-manager-01"
 MANAGER_02_CONTAINER="docklane-or-manager-02"
 MANAGER_03_CONTAINER="docklane-or-manager-03"
+REGISTRATION_DB_CONTAINER="docklane-or-manager-db"
 MANAGER_01_AGENT_PORT="19443"
 MANAGER_02_AGENT_PORT="19444"
 MANAGER_03_AGENT_PORT="19445"
@@ -233,7 +234,10 @@ done
 preflight_absent_container "$MANAGER_01_CONTAINER"
 preflight_absent_container "$MANAGER_02_CONTAINER"
 preflight_absent_container "$MANAGER_03_CONTAINER"
+preflight_absent_container "$REGISTRATION_DB_CONTAINER"
 preflight_absent_network
+[[ -f "$ROOT_DIR/apps/api/dist/clusters/cluster-binding.policy.js" ]] || fail "built cluster binding policy is missing"
+node --check "$ROOT_DIR/tests/operational-readiness/manager-agents-registration.mjs" || fail "helper syntax error"
 
 mkdir -p "$LOG_DIR"
 rm -rf "$OWNERSHIP_DIR"
@@ -334,66 +338,31 @@ unique_nodes="$(printf '%s\n' "${node_ids[@]}" | sort -u | wc -l | tr -d ' ')"
 [[ "$leader_count" == "1" ]] \
   || fail "expected exactly one Agent to observe itself as leader, got $leader_count"
 
+
+log "starting disposable MySQL registration store on isolated manager network"
+REGISTRATION_DB_ID="$(docker run -d --name "$REGISTRATION_DB_CONTAINER" --network "$NETWORK_NAME" -e MYSQL_ROOT_PASSWORD=docklane-root -e MYSQL_DATABASE=docklane -e MYSQL_USER=docklane -e MYSQL_PASSWORD=docklane-test mysql:8.4)"
+printf '%s\n' "$REGISTRATION_DB_ID" >"$OWNERSHIP_DIR/manager-db.container-id"
+for _ in {1..90}; do
+  if docker exec "$REGISTRATION_DB_CONTAINER" mysqladmin ping -uroot -pdocklane-root --silent >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+docker exec "$REGISTRATION_DB_CONTAINER" mysqladmin ping -uroot -pdocklane-root --silent >/dev/null 2>&1 || fail "registration DB not ready"
+REGISTRATION_DB_IP="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$NETWORK_NAME\"}}{{.IPAddress}}{{end}}" "$REGISTRATION_DB_CONTAINER")"
+[[ -n "$REGISTRATION_DB_IP" ]] || fail "registration DB IP missing"
+
 log "verifying Control Plane Agent failover after primary Agent loss"
 # This disposable fixture already checked the ID against all three Docker managers.
 DOCKLANE_EXPECTED_CLUSTER_ID="$cluster_id" \
+DOCKLANE_CLUSTER_ID=default \
+DOCKLANE_CLUSTER_REGISTRATION_MODE=enforce \
+DOCKLANE_DATABASE_URL="mysql://docklane:docklane-test@${REGISTRATION_DB_IP}:3306/docklane" \
 DOCKLANE_MANAGER_AGENT_URLS="$(printf '[{"id":"manager-01","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-02","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-03","baseUrl":"https://127.0.0.1:%s"}]' "$MANAGER_01_AGENT_PORT" "$MANAGER_02_AGENT_PORT" "$MANAGER_03_AGENT_PORT")" \
 DOCKLANE_AGENT_CA_FILE="$CA_CERT" \
 DOCKLANE_AGENT_CERT_FILE="$CLIENT_CERT" \
 DOCKLANE_AGENT_KEY_FILE="$CLIENT_KEY" \
 DOCKLANE_MANAGER_01_CONTAINER="$MANAGER_01_CONTAINER" \
 DOCKLANE_FAILOVER_EVIDENCE="$LOG_DIR/manager-agent-failover.json" \
-node --input-type=module <<'NODE'
-import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { HttpAgentClient } from './apps/api/dist/agent/http-agent.client.js';
-
-const definitions = JSON.parse(process.env.DOCKLANE_MANAGER_AGENT_URLS);
-const ca = readFileSync(process.env.DOCKLANE_AGENT_CA_FILE);
-const cert = readFileSync(process.env.DOCKLANE_AGENT_CERT_FILE);
-const key = readFileSync(process.env.DOCKLANE_AGENT_KEY_FILE);
-const registry = {
-  primaryId: 'manager-01',
-  expectedClusterId: process.env.DOCKLANE_EXPECTED_CLUSTER_ID,
-  agents: definitions.map((definition) => ({
-    ...definition,
-    insecureDev: false,
-    ca,
-    cert,
-    key,
-  })),
-};
-
-const client = new HttpAgentClient(registry);
-const before = await client.identity();
-assert.equal(before.hostname, 'manager-01');
-
-execFileSync(
-  'docker',
-  [
-    'exec',
-    process.env.DOCKLANE_MANAGER_01_CONTAINER,
-    'sh',
-    '-c',
-    'pid="$(pidof docklane-agent)" && test -n "$pid" && kill "$pid" && sleep 1 && ! pidof docklane-agent',
-  ],
-  { stdio: 'inherit' },
-);
-
-const after = await client.identity();
-assert.equal(after.clusterId, before.clusterId);
-assert.notEqual(after.nodeId, before.nodeId);
-assert.ok(
-  after.hostname === 'manager-02' || after.hostname === 'manager-03',
-  `unexpected failover manager: ${after.hostname}`,
-);
-
-writeFileSync(
-  process.env.DOCKLANE_FAILOVER_EVIDENCE,
-  JSON.stringify({ before, after }, null, 2) + '\n',
-);
-NODE
+node "$ROOT_DIR/tests/operational-readiness/manager-agents-registration.mjs"
 
 cat >"$LOG_DIR/manager-agents-summary.txt" <<EOF
 three-manager topology: PASS
@@ -404,6 +373,8 @@ distinct local manager nodes: PASS
 shared Swarm cluster: PASS
 single observed leader: PASS
 Control Plane primary Agent loss failover: PASS
+registered enforcement across Agent failover: PASS
+persisted immutable registration and audit: PASS
 cluster id: $cluster_id
 EOF
 
