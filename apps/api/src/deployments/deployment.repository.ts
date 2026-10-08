@@ -157,12 +157,22 @@ export class DeploymentRepository {
     return rows[0] ? mapDeployment(rows[0]) : null;
   }
 
+  async findByRollbackOperation(operationId: string): Promise<DeploymentRecord | null> {
+    const [rows] = await this.db.query<DeploymentRow[]>(
+      `SELECT d.* FROM deployments d
+       JOIN rollback_attempts a ON a.deployment_id = d.id
+       WHERE a.operation_id = ? LIMIT 1`,
+      [operationId],
+    );
+    return rows[0] ? mapDeployment(rows[0]) : null;
+  }
+
   async findByRollbackOperationWithConnection(
     connection: PoolConnection,
     operationId: string,
   ): Promise<DeploymentRecord | null> {
     const [rows] = await connection.query<DeploymentRow[]>(
-      'SELECT * FROM deployments WHERE rollback_operation_id = ? LIMIT 1',
+      'SELECT d.* FROM deployments d JOIN rollback_attempts a ON a.deployment_id = d.id WHERE a.operation_id = ? LIMIT 1',
       [operationId],
     );
     return rows[0] ? mapDeployment(rows[0]) : null;
@@ -177,6 +187,17 @@ export class DeploymentRepository {
       [operationId],
     );
     return rows[0] ? mapDeployment(rows[0]) : null;
+  }
+
+  async recordRollbackAttempt(
+    connection: PoolConnection,
+    deploymentId: string,
+    operationId: string,
+  ): Promise<void> {
+    await connection.execute(
+      'INSERT INTO rollback_attempts (operation_id, deployment_id) VALUES (?, ?)',
+      [operationId, deploymentId],
+    );
   }
 
   async markRollingBack(

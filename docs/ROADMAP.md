@@ -320,3 +320,5 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-08 등록 실행 정책 2단계: DOCKLANE_CLUSTER_REGISTRATION_MODE=enforce일 때 cluster HTTP/Agent/operation lock/bootstrap entry를 매번 DB 조회로 검증한다. 등록 관리 API에는 scoped ADMIN 유지. 기존 기본 compat는 수동 전환용이고, 레코드/설정 불일치나 DB 장애면 fail closed. 새 등록을 자동 생성하거나 기존 cluster_id를 재기록하지 않는다. 실제 운영 전환과 신규 전체 functional acceptance는 미완료로 유지한다.
 
 2026-10-08 등록 강제 DB pool 중첩 획득 보완: 리소스 lock callback의 활성 MySQL connection을 AsyncLocalStorage 범위에서 Agent 사전 등록 검증에도 전달한다. callback 종료 즉시 참조를 비활성화하며 lock 외 경로는 독립 조회로 유지한다. 등록 성공 캐시는 추가하지 않는다. 동시 10개 서로 다른 서비스와 기존 검사에 대한 CI 결과는 해당 PR에 기록한다.
+
+2026-10-08 rollback 이력 수정: migration v4 rollback_attempts로 모든 rollback operationId→deploymentId 매핑을 보존한다. 새 시도에서 deployments.rollback_operation_id가 갱신되어도 이전 완료 operation의 조회는 영속 매핑을 사용한다. 최초 intent와 같은 트랜잭션에 이력을 남기며 중복 mutation 재전송은 하지 않는다. 기존 최신 rollback ID의 안전한 backfill만 수행하고 이미 덮인 과거 이력은 근거 없이 복원하지 않는다.

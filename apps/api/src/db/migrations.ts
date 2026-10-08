@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { migrateClusterRegistration } from './cluster-registration.migration.js';
+import { migrateRollbackAttemptHistory } from './rollback-attempt.migration.js';
 import type {
   PoolConnection,
   RowDataPacket,
@@ -48,6 +49,7 @@ export const DATABASE_MIGRATIONS: readonly Migration[] = [
     signature: '2026-10-08-cluster-registration-v1',
     up: migrateClusterRegistration,
   },
+  { version: 4, name: 'rollback-attempt-history', signature: '2026-10-08-rollback-attempt-history-v1', up: migrateRollbackAttemptHistory },
 ];
 
 export async function runDatabaseMigrations(

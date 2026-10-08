@@ -66,20 +66,20 @@ test('database migrations apply all known migrations once and skip them on repla
   await runDatabaseMigrations(state.connection as never);
   assert.deepEqual(
     state.applied.map((row) => row.version),
-    [1, 2, 3],
+    [1, 2, 3, 4],
   );
 
   const insertsAfterFirst = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterFirst, 3);
+  assert.equal(insertsAfterFirst, 4);
 
   await runDatabaseMigrations(state.connection as never);
 
   const insertsAfterReplay = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterReplay, 3);
+  assert.equal(insertsAfterReplay, 4);
 });
 
 test('database migrations reject metadata drift for an applied migration', async () => {
@@ -140,6 +140,7 @@ test('migration checksums are deterministic and catalog metadata is stable', () 
       [1, 'baseline-current-schema'],
       [2, 'backfill-bootstrap-completed-node-id'],
       [3, 'cluster-registration'],
+      [4, 'rollback-attempt-history'],
     ],
   );
 });
@@ -193,5 +194,20 @@ test('cluster registration migration is additive, unique and case-sensitive', as
   assert.match(query, /COLLATE ascii_bin/);
   assert.match(query, /UNIQUE KEY uq_cluster_registration_swarm \(swarm_cluster_id\)/);
   assert.equal(state.queries.some((sql) => sql.includes('UPDATE bootstrap_tokens')), false);
-  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 1);
+  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 2);
+});
+
+test('rollback history migration persists each attempt mapping and backfills only matching operations', async () => {
+  const state = fakeConnection({ applied: DATABASE_MIGRATIONS.slice(0, 3).map(m => ({
+    version: m.version, name: m.name, checksum: migrationChecksum(m),
+  })) });
+  await runDatabaseMigrations(state.connection as never);
+  const create = state.queries.find(sql => sql.includes('CREATE TABLE IF NOT EXISTS rollback_attempts'));
+  assert.ok(create);
+  assert.match(create, /operation_id VARCHAR\(64\) PRIMARY KEY/);
+  const backfill = state.queries.find(sql => sql.includes('INSERT INTO rollback_attempts'));
+  assert.ok(backfill);
+  assert.match(backfill, /o.type = 'ROLLBACK'/);
+  assert.match(backfill, /o.cluster_id = t.cluster_id/);
+  assert.match(backfill, /o.service_id = t.docker_service_id/);
 });

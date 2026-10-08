@@ -86,3 +86,7 @@ The PoC verifies:
 - startup rejection when the database contains a future migration version
 - concurrent cluster registration, one audit, replay and identity uniqueness
 - registration rollback when a server-side trigger rejects its audit insert
+
+## Rollback attempt history (version 4)
+
+Append-only rollback_attempts maps each persisted rollback operation ID to its deployment. The migration backfills the latest verifiable rollback only from existing deployments/operations/targets, excluding mismatched cluster/service IDs. Older overwritten links cannot be reconstructed without reliable provenance; do not fabricate them. New intents insert mapping in the same transaction as the operation and audit. A failed migration may safely rerun. A schema-v3 binary refuses a schema-v4 database.
