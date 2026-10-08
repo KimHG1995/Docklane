@@ -306,19 +306,7 @@ export class DeploymentService
       );
     }
 
-    if (latestDeployment.rollbackOperationId !== input.operationId) {
-      // The stored deployment describes the newer attempt. Preserve the
-      // original operation ID and terminal failure for historical replay.
-      return {
-        ...latestDeployment,
-        rollbackOperationId: input.operationId,
-        status: operation.status === 'FAILED' ? 'FAILED' : latestDeployment.status,
-        reason: operation.status === 'FAILED'
-          ? (operation.errorMessage ?? latestDeployment.reason)
-          : latestDeployment.reason,
-      };
-    }
-    return latestDeployment;
+    return rollbackAttemptResult(latestDeployment, operation);
   }
 
   async rollback(
@@ -415,7 +403,7 @@ export class DeploymentService
             existing.status === 'SUCCESS' ||
             existing.status === 'FAILED'
           ) {
-            return existingDeployment;
+            return rollbackAttemptResult(existingDeployment, existing);
           }
           return this.reconcileRollbackLocked(
             connection,
@@ -2697,4 +2685,25 @@ function sameHealthConfig(
     left.stabilityWindowMs === right.stabilityWindowMs &&
     left.expectedStatus === right.expectedStatus
   );
+}
+
+/**
+ * Project a terminal rollback retry from its durable operation, never from
+ * the deployment's mutable latest rollback pointer. No extra DB read/checkout.
+ */
+function rollbackAttemptResult(
+  deployment: DeploymentRecord,
+  operation: OperationRecord,
+): DeploymentRecord {
+  if (operation.type !== 'ROLLBACK' ||
+      (operation.status !== 'FAILED' && operation.status !== 'SUCCESS')) {
+    throw new ConflictException('Rollback attempt is not terminal');
+  }
+  if (deployment.rollbackOperationId === operation.id) return deployment;
+  return {
+    ...deployment,
+    rollbackOperationId: operation.id,
+    status: operation.status === 'FAILED' ? 'FAILED' : 'ROLLED_BACK',
+    reason: operation.status === 'FAILED' ? (operation.errorMessage ?? null) : null,
+  };
 }

@@ -330,3 +330,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-08 PR #119 결과 동기화: 실제 MySQL 8.4의 열 개 고유 연결을 서로 다른 lock에 점유시켜 등록 사전조건 및 Agent 호출이 모두 완료됐다. PR validate #37735884282에서 pool 10/10과 미등록/불일치 거절 및 API/mTLS가 통과했다. 전체 Swarm Functional acceptance는 아니다.
 
 2026-10-08 등록 enforce Functional harness: 별도 opt-in으로 실제 Swarm ID를 API 시작과 재시작에 고정하고, 미등록 503 → scoped ADMIN 등록 → 불변 replay → 보호된 서비스 조회 → 기존 배포/롤백, 응답 유실, API 재시작을 검증한다. 신규 단일 노드 실환경 결과는 main push run을 확인하기 전까지 미완료다.
+
+2026-10-08 PR #120 이후 증거 동기화: enforce 단일노드 functional PoC #37736353191에서 미등록 503, scoped ADMIN registration, immutable replay, 정상 배포/수동 rollback, API 재시작 복구, 응답 유실/자동 rollback/외부 변경 충돌 및 cleanup을 확인했다. 추가 3노드 enforce acceptance는 미완료.
+
+2026-10-08 rollback terminal race 보완: 기존 A의 조회가 lock 획득 전에 지연되고 이후 B가 성공한 경우에도, 잠금 안 terminal 분기는 B의 가변 deployment 포인터가 아니라 저장된 A operation의 terminal status/ID/reason을 반환한다. 등록 pool 재추가 조회나 rollback mutation 재전송 없음.
