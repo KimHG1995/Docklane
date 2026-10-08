@@ -238,7 +238,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 - [x] manager loss — run #36681425236
 - [x] quorum loss — run #36682067172
 - [x] network partition — run #36682848436
-- [x] manager별 Go Agent 배포 — run #37560542111 (PR #112 이후 재검증)
+- [x] manager별 Go Agent 배포 — run #37574849359 (PR #113 이후 재검증)
 - [x] Agent reconnect/failover — run #36941789676
 - [x] manager resource contention — run #37560542015 (PR #112 이후 재검증)
 - [x] Swarm backup/restore drill — run #37414123569 (PR #102 이후 재검증)
@@ -285,6 +285,10 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-07 PR #112 이후 결과 동기화: PR validate #37560329658와 main validate #37560541980에서 실제 API 145개 테스트/타입 검사/빌드, Go Agent 전체 검증, mTLS와 Functional harness 회귀가 통과했다. 실제 resource contention #37560542015와 manager-agents #37560542111도 cleanup까지 성공했다. [PR #112 체크포인트](https://github.com/KimHG1995/Docklane/pull/112#issuecomment-6029436836)가 근거다. 두 운영 실행은 기존 조회/failover 호환성 증거이며, cross-cluster mutation 또는 전체 Functional acceptance를 새로 수행했다는 뜻은 아니다.
 
 2026-10-07 Control Plane 시작 기준 보완: secure 모드는 운영자가 고정한 실제 Swarm ID인 DOCKLANE_EXPECTED_CLUSTER_ID를 필수로 요구하며 논리적 DOCKLANE_CLUSTER_ID와 구분한다. 환경 설정과 직접 주입 registry 모두 검증하고, 첫 응답이나 프로세스 재시작으로 기준을 다시 선택하지 않는다. 누락은 명시적 insecure 개발 모드에서만 기존 자동 인식을 허용하고, 명시적인 빈 값/개행/잘못된 값은 모든 모드에서 거절한다. 신규 회귀14개는 첫 접속, 별도 Node 프로세스 재시작, failover, 혼합 registry, 설정 경계와 mutation 재전송 금지를 다룬다. [설정 및 업그레이드 절차](AGENT_MUTATION_PRECONDITION.md)에 반영했다. DB 기반 cluster registration과 최종 Docker 갱신 시점의 외부 rejoin 경쟁 조건은 여전히 별도 미완료 범위이며, 실제 의존성 CI 결과와 선택된 운영 검증은 이 작업의 PR 체크포인트에 기록한다.
+
+2026-10-08 PR #113 이후 결과 동기화: main validate #37574849436에서 API 159개 테스트/타입 검사/빌드, Go Agent와 mTLS, 운영 Python 회귀144개가 통과했고 실제 manager-agents #37574849359도 cleanup까지 성공했다. [PR #113 체크포인트](https://github.com/KimHG1995/Docklane/pull/113#issuecomment-6031401217)를 근거로 한다. 실제 매니저 검증은 기존 identity/failover 호환성이며 전체 배포/롤백이나 cross-cluster 재가입 acceptance를 새로 수행한 결과는 아니다.
+
+2026-10-08 Agent 사전 거절 종료 처리: 변경 요청의 412/CLUSTER_PRECONDITION_FAILED, 428/CLUSTER_PRECONDITION_REQUIRED, 503/CLUSTER_IDENTITY_UNAVAILABLE 쌍만 공통 분류로 확정 거절에 추가한다. 서비스/노드/배포/과거 재배포와 수동 롤백 operation은 FAILED 및 audit을 함께 저장하고, 거절된 rollback의 deployment는 요청 전 FAILED 상태로 복귀시킨다. 실제 롤백 실행 후 수렴 실패는 기존 보호를 유지한다. 일반 503/응답 유실/잘못된 envelope는 불확실성 처리를 유지하며, 증거 없는 과거 NEEDS_ATTENTION 기록은 자동 해제하지 않는다. [거절 및 재시도 계약](AGENT_REJECTION_HANDLING.md)에 범위를 기록했다. 실제 coordinator를 사용하는 대역 회귀와 분류 단위 테스트를 추가했고, 실제 의존성 CI 결과는 이 작업의 PR 체크포인트에 기록한다.
 
 이 단계 통과 전 production adoption을 권장하지 않는다.
 

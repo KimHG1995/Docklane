@@ -12,6 +12,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import {
   AGENT_CLIENT,
   AgentRequestError,
+  isDeterministicAgentRejection,
   type AgentClient,
 } from '../agent/agent-client.js';
 import type {
@@ -515,16 +516,12 @@ export class DeploymentService
             },
           );
         } catch (error) {
-          if (
-            error instanceof AgentRequestError &&
-            (error.statusCode === 400 || error.statusCode === 409)
-          ) {
-            await this.rollbackFailed(
+          if (isDeterministicAgentRejection(error)) {
+            await this.rollbackRejected(
               connection,
               deployment.id,
               input.operationId,
-              'ROLLBACK_REJECTED',
-              error.responseBody,
+              error,
             );
             throw mapAgentError(error, 'Rollback mutation failed');
           }
@@ -804,10 +801,7 @@ export class DeploymentService
             },
           );
         } catch (error) {
-          if (
-            error instanceof AgentRequestError &&
-            (error.statusCode === 400 || error.statusCode === 409)
-          ) {
+          if (isDeterministicAgentRejection(error)) {
             await this.fail(
               connection,
               deployment.id,
@@ -2087,6 +2081,39 @@ export class DeploymentService
     } catch (error) {
       await connection.rollback();
       throw error;
+    }
+  }
+
+  private async rollbackRejected(
+    connection: PoolConnection,
+    deploymentId: string,
+    operationId: string,
+    error: AgentRequestError,
+  ): Promise<void> {
+    await connection.beginTransaction();
+    try {
+      await this.operations.markFailed(
+        connection,
+        operationId,
+        'ROLLBACK_REJECTED',
+        error.responseBody,
+      );
+      // No rollback ran: restore the deployment's pre-attempt FAILED state.
+      // A new explicit operation may plan again; the rejected ID never replays.
+      await this.deployments.markFailed(connection, deploymentId, error.responseBody);
+      const operation = await this.requireOperation(connection, operationId);
+      await this.operations.audit(connection, {
+        operationId,
+        actorId: operation.actorId,
+        clusterId: operation.clusterId,
+        serviceId: operation.serviceId,
+        action: 'ROLLBACK_REJECTED',
+        afterJson: { statusCode: error.statusCode, body: error.responseBody },
+      });
+      await connection.commit();
+    } catch (persistError) {
+      await connection.rollback();
+      throw persistError;
     }
   }
 

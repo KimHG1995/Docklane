@@ -11,6 +11,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import {
   AGENT_CLIENT,
   AgentRequestError,
+  isDeterministicAgentRejection,
   type AgentClient,
 } from '../agent/agent-client.js';
 import type {
@@ -797,15 +798,6 @@ export class MutationService implements OnApplicationBootstrap {
 
 function isTerminal(operation: OperationRecord): boolean {
   return operation.status === 'SUCCESS' || operation.status === 'FAILED';
-}
-
-function isDeterministicAgentRejection(
-  error: unknown,
-): error is AgentRequestError {
-  return (
-    error instanceof AgentRequestError &&
-    (error.statusCode === 400 || error.statusCode === 409)
-  );
 }
 
 function mapAgentError(error: AgentRequestError): Error {
