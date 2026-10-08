@@ -15,6 +15,8 @@ AGENT_URL="http://127.0.0.1:9555"
 HEALTH_URL="http://127.0.0.1:18080"
 OPERATOR_TOKEN="docklane-poc-operator-00000001"
 VIEWER_TOKEN="docklane-poc-viewer-0000000001"
+ADMIN_TOKEN="docklane-poc-admin-00000000001"
+REGISTERED_ENFORCE="${DOCKLANE_POC_REGISTERED_ENFORCE:-0}"
 
 export DOCKLANE_POC_LOG_DIR="$LOG_DIR"
 
@@ -151,6 +153,7 @@ assert_image_mutation_count() {
   fi
 }
 
+[[ "$REGISTERED_ENFORCE" == "0" || "$REGISTERED_ENFORCE" == "1" ]] || fail "invalid enforce PoC opt-in"
 require_command docker
 require_command curl
 require_command jq
@@ -231,6 +234,8 @@ SWARM_ADDR="$(hostname -I | awk '{print $1}')"
 log "initializing single-node Swarm at $SWARM_ADDR"
 docker swarm init --advertise-addr "$SWARM_ADDR" >"$LOG_DIR/swarm-init.log"
 SWARM_NODE_ID="$(docker info --format '{{.Swarm.NodeID}}')"
+SWARM_CLUSTER_ID="$(docker info --format '{{.Swarm.Cluster.ID}}')"
+[[ "$SWARM_CLUSTER_ID" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || fail "missing actual Swarm cluster ID"
 [[ -n "$SWARM_NODE_ID" ]] || fail "could not record owned Swarm node ID"
 printf '%s\n' "$SWARM_NODE_ID" >"$OWNERSHIP_DIR/swarm.node-id"
 
@@ -280,7 +285,7 @@ cp "$LOG_DIR/agent-proxy.pid" "$OWNERSHIP_DIR/agent-proxy.pid"
 wait_http "$AGENT_URL/v1/health" 200 60
 : >"$LOG_DIR/agent-image-mutations.jsonl"
 
-TOKENS_JSON="$(jq -cn   --arg operator "$OPERATOR_TOKEN"   --arg viewer "$VIEWER_TOKEN"   '[
+TOKENS_JSON="$(jq -cn   --arg operator "$OPERATOR_TOKEN"   --arg viewer "$VIEWER_TOKEN" --arg admin "$ADMIN_TOKEN"   '[
     {
       token: $operator,
       actorId: "functional-poc-operator",
@@ -291,6 +296,12 @@ TOKENS_JSON="$(jq -cn   --arg operator "$OPERATOR_TOKEN"   --arg viewer "$VIEWER
       token: $viewer,
       actorId: "functional-poc-viewer",
       role: "VIEWER",
+      clusters: ["default"]
+    },
+    {
+      token: $admin,
+      actorId: "functional-poc-admin",
+      role: "ADMIN",
       clusters: ["default"]
     }
   ]')"
@@ -316,6 +327,8 @@ start_api() {
     (
       export PORT=3001
       export DOCKLANE_CLUSTER_ID=default
+      export DOCKLANE_EXPECTED_CLUSTER_ID="$SWARM_CLUSTER_ID"
+      export DOCKLANE_CLUSTER_REGISTRATION_MODE="$([[ "$REGISTERED_ENFORCE" == "1" ]] && printf enforce || printf compat)"
       export DOCKLANE_DATABASE_URL='mysql://root:docklane@127.0.0.1:33306/docklane'
       export DOCKLANE_AGENT_INSECURE_DEV=true
       export DOCKLANE_AGENT_URL="$AGENT_URL"
@@ -329,6 +342,8 @@ start_api() {
     (
       export PORT=3001
       export DOCKLANE_CLUSTER_ID=default
+      export DOCKLANE_EXPECTED_CLUSTER_ID="$SWARM_CLUSTER_ID"
+      export DOCKLANE_CLUSTER_REGISTRATION_MODE="$([[ "$REGISTERED_ENFORCE" == "1" ]] && printf enforce || printf compat)"
       export DOCKLANE_DATABASE_URL='mysql://root:docklane@127.0.0.1:33306/docklane'
       export DOCKLANE_AGENT_INSECURE_DEV=true
       export DOCKLANE_AGENT_URL="$AGENT_URL"
@@ -362,6 +377,27 @@ log "starting Nest API"
 start_api truncate
 
 wait_http "$API_URL/health" 200 90
+
+
+if [[ "$REGISTERED_ENFORCE" == "1" ]]; then
+  log "scenario: unregistered cluster must reject protected reads"
+  UNREGISTERED_CODE="$(curl -sS -o "$LOG_DIR/pre-registration.json" -w '%{http_code}' -H "Authorization: Bearer $OPERATOR_TOKEN" "$API_URL/v1/clusters/default/services")"
+  [[ "$UNREGISTERED_CODE" == "503" ]] || fail "unregistered service read expected 503, got $UNREGISTERED_CODE"
+  jq -e '.code == "CLUSTER_REGISTRATION_REQUIRED"' "$LOG_DIR/pre-registration.json" >/dev/null || fail "wrong unregistered rejection code"
+
+  log "scenario: scoped ADMIN registration of actual Swarm identity"
+  REGISTRATION_INPUT="$(jq -cn --arg id "$SWARM_CLUSTER_ID" '{swarmClusterId:$id,displayName:"disposable-functional-poc"}')"
+  REGISTRATION_JSON="$(curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' --data "$REGISTRATION_INPUT" "$API_URL/v1/clusters/default/registration")"
+  printf '%s\n' "$REGISTRATION_JSON" >"$LOG_DIR/registration.json"
+  jq -e --arg id "$SWARM_CLUSTER_ID" '.clusterId == "default" and .swarmClusterId == $id' "$LOG_DIR/registration.json" >/dev/null || fail "registration persisted wrong Swarm ID"
+  REGISTRATION_REPLAY="$(curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' --data "$REGISTRATION_INPUT" "$API_URL/v1/clusters/default/registration")"
+  jq -e --argjson original "$REGISTRATION_JSON" '. == $original' <<<"$REGISTRATION_REPLAY" >/dev/null || fail "registration replay changed immutable result"
+  REGISTRATION_VIEW="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$API_URL/v1/clusters/default/registration")"
+  jq -e --arg id "$SWARM_CLUSTER_ID" '.matchesConfiguration == true and .registration.swarmClusterId == $id' <<<"$REGISTRATION_VIEW" >/dev/null || fail "registration does not match configuration"
+  POST_REGISTRATION_CODE="$(curl -sS -o "$LOG_DIR/post-registration-services.json" -w '%{http_code}' -H "Authorization: Bearer $OPERATOR_TOKEN" "$API_URL/v1/clusters/default/services")"
+  [[ "$POST_REGISTRATION_CODE" == "200" ]] || fail "registered service read expected 200, got $POST_REGISTRATION_CODE"
+  jq -e 'type == "array"' "$LOG_DIR/post-registration-services.json" >/dev/null || fail "registered service read invalid"
+fi
 
 log "scenario: authorization rejection"
 AUTH_CODE="$(curl -sS   -o "$LOG_DIR/auth-rejection.json"   -w '%{http_code}'   -X POST   -H "Authorization: Bearer $VIEWER_TOKEN"   -H 'Content-Type: application/json'   --data '{"name":"forbidden-app"}'   "$API_URL/v1/applications")"
@@ -538,6 +574,10 @@ wait "$RESTART_REQUEST_PID" 2>/dev/null || true
 log "restarting Nest API against persisted MySQL state"
 start_api append
 wait_http "$API_URL/health" 200 120
+if [[ "$REGISTERED_ENFORCE" == "1" ]]; then
+  RESTART_REGISTRATION="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$API_URL/v1/clusters/default/registration")"
+  jq -e --arg id "$SWARM_CLUSTER_ID" '.matchesConfiguration == true and .registration.swarmClusterId == $id' <<<"$RESTART_REGISTRATION" >/dev/null || fail "restarted API lost cluster binding"
+fi
 
 RESTART_DEPLOY_JSON="$(wait_deployment_terminal   "$RESTART_DEPLOYMENT_ID"   SUCCESS   "$LOG_DIR/restart-deploy-status.json"   120)"
 printf '%s\n' "$RESTART_DEPLOY_JSON" >"$LOG_DIR/restart-deploy.json"

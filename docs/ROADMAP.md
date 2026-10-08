@@ -326,3 +326,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-08 PR #117/#118 결과 동기화: #117은 등록 검사의 중첩 DB checkout을 lock session 재사용으로 변경했고, #118은 rollback 시도별 불변 매핑을 schema v4로 도입했다. PR #118 최신 검증 #37732325169(API 304, MySQL 8.4, mTLS), main #37732446947 및 DB restore #37732446847 성공. 모두 기존 설정에서의 호환성 검증이며 enforce 모드의 실제 MySQL pool 포화 실험은 별도다.
 
 2026-10-08 등록 강제 실제 MySQL 연결 포화 검증: 기존 database migration PoC의 폐기 가능한 MySQL 8.4 DB(pool limit 10)를 재사용하여 서로 다른 리소스 lock 10개가 각각 실제 MySQL connection을 보유하도록 동기화한 뒤, Agent proxy가 등록 상태를 확인하고 10개 모두 호출되는지 검증한다. 별도 workflow나 Docker 환경은 추가하지 않는다. 실패 시 실험 프로세스의 제한 시간을 적용하고 리소스 정리를 수행한다. 이번 결과는 등록 강제 모드의 전체 Swarm 배포/롤백 Functional acceptance와 별개로 기록한다.
+
+2026-10-08 PR #119 결과 동기화: 실제 MySQL 8.4의 열 개 고유 연결을 서로 다른 lock에 점유시켜 등록 사전조건 및 Agent 호출이 모두 완료됐다. PR validate #37735884282에서 pool 10/10과 미등록/불일치 거절 및 API/mTLS가 통과했다. 전체 Swarm Functional acceptance는 아니다.
+
+2026-10-08 등록 enforce Functional harness: 별도 opt-in으로 실제 Swarm ID를 API 시작과 재시작에 고정하고, 미등록 503 → scoped ADMIN 등록 → 불변 replay → 보호된 서비스 조회 → 기존 배포/롤백, 응답 유실, API 재시작을 검증한다. 신규 단일 노드 실환경 결과는 main push run을 확인하기 전까지 미완료다.
