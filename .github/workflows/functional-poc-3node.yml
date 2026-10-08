@@ -49,6 +49,7 @@ jobs:
       - name: Run three-node Functional PoC
         env:
           DOCKLANE_POC_LOG_DIR: ${{ runner.temp }}/docklane-poc-3node
+          DOCKLANE_POC_REGISTERED_ENFORCE: '1'
         run: bash tests/functional-poc/three-node-topology.sh
 
       - name: Upload three-node Functional PoC evidence

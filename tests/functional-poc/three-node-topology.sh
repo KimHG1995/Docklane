@@ -16,6 +16,8 @@ API_URL="http://127.0.0.1:3001"
 AGENT_URL="http://127.0.0.1:9443"
 OPERATOR_TOKEN="docklane-poc-operator-00000001"
 VIEWER_TOKEN="docklane-poc-viewer-0000000001"
+ADMIN_TOKEN="docklane-poc-admin-00000000001"
+REGISTERED_ENFORCE="${DOCKLANE_POC_REGISTERED_ENFORCE:-0}"
 DRAIN_SERVICE_NAME="docklane-poc-drain"
 
 cleanup() {
@@ -208,6 +210,7 @@ wait_three_nodes_ready() {
   fail "three-node Swarm did not converge to three Ready/Active nodes"
 }
 
+[[ "$REGISTERED_ENFORCE" == "0" || "$REGISTERED_ENFORCE" == "1" ]] || fail "invalid registered enforce PoC opt-in"
 preflight_absent_container "$MANAGER_CONTAINER"
 preflight_absent_container "$WORKER_01_CONTAINER"
 preflight_absent_container "$WORKER_02_CONTAINER"
@@ -255,6 +258,9 @@ log "joining worker-02"
 docker exec "$WORKER_02_CONTAINER" docker swarm join   --token "$WORKER_TOKEN"   "$MANAGER_IP:2377"   >"$LOG_DIR/worker-02-join.log"
 
 wait_three_nodes_ready
+
+SWARM_CLUSTER_ID="$(docker exec "$MANAGER_CONTAINER" docker info --format '{{.Swarm.Cluster.ID}}')"
+[[ "$SWARM_CLUSTER_ID" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || fail "invalid or missing actual manager Swarm cluster ID"
 
 grep -q '^manager-01|Ready|Active|Leader$' "$LOG_DIR/three-node-topology.txt"   || fail "manager-01 is not the Ready/Active Swarm leader"
 grep -q '^worker-01|Ready|Active|$' "$LOG_DIR/three-node-topology.txt"   || fail "worker-01 is not Ready/Active"
@@ -315,15 +321,22 @@ cp "$LOG_DIR/agent.pid" "$OWNERSHIP_DIR/agent.pid"
 
 wait_http "$AGENT_URL/v1/health" 200 60
 
-TOKENS_JSON="$(jq -cn   --arg operator "$OPERATOR_TOKEN"   --arg viewer "$VIEWER_TOKEN"   '[
+TOKENS_JSON="$(jq -cn   --arg operator "$OPERATOR_TOKEN"   --arg viewer "$VIEWER_TOKEN" --arg admin "$ADMIN_TOKEN"   '[
     {token: $operator, actorId: "functional-poc-operator", role: "OPERATOR", clusters: ["default"]},
-    {token: $viewer, actorId: "functional-poc-viewer", role: "VIEWER", clusters: ["default"]}
+    {token: $viewer, actorId: "functional-poc-viewer", role: "VIEWER", clusters: ["default"]},
+    {token: $admin, actorId: "functional-poc-admin", role: "ADMIN", clusters: ["default"]}
   ]')"
 
 log "starting Docklane API"
 (
   export PORT=3001
   export DOCKLANE_CLUSTER_ID=default
+  export DOCKLANE_EXPECTED_CLUSTER_ID="$SWARM_CLUSTER_ID"
+  if [[ "$REGISTERED_ENFORCE" == "1" ]]; then
+    export DOCKLANE_CLUSTER_REGISTRATION_MODE=enforce
+  else
+    export DOCKLANE_CLUSTER_REGISTRATION_MODE=compat
+  fi
   export DOCKLANE_DATABASE_URL='mysql://root:docklane@127.0.0.1:33306/docklane'
   export DOCKLANE_AGENT_INSECURE_DEV=true
   export DOCKLANE_AGENT_URL="$AGENT_URL"
@@ -336,6 +349,35 @@ echo "$!" >"$LOG_DIR/api.pid"
 cp "$LOG_DIR/api.pid" "$OWNERSHIP_DIR/api.pid"
 
 wait_http "$API_URL/health" 200 90
+
+if [[ "$REGISTERED_ENFORCE" == "1" ]]; then
+  log "scenario: enforce denies unregistered cluster and preserves scoped ADMIN registration"
+  UNREGISTERED_CODE="$(curl -sS -o "$LOG_DIR/enforce-unregistered.json" -w '%{http_code}' -H "Authorization: Bearer $OPERATOR_TOKEN" "$API_URL/v1/clusters/default/services")"
+  [[ "$UNREGISTERED_CODE" == "503" ]] || fail "unregistered cluster expected 503, got $UNREGISTERED_CODE"
+  jq -e '.code == "CLUSTER_REGISTRATION_REQUIRED"' "$LOG_DIR/enforce-unregistered.json" >/dev/null || fail "wrong unregistered cluster guard code"
+
+  REGISTRATION_INPUT="$(jq -cn --arg clusterId "$SWARM_CLUSTER_ID" '{swarmClusterId:$clusterId,displayName:"disposable-three-node-poc"}')"
+  VIEWER_REGISTRATION_CODE="$(curl -sS -o "$LOG_DIR/enforce-viewer-denied.json" -w '%{http_code}' -X PUT -H "Authorization: Bearer $VIEWER_TOKEN" -H 'Content-Type: application/json' --data "$REGISTRATION_INPUT" "$API_URL/v1/clusters/default/registration")"
+  [[ "$VIEWER_REGISTRATION_CODE" == "403" ]] || fail "VIEWER registration expected 403, got $VIEWER_REGISTRATION_CODE"
+
+  REGISTRATION_JSON="$(curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' --data "$REGISTRATION_INPUT" "$API_URL/v1/clusters/default/registration")"
+  printf '%s\n' "$REGISTRATION_JSON" >"$LOG_DIR/enforce-registration.json"
+  jq -e --arg clusterId "$SWARM_CLUSTER_ID" '.clusterId == "default" and .swarmClusterId == $clusterId' <<<"$REGISTRATION_JSON" >/dev/null || fail "registered Swarm ID mismatch"
+
+  REGISTRATION_REPLAY="$(curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' --data "$REGISTRATION_INPUT" "$API_URL/v1/clusters/default/registration")"
+  jq -e --argjson first "$REGISTRATION_JSON" '. == $first' <<<"$REGISTRATION_REPLAY" >/dev/null || fail "registration replay changed immutable result"
+
+  REGISTRATION_VIEW="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$API_URL/v1/clusters/default/registration")"
+  jq -e --arg clusterId "$SWARM_CLUSTER_ID" '.matchesConfiguration == true and .registration.swarmClusterId == $clusterId' <<<"$REGISTRATION_VIEW" >/dev/null || fail "registration does not match configured ID"
+
+  REGISTERED_SERVICES_CODE="$(curl -sS -o "$LOG_DIR/enforce-services.json" -w '%{http_code}' -H "Authorization: Bearer $OPERATOR_TOKEN" "$API_URL/v1/clusters/default/services")"
+  [[ "$REGISTERED_SERVICES_CODE" == "200" ]] || fail "registered read expected 200, got $REGISTERED_SERVICES_CODE"
+  jq -e --arg serviceId "$DRAIN_SERVICE_ID" 'type == "array" and any(.[]; .id == $serviceId)' "$LOG_DIR/enforce-services.json" >/dev/null || fail "registered service read omitted fixture"
+
+  REGISTRATION_UUID="$(jq -er '.id' <<<"$REGISTRATION_JSON")"
+  REGISTRATION_AUDIT_COUNT="$(docker exec "$MYSQL_CONTAINER" mysql -uroot -pdocklane docklane --batch --skip-column-names -e "SELECT COUNT(*) FROM audit_events WHERE action = 'CLUSTER_REGISTERED' AND operation_id = '$REGISTRATION_UUID'" 2>/dev/null)"
+  [[ "$REGISTRATION_AUDIT_COUNT" == "1" ]] || fail "expected exactly one cluster registration audit, got $REGISTRATION_AUDIT_COUNT"
+fi
 
 DRAIN_NODE_JSON="$(api_get "/v1/clusters/default/nodes/$DRAIN_NODE_NAME")"
 printf '%s\n' "$DRAIN_NODE_JSON" >"$LOG_DIR/drain-node-before.json"
@@ -433,6 +475,13 @@ FAILURE_SERVICE_JSON="$(cat "$LOG_DIR/worker-failure-service.json")"
 FAILURE_NODE_AFTER_JSON="$(cat "$LOG_DIR/worker-failure-node-after.json")"
 jq -e '.node.state != "ready"' <<<"$FAILURE_NODE_AFTER_JSON" >/dev/null   || fail "Docklane still reports failed worker as ready"
 
+if [[ "$REGISTERED_ENFORCE" == "1" ]]; then
+  log "scenario: worker failure preserves registered manager cluster identity"
+  POST_FAILURE_REGISTRATION="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$API_URL/v1/clusters/default/registration")"
+  jq -e --arg clusterId "$SWARM_CLUSTER_ID" '.matchesConfiguration == true and .registration.swarmClusterId == $clusterId' <<<"$POST_FAILURE_REGISTRATION" >/dev/null || fail "worker failure changed registered ID"
+  [[ "$(docker exec "$MANAGER_CONTAINER" docker info --format '{{.Swarm.Cluster.ID}}')" == "$SWARM_CLUSTER_ID" ]] || fail "worker failure changed actual manager Swarm ID"
+fi
+
 cat >"$LOG_DIR/three-node-summary.txt" <<EOF
 manager-01 Ready/Active/Leader: PASS
 worker-01 Ready/Active: PASS
@@ -444,6 +493,7 @@ external HAProxy traffic during Docklane rollout: PASS
 Swarm internal ports outer-host blocked: PASS
 worker failure task reschedule: PASS
 Docklane failed-worker read model: PASS
+registered enforcement: $([[ "$REGISTERED_ENFORCE" == "1" ]] && printf 'PASS' || printf 'NOT RUN')
 topology node count: 3
 EOF
 

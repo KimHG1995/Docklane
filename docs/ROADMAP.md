@@ -334,3 +334,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-08 PR #120 이후 증거 동기화: enforce 단일노드 functional PoC #37736353191에서 미등록 503, scoped ADMIN registration, immutable replay, 정상 배포/수동 rollback, API 재시작 복구, 응답 유실/자동 rollback/외부 변경 충돌 및 cleanup을 확인했다. 추가 3노드 enforce acceptance는 미완료.
 
 2026-10-08 rollback terminal race 보완: 기존 A의 조회가 lock 획득 전에 지연되고 이후 B가 성공한 경우에도, 잠금 안 terminal 분기는 B의 가변 deployment 포인터가 아니라 저장된 A operation의 terminal status/ID/reason을 반환한다. 등록 pool 재추가 조회나 rollback mutation 재전송 없음.
+
+2026-10-08 PR #121 병합 후 검증 동기화: PR #37740933017(API 305/305, mTLS), main #37741051045 SUCCESS. 기존 A rollback의 지연 재조회는 lock 내부에서도 A의 terminal 결과를 반환한다. 대역 회귀이며 실제 Docker 동시 rollback 주입 시험은 별개다.
+
+2026-10-08 등록 강제 3노드 Functional PoC 준비: 기존 manager 1대/worker 2대 DinD topology에서 실제 manager Swarm ID pin, 미등록 503, VIEWER 등록 403, ADMIN 등록·재호출과 감사 1건, drain/activate, 외부 LB 트래픽, worker 장애 후 실제 ID 유지 검증을 수행한다. 기존 topology/워크플로 사용, 실제 main 실행 성공 전 체크 미완료 유지. 3-manager failover는 이번 범위가 아니다.
