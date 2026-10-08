@@ -1225,6 +1225,7 @@ test('manual rollback rejects a service that no longer matches the failed deploy
 
   const deployments = {
     find: async () => deployment,
+    findByRollbackOperation: async () => null,
   };
 
   const current = snapshot({
