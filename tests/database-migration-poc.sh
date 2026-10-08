@@ -52,6 +52,9 @@ DOCKLANE_DATABASE_URL="$DATABASE_URL" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { Database } from './apps/api/dist/db/database.js';
 import { ClusterRegistrationRepository } from './apps/api/dist/clusters/cluster-registration.repository.js';
+import { ClusterBindingPolicy } from './apps/api/dist/clusters/cluster-binding.policy.js';
+import { registeredAgentClient } from './apps/api/dist/clusters/registered-agent-client.js';
+import { RegisteredOperationLock } from './apps/api/dist/clusters/registered-operation-lock.js';
 
 const db = new Database();
 
@@ -297,6 +300,62 @@ try {
   const [unchanged] = await db.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = 'CLUSTER_REGISTERED'");
   assert.equal(Number(unchanged[0].count), 1);
   console.log('cluster registration MySQL transaction/replay/uniqueness: PASS');
+
+  // Real mysql2 pool, actual InnoDB/GET_LOCK sessions and actual registration
+  // repository/Agent proxy. A synthetic transport cannot prove pool exhaustion.
+  const policy = new ClusterBindingPolicy(registrations, {
+    mode: 'enforce', logicalClusterId: 'default', expectedSwarmClusterId: registrationInput.swarmClusterId,
+  });
+  const mutex = new RegisteredOperationLock(db, policy);
+  let forwarded = 0;
+  const agent = registeredAgentClient({
+    inspectService: async (serviceId) => {
+      forwarded += 1;
+      return { service: { id: serviceId } };
+    },
+  }, policy);
+  const distinctConnections = new Set();
+  let joined = 0;
+  let releaseBarrier;
+  const barrier = new Promise(resolve => { releaseBarrier = resolve; });
+  // Failure must terminate the disposable test process: waiting mysql2 pool
+  // requests cannot necessarily be cancelled by Promise.race or db.pool.end().
+  const watchdog = setTimeout(() => {
+    console.error('registered operation MySQL pool saturated: 10 lock sessions did not complete');
+    process.exit(1);
+  }, 12000);
+  try {
+    await Promise.all(Array.from({ length: 10 }, (_, index) =>
+      mutex.withServiceLock('default', 'disjoint-service-' + index, async (connection) => {
+        const [rows] = await connection.query('SELECT CONNECTION_ID() AS connection_id');
+        distinctConnections.add(Number(rows[0].connection_id));
+        joined += 1;
+        if (joined === 10) releaseBarrier();
+        await barrier;
+        await agent.inspectService('disjoint-service-' + index);
+      }),
+    ));
+  } finally {
+    clearTimeout(watchdog);
+  }
+  assert.equal(joined, 10);
+  assert.equal(distinctConnections.size, 10, 'ten independently held MySQL connections are required');
+  assert.equal(forwarded, 10, 'admission and dispatch must finish for every held connection');
+
+  const mismatch = new ClusterBindingPolicy(registrations, {
+    mode: 'enforce', logicalClusterId: 'default', expectedSwarmClusterId: 'different-swarm-id',
+  });
+  await assert.rejects(() => mismatch.assertRegistered(), error =>
+    error.getStatus?.() === 503 && error.getResponse?.().code === 'CLUSTER_REGISTRATION_MISMATCH');
+  const unregistered = new ClusterBindingPolicy(registrations, {
+    mode: 'enforce', logicalClusterId: 'unregistered', expectedSwarmClusterId: registrationInput.swarmClusterId,
+  });
+  await assert.rejects(() => unregistered.assertRegistered(), error =>
+    error.getStatus?.() === 503 && error.getResponse?.().code === 'CLUSTER_REGISTRATION_REQUIRED');
+  const [registrationRows] = await db.query(
+    'SELECT COUNT(*) AS count FROM cluster_registrations WHERE cluster_id = ?', ['default']);
+  assert.equal(Number(registrationRows[0].count), 1, 'admission checks must not modify registrations');
+  console.log('registered operation real MySQL pool saturation (10/10), mismatch and absence: PASS');
 
   console.log('database migration PoC: PASS');
 } finally {

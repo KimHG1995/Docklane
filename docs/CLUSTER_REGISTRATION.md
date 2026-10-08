@@ -99,3 +99,6 @@ UNION SELECT 'audit_events', cluster_id FROM audit_events;
 
 ### 등록 검사 중첩 연결 방지
 리소스 lock 안에서 Agent 호출에 수반되는 등록 검사는 이미 보유 중인 lock의 MySQL connection을 사용한다. 별도 pool checkout 없이 각 요청마다 등록 정보를 조회하고, callback 종료 시 잠금 session 컨텍스트를 비활성화한다. lock 밖에서는 기존 독립 연결을 사용한다. 등록 성공 캐시나 기본값 변경은 없다.
+
+### 실제 MySQL 포화 검증 범위
+기존 `tests/database-migration-poc.sh`의 폐기 가능한 MySQL 8.4에서 pool 10개를 서로 다른 서비스 lock으로 모두 점유하고, lock 안에서 Agent proxy의 등록 admission을 통과해 모든 요청이 끝나는지를 검증한다. 추가 SQL로 세션 ID가 실제로 10개인지 확인하며, 제한 시간 초과 시 성공으로 처리하지 않는다. 이는 실제 MySQL 연결 재사용과 pool 교착 검증이며 실제 Swarm 배포·롤백이나 등록 강제 모드 운영 전환을 의미하지 않는다.
