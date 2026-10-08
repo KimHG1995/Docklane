@@ -2243,3 +2243,59 @@ test('rejected rollback A stays replayable after rollback B replaces the current
   assert.deepEqual(old, again);
   assert.equal(agentCalls, 0);
 });
+
+test('raced terminal rollback A does not return later successful B under the acquired lock', async () => {
+  const initial: DeploymentRecord = {
+    kind: 'DEPLOY', sourceDeploymentId: null, id: 'raced-deployment',
+    releaseId: 'failed-release', previousReleaseId: 'old-release',
+    deploymentTargetId: 'target-1', operationId: 'original-deploy',
+    rollbackOperationId: 'rollback-A', status: 'ROLLING_BACK', reason: null,
+    noOp: false, beforeSpec: {}, targetSpec: {},
+    health: { url: 'https://example.invalid/health', intervalMs: 100, timeoutMs: 1000,
+      retries: 1, stabilityWindowMs: 500, expectedStatus: 200 },
+    expectedServiceVersion: 1, startedAt: new Date(0).toISOString(),
+    finishedAt: null, createdBy: 'operator-1', createdAt: new Date(0).toISOString(),
+  };
+  const operation: OperationRecord = {
+    ...deploymentOperation, id: 'rollback-A', type: 'ROLLBACK', status: 'RUNNING',
+    actorId: 'operator-1', clusterId: 'default', serviceId: 'service-1',
+  };
+  const later = { ...initial, rollbackOperationId: 'rollback-B',
+    status: 'ROLLED_BACK' as const, reason: null };
+  let releaseAgent: (() => void) | undefined;
+  const blockedAgent = new Promise<void>((resolve) => { releaseAgent = resolve; });
+  let agentStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => { agentStarted = resolve; });
+  let agentCalls = 0;
+  const repository = {
+    find: async () => ({ ...initial }),
+    findByRollbackOperation: async () => ({ ...later }),
+    findByRollbackOperationWithConnection: async () => ({ ...later }),
+  };
+  const service = new DeploymentService(
+    { findDeploymentTarget: async () => ({
+      id: 'target-1', applicationId: 'app', clusterId: 'default', dockerServiceId: 'service-1',
+    }), findRelease: async () => ({ id: 'old-release', applicationId: 'app' }) } as never,
+    repository as never,
+    { inspectService: async () => { agentCalls++; agentStarted?.(); await blockedAgent;
+      return snapshot({ id: 'service-1', mode: 'replicated' }); } } as never,
+    {
+      find: async () => ({ ...operation, status: 'RUNNING' }),
+      findWithConnection: async () => ({ ...operation, status: 'FAILED',
+        errorMessage: 'A rejected at Agent guard' }),
+    } as never,
+    {} as never,
+    { withServiceLock: async (_cluster: string, _service: string, callback: (c: unknown) => Promise<unknown>) =>
+      callback({}) } as never,
+    {} as never, {} as never,
+  );
+  const request = service.rollback('default', initial.id, { operationId: 'rollback-A' },
+    { actorId: 'operator-1', role: 'OPERATOR', clusters: ['default'] });
+  await started;
+  releaseAgent?.();
+  const result = await request;
+  assert.equal(result.rollbackOperationId, 'rollback-A');
+  assert.equal(result.status, 'FAILED');
+  assert.equal(result.reason, 'A rejected at Agent guard');
+  assert.equal(agentCalls, 1);
+});
