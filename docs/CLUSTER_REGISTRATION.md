@@ -96,3 +96,6 @@ UNION SELECT 'audit_events', cluster_id FROM audit_events;
 ```
 
 설정 강제화는 Docker 내부 update와 외부 rejoin 사이의 원자성을 보장하지 않는다. 등록 관리 API의 재호출 성공은 새로운 live identity 검증이 아니다.
+
+### 등록 검사 중첩 연결 방지
+리소스 lock 안에서 Agent 호출에 수반되는 등록 검사는 이미 보유 중인 lock의 MySQL connection을 사용한다. 별도 pool checkout 없이 각 요청마다 등록 정보를 조회하고, callback 종료 시 잠금 session 컨텍스트를 비활성화한다. lock 밖에서는 기존 독립 연결을 사용한다. 등록 성공 캐시나 기본값 변경은 없다.

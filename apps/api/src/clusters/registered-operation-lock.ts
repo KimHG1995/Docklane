@@ -14,7 +14,10 @@ export class RegisteredOperationLock extends OperationLock {
     fn: (connection: PoolConnection) => Promise<T>,
   ): Promise<T> {
     await this.binding.assertRegistered(clusterId);
-    return super.withServiceLock(clusterId, canonicalServiceId, fn);
+    return super.withServiceLock(
+      clusterId, canonicalServiceId,
+      (connection) => this.binding.withLockedConnection(connection, () => fn(connection)),
+    );
   }
 
   override async withNodeAndServiceLocks<T>(
@@ -24,6 +27,9 @@ export class RegisteredOperationLock extends OperationLock {
     fn: (connection: PoolConnection) => Promise<T>,
   ): Promise<T> {
     await this.binding.assertRegistered(clusterId);
-    return super.withNodeAndServiceLocks(clusterId, canonicalNodeId, serviceIds, fn);
+    return super.withNodeAndServiceLocks(
+      clusterId, canonicalNodeId, serviceIds,
+      (connection) => this.binding.withLockedConnection(connection, () => fn(connection)),
+    );
   }
 }

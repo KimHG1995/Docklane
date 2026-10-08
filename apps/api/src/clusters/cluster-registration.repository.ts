@@ -74,7 +74,7 @@ export class ClusterRegistrationRepository {
     }
   }
 
-  private async findWithConnection(
+  async findWithConnection(
     connection: PoolConnection,
     clusterId: string,
   ): Promise<ClusterRegistrationRecord | null> {
