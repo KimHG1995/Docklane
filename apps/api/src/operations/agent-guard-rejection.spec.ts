@@ -169,13 +169,22 @@ function fixture(action: Action, error: Error | null) {
   function deploymentStatus(id: string, status: DeploymentStatus, reason: string | null = null): void {
     Object.assign(deploymentRows.get(id)!, { status, reason });
   }
+  const rollbackAttempts = new Map<string, string>();
   const deploymentRepository = {
     async find(id: string) { return copy(deploymentRows.get(id) ?? null); },
     async requireWithConnection(_c: PoolConnection, id: string) { assert.ok(deploymentRows.has(id)); return copy(deploymentRows.get(id)!); },
     async findByOperation(id: string) { return copy([...deploymentRows.values()].find((row) => row.operationId === id) ?? null); },
     async findByOperationWithConnection(_c: PoolConnection, id: string) { return this.findByOperation(id); },
+    async findByRollbackOperation(id: string) {
+      const deploymentId = rollbackAttempts.get(id);
+      return copy(deploymentId ? deploymentRows.get(deploymentId) ?? null : null);
+    },
     async findByRollbackOperationWithConnection(_c: PoolConnection, id: string) {
-      return copy([...deploymentRows.values()].find((row) => row.rollbackOperationId === id) ?? null);
+      return this.findByRollbackOperation(id);
+    },
+    async recordRollbackAttempt(_c: PoolConnection, deploymentId: string, operationId: string) {
+      assert.equal(rollbackAttempts.has(operationId), false);
+      rollbackAttempts.set(operationId, deploymentId);
     },
     async findLatestSuccessfulForReleaseWithConnection() { return { id: 'historical-source' }; },
     async latestSuccessfulReleaseId() { return 'old-release'; },
