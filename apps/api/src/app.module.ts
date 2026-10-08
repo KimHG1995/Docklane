@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AgentModule } from './agent/agent.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { BootstrapModule } from './bootstrap/bootstrap.module.js';
+import { ClusterRegistrationModule } from './clusters/cluster-registration.module.js';
 import { DeploymentModule } from './deployments/deployment.module.js';
 import { HealthController } from './health.controller.js';
 import { ReadModule } from './read/read.module.js';
@@ -12,6 +13,7 @@ import { ReleaseModule } from './releases/release.module.js';
   imports: [
     AuthModule,
     BootstrapModule,
+    ClusterRegistrationModule,
     AgentModule,
     ReadModule,
     OperationsModule,
