@@ -50,6 +50,7 @@ jobs:
       - name: Run single-node Functional PoC smoke
         env:
           DOCKLANE_POC_LOG_DIR: ${{ runner.temp }}/docklane-poc
+          DOCKLANE_POC_REGISTERED_ENFORCE: '1'
         run: bash tests/functional-poc/run.sh
 
       - name: Upload Functional PoC evidence
