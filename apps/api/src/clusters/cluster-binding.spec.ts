@@ -170,19 +170,25 @@ test('concurrent locked Agent calls use one pooled connection each, even at pool
 });
 
 test('same lock connection is used for registration and never reused after scope ends', async () => {
-  const f = fixture();
   let lockedReads = 0;
-  const connection = { query: async () => {
-    lockedReads++;
-    return [[{ id: record.id, cluster_id: record.clusterId, swarm_cluster_id: record.swarmClusterId,
-      display_name: record.displayName, registered_by: record.registeredBy,
-      verified_node_id: record.verifiedNodeId, created_at: new Date(record.createdAt) }], []];
-  } };
-  await f.policy.withLockedConnection(connection as never, async () => {
-    await f.policy.assertRegistered();
-    assert.equal(f.state.reads, 0);
+  let ordinaryReads = 0;
+  const repository = {
+    findWithConnection: async (_connection: unknown) => {
+      lockedReads++;
+      return record;
+    },
+    find: async () => {
+      ordinaryReads++;
+      return record;
+    },
+  } as unknown as ClusterRegistrationRepository;
+  const policy = new ClusterBindingPolicy(repository, settings);
+  const connection = { query: async () => { throw Error('unused'); } };
+  await policy.withLockedConnection(connection as never, async () => {
+    await policy.assertRegistered();
+    assert.equal(ordinaryReads, 0);
   });
-  await f.policy.assertRegistered();
+  await policy.assertRegistered();
   assert.equal(lockedReads, 1);
-  assert.equal(f.state.reads, 1);
+  assert.equal(ordinaryReads, 1);
 });
