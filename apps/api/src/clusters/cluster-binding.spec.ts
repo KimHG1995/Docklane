@@ -150,7 +150,7 @@ test('concurrent locked Agent calls use one pooled connection each, even at pool
   const registrations = new (await import('./cluster-registration.repository.js')).ClusterRegistrationRepository(database);
   const policy = new ClusterBindingPolicy(registrations, settings);
   const locks = new RegisteredOperationLock(database, policy);
-  const agent = registeredAgentClient({ inspectService: async () => { mutations++; return {} as never; } } as AgentClient, policy);
+  const agent = registeredAgentClient({ inspectService: async () => { mutations++; return {} as never; } } as unknown as AgentClient, policy);
   const requests = Array.from({ length: max }, (_, i) => locks.withServiceLock(
     'default', 'service-' + i, async () => { await agent.inspectService('service-' + i); },
   ));
