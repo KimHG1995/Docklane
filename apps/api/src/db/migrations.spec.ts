@@ -195,3 +195,18 @@ test('cluster registration migration is additive, unique and case-sensitive', as
   assert.equal(state.queries.some((sql) => sql.includes('UPDATE bootstrap_tokens')), false);
   assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 1);
 });
+
+test('rollback history migration persists each attempt mapping and backfills only matching operations', async () => {
+  const state = fakeConnection({ applied: DATABASE_MIGRATIONS.slice(0, 3).map(m => ({
+    version: m.version, name: m.name, checksum: migrationChecksum(m),
+  })) });
+  await runDatabaseMigrations(state.connection as never);
+  const create = state.queries.find(sql => sql.includes('CREATE TABLE IF NOT EXISTS rollback_attempts'));
+  assert.ok(create);
+  assert.match(create, /operation_id VARCHAR\(64\) PRIMARY KEY/);
+  const backfill = state.queries.find(sql => sql.includes('INSERT INTO rollback_attempts'));
+  assert.ok(backfill);
+  assert.match(backfill, /o.type = 'ROLLBACK'/);
+  assert.match(backfill, /o.cluster_id = t.cluster_id/);
+  assert.match(backfill, /o.service_id = t.docker_service_id/);
+});

@@ -322,13 +322,6 @@ export class DeploymentService
     if (!target || target.clusterId !== clusterId) {
       throw new NotFoundException('Deployment not found');
     }
-    const sameRollbackRequest =
-      deployment.rollbackOperationId === input.operationId;
-    if (!sameRollbackRequest && deployment.status !== 'FAILED') {
-      throw new ConflictException(
-        'Only FAILED deployments can be rolled back manually',
-      );
-    }
     if (!deployment.previousReleaseId) {
       throw new ConflictException(
         'Deployment does not have a previous release to roll back to',
@@ -355,6 +348,12 @@ export class DeploymentService
       target.dockerServiceId,
     );
     if (terminalRollback) return terminalRollback;
+
+    const sameRollbackRequest =
+      (await this.deployments.findByRollbackOperation(input.operationId))?.id === deployment.id;
+    if (!sameRollbackRequest && deployment.status !== 'FAILED') {
+      throw new ConflictException('Only FAILED deployments can be rolled back manually');
+    }
 
     let resolved: ServiceDetailResponse;
     try {
