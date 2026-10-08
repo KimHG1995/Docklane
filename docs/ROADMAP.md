@@ -322,3 +322,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-08 등록 강제 DB pool 중첩 획득 보완: 리소스 lock callback의 활성 MySQL connection을 AsyncLocalStorage 범위에서 Agent 사전 등록 검증에도 전달한다. callback 종료 즉시 참조를 비활성화하며 lock 외 경로는 독립 조회로 유지한다. 등록 성공 캐시는 추가하지 않는다. 동시 10개 서로 다른 서비스와 기존 검사에 대한 CI 결과는 해당 PR에 기록한다.
 
 2026-10-08 rollback 이력 수정: migration v4 rollback_attempts로 모든 rollback operationId→deploymentId 매핑을 보존한다. 새 시도에서 deployments.rollback_operation_id가 갱신되어도 이전 완료 operation의 조회는 영속 매핑을 사용한다. 최초 intent와 같은 트랜잭션에 이력을 남기며 중복 mutation 재전송은 하지 않는다. 기존 최신 rollback ID의 안전한 backfill만 수행하고 이미 덮인 과거 이력은 근거 없이 복원하지 않는다.
+
+2026-10-08 PR #117/#118 결과 동기화: #117은 등록 검사의 중첩 DB checkout을 lock session 재사용으로 변경했고, #118은 rollback 시도별 불변 매핑을 schema v4로 도입했다. PR #118 최신 검증 #37732325169(API 304, MySQL 8.4, mTLS), main #37732446947 및 DB restore #37732446847 성공. 모두 기존 설정에서의 호환성 검증이며 enforce 모드의 실제 MySQL pool 포화 실험은 별도다.
+
+2026-10-08 등록 강제 실제 MySQL 연결 포화 검증: 기존 database migration PoC의 폐기 가능한 MySQL 8.4 DB(pool limit 10)를 재사용하여 서로 다른 리소스 lock 10개가 각각 실제 MySQL connection을 보유하도록 동기화한 뒤, Agent proxy가 등록 상태를 확인하고 10개 모두 호출되는지 검증한다. 별도 workflow나 Docker 환경은 추가하지 않는다. 실패 시 실험 프로세스의 제한 시간을 적용하고 리소스 정리를 수행한다. 이번 결과는 등록 강제 모드의 전체 Swarm 배포/롤백 Functional acceptance와 별개로 기록한다.
