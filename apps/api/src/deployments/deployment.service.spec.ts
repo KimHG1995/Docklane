@@ -846,6 +846,8 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
 
   const deployments = {
     find: async () => deployment,
+    findByRollbackOperation: async () => deployment.rollbackOperationId ? deployment : null,
+    recordRollbackAttempt: async () => {},
     markRollingBack: async (
       _connection: unknown,
       _id: string,
@@ -1868,6 +1870,7 @@ test('terminal rollback retry returns persisted result before Agent lookup', asy
     } as never,
     {
       find: async () => stored,
+      findByRollbackOperation: async (id: string) => id === stored.rollbackOperationId ? stored : null,
     } as never,
     {
       inspectService: async () => {
@@ -2160,6 +2163,7 @@ test('terminal rollback retry refreshes the latest deployment row', async () => 
           ? staleDeployment
           : latestDeployment;
       },
+      findByRollbackOperation: async (id: string) => id === 'rollback-race-op' ? latestDeployment : null,
     } as never,
     {
       inspectService: async () => {
