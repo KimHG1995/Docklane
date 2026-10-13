@@ -237,3 +237,19 @@ test('maintenance Unicode owner migration does not change immutable v5', async (
   assert.match(ddl, /CHARACTER SET utf8mb4 COLLATE utf8mb4_bin/);
   assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 1);
 });
+
+test('maintenance dispatch evidence migration records uncertainty and barriers without auto-acknowledgement', async () => {
+  const state = fakeConnection({
+    applied: DATABASE_MIGRATIONS.slice(0, 6).map(m => ({
+      version: m.version, name: m.name, checksum: migrationChecksum(m),
+    })),
+  });
+  await runDatabaseMigrations(state.connection as never);
+  const dispatch = state.queries.find(sql => sql.includes('CREATE TABLE IF NOT EXISTS maintenance_dispatches'));
+  const barrier = state.queries.find(sql => sql.includes('CREATE TABLE IF NOT EXISTS maintenance_agent_barriers'));
+  assert.ok(dispatch);
+  assert.ok(barrier);
+  assert.match(dispatch, /'PREPARED','SENDING','ACKNOWLEDGED','REJECTED','UNCERTAIN'/);
+  assert.match(barrier, /PRIMARY KEY \(cluster_id, agent_id\)/);
+  assert.equal(state.queries.some(sql => sql.includes('INSERT INTO maintenance_agent_barriers')), false);
+});
