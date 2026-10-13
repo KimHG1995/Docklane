@@ -235,7 +235,7 @@ test('maintenance Unicode owner migration does not change immutable v5', async (
   assert.ok(ddl);
   assert.ok(ddl.includes('owner_id VARCHAR(128)'));
   assert.match(ddl, /CHARACTER SET utf8mb4 COLLATE utf8mb4_bin/);
-  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 1);
+  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 2);
 });
 
 test('maintenance dispatch evidence migration records uncertainty and barriers without auto-acknowledgement', async () => {
