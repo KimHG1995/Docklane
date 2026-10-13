@@ -178,7 +178,7 @@ try {
   const [migrationRows] = await db.pool.query(
     'SELECT version, name, checksum FROM schema_migrations ORDER BY version',
   );
-  assert.equal(migrationRows.length, 4);
+  assert.equal(migrationRows.length, 5);
   assert.deepEqual(
     migrationRows.map((row) => [Number(row.version), row.name]),
     [
@@ -186,6 +186,7 @@ try {
       [2, 'backfill-bootstrap-completed-node-id'],
       [3, 'cluster-registration'],
       [4, 'rollback-attempt-history'],
+      [5, 'cluster-maintenance-state'],
     ],
   );
   for (const row of migrationRows) {
@@ -197,6 +198,7 @@ try {
     'audit_events',
     'bootstrap_tokens',
     'cluster_registrations',
+    'cluster_maintenance_states',
     'deployment_targets',
     'deployments',
     'node_operations',
