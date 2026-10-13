@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ConflictException, Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import type { RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
@@ -167,7 +168,7 @@ export class ClusterMaintenanceRepository {
          (operation_id, actor_id, cluster_id, service_id,
           resource_type, resource_id, action, after_json)
          VALUES (?, ?, ?, ?, 'cluster', ?, 'CLUSTER_MAINTENANCE_CLOSING', ?)`,
-        [`maintenance:${clusterId}:${generation + 1n}`, actorId, clusterId,
+        [randomUUID(), actorId, clusterId,
          clusterId, clusterId,
          JSON.stringify({ previousState: 'OPEN', state: 'CLOSING',
            generation: (generation + 1n).toString(), reason })],
