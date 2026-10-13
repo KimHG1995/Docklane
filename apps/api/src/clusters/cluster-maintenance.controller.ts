@@ -48,6 +48,33 @@ export class ClusterMaintenanceController {
     return this.get(clusterId, request);
   }
 
+  /**
+   * Readiness evidence only. Never return safeToClose=true until all-manager
+   * Agent barriers and durable in-flight dispatch ownership are implemented.
+   * A zero DB operation count alone cannot authorize Swarm leave/init.
+   */
+  @Get('readiness')
+  async readiness(@Param('clusterId') clusterId: string, @Req() request: AuthenticatedRequest) {
+    const principal = request.principal;
+    if (!principal || principal.role !== 'ADMIN' ||
+        (!principal.clusters.includes('*') && !principal.clusters.includes(clusterId))) {
+      throw new ForbiddenException('Maintenance readiness requires scoped ADMIN');
+    }
+    if (clusterId !== this.binding.clusterId) throw new NotFoundException('Cluster not found');
+    await this.binding.assertRegistered(clusterId);
+    const record = await this.maintenance.requireRecord(clusterId);
+    const unresolved = await this.maintenance.countUnresolvedOperations(clusterId);
+    return {
+      clusterId,
+      state: record.state,
+      generation: record.generation.toString(),
+      unresolvedOperations: unresolved.toString(),
+      agentBarrierVerified: false,
+      inFlightDispatchVerified: false,
+      safeToClose: false,
+    };
+  }
+
   @Get()
   async get(@Param('clusterId') clusterId: string, @Req() request: AuthenticatedRequest) {
     const principal = request.principal;
