@@ -101,3 +101,20 @@ test('generation query casts BIGINT before mysql2 can round it', async () => {
   assert.equal(result.generation, 9007199254740993n);
   assert.equal(result.ownerId, '관리자');
 });
+
+test('unresolved operation count includes service and node attention states', async () => {
+  let query = '';
+  const repo = new ClusterMaintenanceRepository({
+    query: async (sql: string) => { query = sql; return [[{ count: '9007199254740993' }]]; },
+  } as never);
+  assert.equal(await repo.countUnresolvedOperations('default'), 9007199254740993n);
+  assert.match(query, /FROM operations/);
+  assert.match(query, /FROM node_operations/);
+  assert.match(query, /NEEDS_ATTENTION/);
+});
+test('missing unresolved operation evidence fails closed', async () => {
+  const repo = new ClusterMaintenanceRepository({
+    query: async () => [[]],
+  } as never);
+  await assert.rejects(() => repo.countUnresolvedOperations('default'), /cannot be verified/);
+});
