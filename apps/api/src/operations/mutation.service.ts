@@ -69,7 +69,7 @@ export class MutationService implements OnApplicationBootstrap {
     for (const operation of pending) {
       if (operation.type === 'DEPLOY' || operation.type === 'ROLLBACK') continue;
       try {
-        await this.lock.withServiceLock(
+        await this.lock.withServiceRecoveryLock(
           operation.clusterId,
           operation.serviceId,
           async (connection) => {
