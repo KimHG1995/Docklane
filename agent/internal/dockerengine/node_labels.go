@@ -128,6 +128,10 @@ func (r *Reader) UpdateNodeLabels(
 		}
 	}
 
+	if err := r.requireFinalMutationCluster(ctx); err != nil {
+		return model.NodeMutationResponse{}, err
+	}
+
 	_, err = r.client.NodeUpdate(ctx, node.ID, client.NodeUpdateOptions{
 		Version: swarm.Version{Index: input.ExpectedVersion},
 		Spec:    node.Spec,

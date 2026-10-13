@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/KimHG1995/Docklane/agent/internal/dockerengine"
 )
 
 const expectedClusterHeader = "X-Docklane-Expected-Cluster-ID"
@@ -14,39 +16,39 @@ var clusterIDValue = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // requireMutationCluster is called after body validation, immediately before
 // dispatching the mutation. Identity from an earlier HTTP request is never used.
 // This is an Agent admission check, not an atomic Docker inspect/update primitive.
-func (s *Server) requireMutationCluster(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) requireMutationCluster(w http.ResponseWriter, r *http.Request) (context.Context, bool) {
 	values := r.Header.Values(expectedClusterHeader)
 	if len(values) == 0 {
 		writeJSON(w, http.StatusPreconditionRequired, map[string]string{
 			"code": "CLUSTER_PRECONDITION_REQUIRED", "error": "expected cluster header is required",
 		})
-		return false
+		return nil, false
 	}
 	if len(values) != 1 || !clusterIDValue.MatchString(values[0]) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"code": "INVALID_CLUSTER_PRECONDITION", "error": "expected cluster header must be one bounded identifier",
 		})
-		return false
+		return nil, false
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if ctx.Err() != nil {
 		writeClusterUnavailable(w)
-		return false
+		return nil, false
 	}
 	identity, err := s.reader.Identity(ctx)
 	if err != nil || ctx.Err() != nil || !identity.Manager || identity.ClusterID == "" || identity.NodeID == "" {
 		writeClusterUnavailable(w)
-		return false
+		return nil, false
 	}
 	if identity.ClusterID != values[0] {
 		writeJSON(w, http.StatusPreconditionFailed, map[string]string{
 			"code": "CLUSTER_PRECONDITION_FAILED", "error": "current cluster does not match the mutation target",
 		})
-		return false
+		return nil, false
 	}
-	return true
+	return dockerengine.WithExpectedMutationCluster(r.Context(), values[0]), true
 }
 
 func writeClusterUnavailable(w http.ResponseWriter) {
