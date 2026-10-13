@@ -17,7 +17,6 @@ PROXY_PORT=12376
 EXPECTED="$DOCKLANE_REJOIN_EXPECTED_CLUSTER_ID"
 SERVICE_ID="$DOCKLANE_REJOIN_SERVICE_ID"
 RACE_MODE="${DOCKLANE_REJOIN_RACE_MODE:-preguard}"
-[[ "$RACE_MODE" == "preguard" || "$RACE_MODE" == "postguard" ]] || die "invalid race mode"
 BASE_URL="http://127.0.0.1:$AGENT_PORT"
 mkdir -p "$LOG_DIR" "$OWNERSHIP_DIR"
 
@@ -25,6 +24,7 @@ die() {
   printf '[swarm-rejoin] ERROR: %s\n' "$*" >&2
   exit 1
 }
+[[ "$RACE_MODE" == "preguard" || "$RACE_MODE" == "postguard" ]] || die "invalid race mode"
 wait_http() {
   local url="$1"
   for _ in {1..80}; do
@@ -67,8 +67,8 @@ request="$(jq -cn --argjson plan "$plan" '{
   targetSpecHash: $plan.targetSpecHash
 }')"
 
-# The proxy holds a service inspect response already read from Swarm A.
-# The Agent has already performed its HTTP admission identity check.
+# The opt-in barrier holds the old service inspect response (preguard) or
+# the Docker update request after final SwarmInspect (postguard).
 touch "$LOG_DIR/docker-rejoin.arm"
 (
   curl -sS --max-time 60 -o "$LOG_DIR/docker-rejoin-response.json" -w '%{http_code}' \
@@ -111,7 +111,7 @@ printf '%s\n' "$NEW_NODE_ID" >"$OWNERSHIP_DIR/rejoin-swarm.node-id"
 touch "$LOG_DIR/docker-rejoin.release"
 wait "$request_pid" || die "Agent restart transport failed"
 if [[ "$RACE_MODE" == "preguard" ]]; then
-[[ "$(cat "$LOG_DIR/docker-rejoin-status.txt")" == "412" ]] ||
+  [[ "$(cat "$LOG_DIR/docker-rejoin-status.txt")" == "412" ]] ||
   die "expected post-rejoin 412, got $(cat "$LOG_DIR/docker-rejoin-status.txt")"
 jq -e '.code == "CLUSTER_PRECONDITION_FAILED"' "$LOG_DIR/docker-rejoin-response.json" >/dev/null ||
   die "post-rejoin guard response code mismatch"
