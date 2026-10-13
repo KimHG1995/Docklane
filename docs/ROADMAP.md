@@ -352,3 +352,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-13 PR #125 병합 후 acceptance 동기화: 3-manager mTLS 및 등록 강제 Leader 노드 중단/재선출 검증 #38337434562가 SUCCESS, 2/3→3/3 quorum 복원과 immutable 등록/감사 및 cleanup을 확인했다. main validation #38337434541도 SUCCESS. [PR #125 체크포인트](https://github.com/KimHG1995/Docklane/pull/125#issuecomment-6136961491). 외부 재가입과 실제 Docker update 경쟁은 별도 미완료다.
 
 2026-10-13 mutation 시점 Swarm ID 경계 완화: HTTP 수락 시 확인된 실제 Swarm ID를 request context에 전달해 모든 7종 NodeUpdate/ServiceUpdate 직전 SwarmInspect로 재검증한다. 실제 ID 불일치나 확인 실패이면 Docker update 미호출로 거절하며 성공 캐시나 Agent 재전송은 추가하지 않는다. SwarmInspect와 update는 원자적이지 않으므로 외부 CLI leave/join이 마지막 검사 뒤에 일어나는 잔여 경쟁은 미완료로 유지한다. 제품 Go 회귀와 CI 통과 근거는 해당 PR에 기록한다.
+
+2026-10-13 PR #126 main 검증 동기화: 등록된 Swarm ID를 mutation request context로 전달하고 실제 7개 Docker update 직전 SwarmInspect 재검증을 추가했다. PR validate #38338662987, main validate #38338759920 Go Agent/mTLS/gate 성공. SwarmInspect와 update 간 원자성은 제공되지 않음. [PR #126 체크포인트](https://github.com/KimHG1995/Docklane/pull/126#issuecomment-6137131049).
+
+2026-10-13 실제 Swarm 재가입 간섭 acceptance 하네스: 기존 disposable single-node PoC를 완료한 뒤, Docker Unix socket을 전달하는 로컬 루프백 프록시가 기존 Swarm 서비스 inspect 응답을 보류한다. 이 사이 실제 docker swarm leave/init으로 새로운 클러스터를 만든 뒤 응답을 해제하여 최종 Swarm ID 검사에서 412 및 Docker update 미호출을 검증한다. 새 클러스터 노드 ID와 프로세스 소유권을 기록해 cleanup을 제한한다. **최종 검사 이후와 Docker update 직전의 재가입 경쟁은 여전히 미검증/미해결**이며 이번 시험 성공을 완전한 원자성으로 간주하지 않는다.

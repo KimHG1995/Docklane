@@ -171,6 +171,20 @@ remove_owned_service() {
   return 1
 }
 
+leave_owned_rejoin_swarm() {
+  local file="$OWNERSHIP_DIR/rejoin-swarm.node-id"
+  [[ -f "$file" ]] || return 0
+  local owned state current
+  owned="$(cat "$file" 2>/dev/null || true)"
+  [[ -n "$owned" ]] || { rm -f "$file"; return 0; }
+  state="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" || { mark_failed; return 1; }
+  if [[ "$state" != "active" ]]; then rm -f "$file"; return 0; fi
+  current="$(docker info --format '{{.Swarm.NodeID}}' 2>/dev/null)" || { mark_failed; return 1; }
+  [[ "$current" == "$owned" ]] || { mark_failed; return 1; }
+  docker swarm leave --force >/dev/null 2>&1 || { mark_failed; return 1; }
+  rm -f "$file"
+}
+
 leave_owned_swarm() {
   local file="$OWNERSHIP_DIR/swarm.node-id"
   [[ -f "$file" ]] || return 0
@@ -211,6 +225,8 @@ leave_owned_swarm() {
   return 1
 }
 
+kill_owned_pid rejoin-agent || true
+kill_owned_pid rejoin-docker-proxy || true
 kill_owned_pid api || true
 kill_owned_pid agent-proxy || true
 kill_owned_pid agent || true
@@ -221,6 +237,7 @@ if command -v docker >/dev/null 2>&1; then
   remove_owned_container worker-02 || true
   remove_owned_container worker-01 || true
   remove_owned_container manager-01 || true
+  leave_owned_rejoin_swarm || true
   leave_owned_swarm || true
   remove_owned_container registry || true
   remove_owned_container mysql || true

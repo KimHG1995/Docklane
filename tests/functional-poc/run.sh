@@ -835,5 +835,15 @@ release digest: $RELEASE_DIGEST
 service id: $SERVICE_ID
 EOF
 
+log "scenario: real Swarm rejoin between Docker inspect and final Agent guard"
+DOCKLANE_REJOIN_LOG_DIR="$LOG_DIR" \
+DOCKLANE_REJOIN_SERVICE_ID="$SERVICE_ID" \
+DOCKLANE_REJOIN_EXPECTED_CLUSTER_ID="$SWARM_CLUSTER_ID" \
+DOCKLANE_REJOIN_ADVERTISE_ADDR="$SWARM_ADDR" \
+DOCKLANE_REJOIN_AGENT_BINARY="$ROOT_DIR/agent/bin/docklane-agent" \
+DOCKLANE_REJOIN_OWNERSHIP_DIR="$OWNERSHIP_DIR" \
+bash "$ROOT_DIR/tests/functional-poc/docker-rejoin-race.sh"
+echo 'real Swarm rejoin before final Docker update: PASS' >>"$LOG_DIR/summary.txt"
+
 log "functional PoC smoke passed"
 cat "$LOG_DIR/summary.txt"

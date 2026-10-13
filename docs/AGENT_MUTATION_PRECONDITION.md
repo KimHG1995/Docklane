@@ -85,3 +85,6 @@ API와 Agent를 함께 바꾸는 하나의 작업이며, 별도의 heavy workflo
 기존 Agent HTTP guard는 수락 직전에 한 번 현재 manager identity를 확인했다. 그 후 ServiceInspect/NodeInspect, spec 및 affected-resource 검증 사이에 실제 Swarm이 바뀌면 다른 cluster의 Docker update를 실행할 가능성이 있었다. 현재는 검증된 헤더의 실제 ID를 요청 context에 전달하고 모든 **7종 서비스/노드 mutation**에서 실제 `ServiceUpdate`/`NodeUpdate` 호출 **바로 전** 동일 Docker client의 `SwarmInspect` 결과를 다시 대조한다. 실패나 취소는 `503/CLUSTER_IDENTITY_UNAVAILABLE`, ID 불일치는 `412/CLUSTER_PRECONDITION_FAILED`를 고정 오류로 반환하고 변경을 호출하지 않는다. 조회, health, 계획 API와 기존 optimistic version/spec 조건은 바꾸지 않는다. 해당 거절은 전송 전이므로 기존 확정 거절 처리 계약을 따른다.
 
 **한계:** SwarmInspect와 그 다음 Docker update는 서로 다른 Docker API 요청이다. 외부 `docker swarm leave/join`이 두 요청 사이에 끼어들 수 있으며, Agent 내부 mutex는 외부 Docker CLI를 직렬화하지 못한다. 따라서 이 변경은 경쟁 구간을 줄이고 사전조건 변화를 마지막 경계에서 포착하는 완화책이지, 외부 재가입과 Docker 갱신의 원자적 격리를 보장하는 해결책이 아니다. 실제 동시 재가입 주입 acceptance와 Docker API 또는 운영 수준의 mutation/rejoin 상호배제 정책은 별도 검증 및 설계 대상이다. 후속 확인에서 전체 경쟁 조건을 해결한 것으로 ROADMAP을 완료 처리하지 않는다.
+
+### 폐기 가능한 Swarm 재가입 장애 주입
+기존 단일노드 PoC의 정상 시나리오가 모두 완료된 뒤 소유권을 가진 Docker 호스트에서만 서비스 inspect 응답을 보류하고 실제 `swarm leave --force` 및 `swarm init`을 수행한다. 최종 검사에서 원래 기대 cluster ID와 달라진 ID를 확인해 412로 거절하고 update 호출 횟수 0건을 검증한다. 첫 번째 재가입 뒤 원래 Docker 서비스는 사라지므로 이 테스트는 반드시 마지막에 수행하고, 새 swarm node ID까지 cleanup에 기록한다. 최종 검사 직후 재가입하는 **더 좁은 구간**은 아직 원자성 보장이 없으며 후속 실험 대상이다.
