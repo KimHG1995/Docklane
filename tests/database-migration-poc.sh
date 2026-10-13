@@ -399,6 +399,11 @@ try {
   assert.equal(Number(registrationRows[0].count), 1, 'admission checks must not modify registrations');
   console.log('registered operation real MySQL pool saturation (10/10), mismatch and absence: PASS');
 
+  // The rollback test deliberately left the cluster OPEN at generation 3.
+  // Close it again before checking the enforcement=1 denial branch.
+  assert.equal(await maintenance.requestClosing('default', 3n, '관리자', 'enforcement acceptance'), true);
+  assert.equal((await maintenance.requireRecord('default')).state, 'CLOSING');
+
   // Maintenance enforcement ON: real MySQL/GET_LOCK with a held connection.
   // Proves new mutation dispatch stops when CLOSING, while recovery still reads.
   const savedEnforce = process.env.DOCKLANE_MAINTENANCE_ENFORCE;
