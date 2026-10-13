@@ -43,3 +43,6 @@ Scoped ADMIN `GET /v1/clusters/:clusterId/maintenance/readiness` reports durable
 
 ## Durable dispatch and barrier evidence (migration v7)
 Two additive tables, `maintenance_dispatches` and `maintenance_agent_barriers`, retain operation send phase and per-manager generation acknowledgements. PREPARED is not proof that a request was never sent after process crash; SENDING/UNCERTAIN must remain unresolved without inspection and operator reconciliation. An ACK row is not sufficient until manager identity and generation are checked against a fixed expected manager membership set. Migration v7 creates no rows, exposes no CLOSED transition, and does not change Agent behavior. Wiring dispatch journaling, lease ownership, generation fencing, multi-Agent acknowledgments, stale process handling and real Docker acceptance remains required. Do not use row counts as a safe-to-close decision.
+
+## Dispatch readiness diagnostic
+The readiness API now reports `unresolvedDispatches` as a decimal string from persisted PREPARED/SENDING/UNCERTAIN rows. Query failures deny readiness instead of treating absence of evidence as safe. No runtime writer currently journals these rows and no manager barrier acknowledgements are verified, therefore `safeToClose` remains false even when both counts are zero. Do not enable CLOSED or perform Swarm rejoin based on these diagnostic counts.
