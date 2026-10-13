@@ -21,3 +21,8 @@ Do not enable `DOCKLANE_MAINTENANCE_ENFORCE` in production or declare maintenanc
 - Maintenance generation is read via `CAST(generation AS CHAR)` before `BigInt`, avoiding mysql2 BIGINT-to-number precision loss. CAS continues to submit decimal strings.
 - This does **not** yet block a callback that passed admission before the CLOSING transition, and does not provide an all-manager Agent mutation barrier. The feature stays opt-in and PR remains Draft.
 - CI and disposable MySQL acceptance must verify the recovery paths, Unicode migration, large generation and the 10-connection lock scenario before the feature can be promoted.
+
+## Final mutation dispatch read (experimental)
+When enforcement is enabled, the registered Agent client now rechecks maintenance `OPEN` immediately before the seven mutating Agent methods. If a resource lock callback is active, the same MySQL connection is used to avoid pool starvation. Inspect, plan and observation-only reconciliation remain permitted. Missing/invalid state and database failure are rejected. The check does not atomically fence an already dispatched HTTP request, a later OPEN→CLOSING transition, or external Docker CLI writers.
+
+**This is not sufficient for closing a cluster:** generation ownership is not yet propagated into an Agent-enforced barrier; already-sent Docker requests remain uncertain. Scoped ADMIN transitions, audit transaction and all-manager acknowledgment still block production rollout. The integration tests for these guarantees must succeed before enabling enforcement.
