@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""One-shot Docker API inspect response barrier for disposable Swarm rejoin."""
+"""Disposable Swarm rejoin proxy.
+
+preguard holds the old service inspect reply before the Agent final cluster
+check. postguard holds a Docker update request *after* that check and before
+forwarding it to the daemon. A recorded attempt is NOT evidence of successful
+mutation; daemon response is recorded separately. Never use against a live host.
+"""
 import http.client
 import json
 import os
@@ -31,9 +37,18 @@ class DockerUnixConnection(http.client.HTTPConnection):
         self.sock.settimeout(self.timeout)
         self.sock.connect(DOCKER_SOCKET)
 
-def record(event, path):
+def record(event, path, **details):
     with LOG.open("a", encoding="utf-8") as out:
-        out.write(json.dumps({"event": event, "path": path}, sort_keys=True) + "\n")
+        out.write(json.dumps({"event": event, "path": path, **details}, sort_keys=True) + "\n")
+
+def docker_error_message(payload):
+    try:
+        obj = json.loads(payload)
+        if isinstance(obj, dict) and isinstance(obj.get("message"), str):
+            return obj["message"][:512]
+    except (ValueError, UnicodeDecodeError, TypeError):
+        pass
+    return ""
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -59,6 +74,8 @@ class Handler(BaseHTTPRequestHandler):
                    if k.lower() not in HOP and k.lower() != "host"}
         # Docker Update arrives only after the Agent's final SwarmInspect.
         update_request = self.command == "POST" and SERVICE_UPDATE.match(self.path)
+        # Intentionally observe the vulnerable boundary, not a safety fix.
+        # This requires exclusive ownership of the disposable Docker host.
         if update_request and MODE == "postguard":
             record("docker_service_update_attempt", self.path)
             try:
@@ -82,6 +99,11 @@ class Handler(BaseHTTPRequestHandler):
             status = response.status
         finally:
             conn.close()
+
+        if update_request and MODE == "postguard":
+            record("docker_service_update_daemon_response", self.path,
+                   status=status, errorMessage=docker_error_message(payload),
+                   daemonResponded=True)
 
         if update_request and MODE == "preguard":
             record("docker_service_update_attempt", self.path)
