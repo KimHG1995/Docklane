@@ -123,10 +123,16 @@ jq -se '([.[] | select(.event == "old_service_inspect_held")] | length) == 1 and
 else
   jq -se '([.[] | select(.event == "postguard_update_held")] | length) == 1 and
           ([.[] | select(.event == "postguard_update_released")] | length) == 1 and
-          ([.[] | select(.event == "docker_service_update_attempt")] | length) == 1' \
-    "$LOG_DIR/docker-rejoin-proxy.jsonl" >/dev/null || die "postguard evidence mismatch"
-  [[ "$(cat "$LOG_DIR/docker-rejoin-status.txt")" != "200" ]] ||
-    die "unexpected successful mutation after Swarm replacement"
+          ([.[] | select(.event == "docker_service_update_attempt")] | length) == 1 and
+          ([.[] | select(.event == "docker_service_update_daemon_response"
+                          and .daemonResponded == true
+                          and .status == 404
+                          and ((.errorMessage // "") | ascii_downcase | contains("not found")))] | length) == 1' \
+    "$LOG_DIR/docker-rejoin-proxy.jsonl" >/dev/null ||
+    die "postguard daemon outcome mismatch: expected Docker 404 service not found"
+  [[ "$(cat "$LOG_DIR/docker-rejoin-status.txt")" == "502" ]] ||
+    die "expected Agent 502 from Docker service not found after rejoin"
+
 fi
 [[ -z "$(docker service ls -q)" ]] ||
   die "new Swarm B unexpectedly received a service"
@@ -134,7 +140,8 @@ fi
 jq -cn --arg before "$EXPECTED" --arg after "$NEW_CLUSTER_ID" --arg mode "$RACE_MODE" \
   --arg status "$(cat "$LOG_DIR/docker-rejoin-status.txt")" \
   --argjson attempts "$([[ "$RACE_MODE" == "preguard" ]] && echo 0 || echo 1)" \
-  '{beforeClusterId:$before,afterClusterId:$after,mode:$mode,httpStatus:$status,dockerUpdateAttempts:$attempts}' \
+  --argjson daemonResponse "$(jq -sc '[.[] | select(.event == "docker_service_update_daemon_response") | {status, errorMessage, daemonResponded}] | last // null' "$LOG_DIR/docker-rejoin-proxy.jsonl")" \
+  '{beforeClusterId:$before,afterClusterId:$after,mode:$mode,httpStatus:$status,dockerUpdateAttempts:$attempts,daemonResponse:$daemonResponse}' \
   >"$LOG_DIR/docker-rejoin-evidence.json"
 
 # Leave only the new Swarm node owned by this acceptance run.
