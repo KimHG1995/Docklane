@@ -108,3 +108,6 @@ UNION SELECT 'audit_events', cluster_id FROM audit_events;
 
 ### 3-manager failover 실제 TCP 접속 검사
 등록 DB의 초기화 중 `mysqladmin ping`은 임시 socket 기반 서버에서도 성공하므로 운영 readiness로 사용하지 않는다. 테스트 전용 DB는 기존 isolated Docker bridge 안에 두고 러너 호스트에서만 접속 가능한 `127.0.0.1:33307`에 매핑한다. 최종 SQL 계정으로 컨테이너 내부 TCP `SELECT 1`과 호스트의 loopback TCP 연결을 모두 확인해야 failover 테스트로 진입한다. 외부 인터페이스나 Swarm 내부 Docker API 포트를 공개하지 않으며 DB 자원은 기존 ownership cleanup을 그대로 따른다.
+
+### Manager node 중단 및 Leader 재선출 검증
+기존 3-manager acceptance에서 실제 Swarm snapshot에 표시된 leader를 소유한 컨테이너만 중단한다. 등록 강제된 Agent read로 2/3 quorum의 새 leader와 동일한 실제 cluster ID를 확인하고, 노드 복원 후 3/3 quorum과 registration/audit 불변을 확인한다. 이전 Agent 프로세스 장애 검증과 구분하며 컨테이너 ID 소유권/기존 cleanup 절차를 유지한다. 라이브 Docker mutation 실행 중 외부 재가입 경쟁을 검증하거나 해결하지 않는다.

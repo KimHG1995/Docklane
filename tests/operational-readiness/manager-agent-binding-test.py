@@ -59,5 +59,25 @@ class ManagerAgentBindingTests(unittest.TestCase):
         self.assertLess(shell.index('registration_db_ready=true'), shell.index('node "$ROOT_DIR/tests/operational-readiness/manager-agents-registration.mjs"'))
         self.assertIn('remove_owned_container manager-db', (HERE / 'cleanup.sh').read_text())
 
+
+    def test_registered_manager_node_loss_uses_live_leader_and_recovers_quorum(self):
+        shell = (HERE / 'manager-agents.sh').read_text()
+        helper = (HERE / 'manager-agents-registration.mjs').read_text()
+        for name in ['01', '02', '03']:
+            self.assertIn('DOCKLANE_MANAGER_' + name + '_CONTAINER="$MANAGER_' + name + '_CONTAINER"', shell)
+        self.assertIn("observedCluster.nodes.filter((node) => node.manager && node.leader)", helper)
+        self.assertIn("assert.equal(leaders.length, 1", helper)
+        self.assertIn("assert.ok(previousLeaderContainer", helper)
+        self.assertIn("execFileSync('docker', ['stop', previousLeaderContainer]", helper)
+        self.assertIn("execFileSync('docker', ['start', previousLeaderContainer]", helper)
+        self.assertIn("candidate.cluster.managers.reachable === 2", helper)
+        self.assertIn("candidate.cluster.managers.reachable === 3", helper)
+        self.assertIn("newLeaders[0].id !== previousLeader.id", helper)
+        self.assertIn("candidate.cluster.id === registration.swarmClusterId", helper)
+        self.assertIn("assert.deepEqual(await new ClusterRegistrationRepository(db).find('default'), registration)", helper)
+        self.assertIn("assert.equal(Number(auditsAfterRecovery[0].count), 1)", helper)
+        self.assertIn('manager node leader loss election under registration enforce: PASS', shell)
+        subprocess.run(['node', '--check', str(HERE / 'manager-agents-registration.mjs')], check=True)
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
