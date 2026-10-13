@@ -1,6 +1,6 @@
 import type { AgentClient } from '../agent/agent-client.js';
 import type { ClusterBindingPolicy } from './cluster-binding.policy.js';
-import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
+import { MaintenancePreDispatchRejection } from '../agent/agent-client.js';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { Database } from '../db/database.js';
 
@@ -19,7 +19,7 @@ export function registeredAgentClient(raw: AgentClient, policy: ClusterBindingPo
         // This is a final best-effort DB admission, not atomic Docker fencing.
         // Observation/reconciliation methods remain available in maintenance.
         if (MUTATIONS.has(String(property)) && process.env.DOCKLANE_MAINTENANCE_ENFORCE === '1') {
-          if (!db) throw new ServiceUnavailableException('Maintenance database unavailable');
+          if (!db) throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
           const sql = 'SELECT state, CAST(generation AS CHAR) AS generation FROM cluster_maintenance_states WHERE cluster_id = ? LIMIT 1';
           let rows: MaintenanceRow[];
           try {
@@ -28,11 +28,11 @@ export function registeredAgentClient(raw: AgentClient, policy: ClusterBindingPo
               ? await connection.query<MaintenanceRow[]>(sql, [policy.clusterId])
               : await db.query<MaintenanceRow[]>(sql, [policy.clusterId]);
           } catch {
-            throw new ServiceUnavailableException('Maintenance dispatch state unavailable');
+            throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
           }
           const row = rows[0];
           if (!row || row.state !== 'OPEN' || !/^[0-9]+$/.test(row.generation) || BigInt(row.generation) < 1n) {
-            throw new ConflictException('Maintenance prevents new Docker dispatch');
+            throw new MaintenancePreDispatchRejection('MAINTENANCE_CLOSED');
           }
         }
         return value.apply(target, args);
