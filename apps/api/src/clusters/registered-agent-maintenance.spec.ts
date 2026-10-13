@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { registeredAgentClient } from './registered-agent-client.js';
+import { isDeterministicAgentRejection, MaintenancePreDispatchRejection, AgentRequestError } from '../agent/agent-client.js';
 
 test('maintenance final dispatch denies closed and missing row, preserving reads', async () => {
   const previous = process.env.DOCKLANE_MAINTENANCE_ENFORCE;
@@ -20,7 +21,7 @@ test('maintenance final dispatch denies closed and missing row, preserving reads
     };
     const agent = registeredAgentClient(raw as never, policy as never, db as never);
     await agent.inspectService('test');
-    await assert.rejects(() => agent.restartService('test', {} as never), /Maintenance prevents/);
+    await assert.rejects(() => agent.restartService('test', {} as never), (error: unknown) => error instanceof MaintenancePreDispatchRejection && isDeterministicAgentRejection(error));
     assert.equal(dispatched, 0);
     state = [];
     await assert.rejects(() => agent.restartService('test', {} as never), /Maintenance prevents/);
@@ -56,4 +57,10 @@ test('maintenance final dispatch uses active lock connection rather than checkin
     if (previous === undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
     else process.env.DOCKLANE_MAINTENANCE_ENFORCE = previous;
   }
+});
+
+test('only pre-dispatch maintenance rejection is deterministic, not generic 503', () => {
+  assert.equal(isDeterministicAgentRejection(new MaintenancePreDispatchRejection('MAINTENANCE_CLOSED')), true);
+  assert.equal(isDeterministicAgentRejection(new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE')), true);
+  assert.equal(isDeterministicAgentRejection(new AgentRequestError(503, '{"code":"MAINTENANCE_UNAVAILABLE"}')), false);
 });
