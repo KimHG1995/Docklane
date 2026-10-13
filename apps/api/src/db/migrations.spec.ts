@@ -197,7 +197,7 @@ test('cluster registration migration is additive, unique and case-sensitive', as
   assert.match(query, /COLLATE ascii_bin/);
   assert.match(query, /UNIQUE KEY uq_cluster_registration_swarm \(swarm_cluster_id\)/);
   assert.equal(state.queries.some((sql) => sql.includes('UPDATE bootstrap_tokens')), false);
-  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 4);
+  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 5);
 });
 
 test('rollback history migration persists each attempt mapping and backfills only matching operations', async () => {
