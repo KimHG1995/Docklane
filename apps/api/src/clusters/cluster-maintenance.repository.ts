@@ -183,6 +183,32 @@ export class ClusterMaintenanceRepository {
     }
   }
 
+  /**
+   * Advisory readiness snapshot only. Nonterminal durable operations prevent
+   * CLOSED, but zero rows cannot prove that no Agent HTTP request is in flight.
+   * Do not use this alone to enable CLOSED or Swarm rejoin.
+   */
+  async countUnresolvedOperations(clusterId: string): Promise<bigint> {
+    try {
+      const [rows] = await this.db.query<(RowDataPacket & { count: string })[]>(
+        `SELECT CAST((
+           (SELECT COUNT(*) FROM operations
+            WHERE cluster_id = ? AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
+           +
+           (SELECT COUNT(*) FROM node_operations
+            WHERE cluster_id = ? AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
+         ) AS CHAR) AS count`,
+        [clusterId, clusterId],
+      );
+      if (!rows[0] || !/^[0-9]+$/.test(String(rows[0].count))) {
+        throw new Error('Invalid unresolved operation count');
+      }
+      return BigInt(rows[0].count);
+    } catch {
+      throw new ServiceUnavailableException('Unresolved operation state cannot be verified');
+    }
+  }
+
   async requireOpen(clusterId: string): Promise<MaintenanceRecord> {
     const record = await this.requireRecord(clusterId);
     if (record.state !== 'OPEN') {
