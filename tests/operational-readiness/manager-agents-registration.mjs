@@ -110,6 +110,92 @@ try {
   );
   assert.equal(Number(auditsAfter[0].count), 1);
 
+
+  // A manager *node* outage is distinct from the Agent process outage above.
+  // Select the current leader from the protected Swarm snapshot instead of
+  // assuming the bootstrap manager is still leader.
+  const leaders = observedCluster.nodes.filter((node) => node.manager && node.leader);
+  assert.equal(leaders.length, 1, 'pre-loss Swarm must have exactly one manager leader');
+  const previousLeader = leaders[0];
+  const ownedManagers = {
+    'manager-01': process.env.DOCKLANE_MANAGER_01_CONTAINER,
+    'manager-02': process.env.DOCKLANE_MANAGER_02_CONTAINER,
+    'manager-03': process.env.DOCKLANE_MANAGER_03_CONTAINER,
+  };
+  const previousLeaderContainer = ownedManagers[previousLeader.hostname];
+  assert.ok(previousLeaderContainer, 'refuse to stop an unowned manager');
+  assert.equal(observedCluster.cluster.id, settings.expectedSwarmClusterId);
+  assert.equal(observedCluster.cluster.managers.available, true);
+
+  execFileSync('docker', ['stop', previousLeaderContainer], { stdio: 'inherit' });
+
+  // Poll current Swarm topology; identity checking still happens for every
+  // Agent request via the un-cached registration policy.
+  const electionDeadline = Date.now() + 120_000;
+  let electedCluster = null;
+  let electedLeader = null;
+  while (Date.now() < electionDeadline) {
+    try {
+      const candidate = await restarted.inspectCluster();
+      const newLeaders = candidate.nodes.filter((node) => node.manager && node.leader);
+      const lostNode = candidate.nodes.find((node) => node.id === previousLeader.id);
+      if (
+        candidate.cluster.id === registration.swarmClusterId &&
+        candidate.cluster.managers.available === true &&
+        candidate.cluster.managers.total === 3 &&
+        candidate.cluster.managers.reachable === 2 &&
+        candidate.cluster.managers.leaderCount === 1 &&
+        newLeaders.length === 1 &&
+        newLeaders[0].id !== previousLeader.id &&
+        lostNode && lostNode.state !== 'ready'
+      ) {
+        electedCluster = candidate;
+        electedLeader = newLeaders[0];
+        break;
+      }
+    } catch (error) {
+      // Unavailable manager during election may be temporary. Registration
+      // policy failures, however, must not be swallowed as failover progress.
+      if (error && typeof error.getStatus === 'function') throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  assert.ok(electedCluster, 'new leader/quorum did not converge after manager node loss');
+  assert.ok(electedLeader);
+  const afterLeaderLoss = await restarted.identity();
+  assert.equal(afterLeaderLoss.clusterId, registration.swarmClusterId);
+  assert.notEqual(afterLeaderLoss.nodeId, previousLeader.id);
+  assert.deepEqual(await new ClusterRegistrationRepository(db).find('default'), registration);
+
+  // Restore the exact owned container, and observe three healthy managers.
+  execFileSync('docker', ['start', previousLeaderContainer], { stdio: 'inherit' });
+  const recoveryDeadline = Date.now() + 120_000;
+  let recoveredCluster = null;
+  while (Date.now() < recoveryDeadline) {
+    try {
+      const candidate = await restarted.inspectCluster();
+      if (
+        candidate.cluster.id === registration.swarmClusterId &&
+        candidate.cluster.managers.available === true &&
+        candidate.cluster.managers.total === 3 &&
+        candidate.cluster.managers.reachable === 3 &&
+        candidate.cluster.managers.leaderCount === 1
+      ) {
+        recoveredCluster = candidate;
+        break;
+      }
+    } catch (error) {
+      if (error && typeof error.getStatus === 'function') throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  assert.ok(recoveredCluster, 'three-manager quorum not restored');
+  const [auditsAfterRecovery] = await db.query(
+    "SELECT COUNT(*) AS count FROM audit_events WHERE operation_id = ? AND action = 'CLUSTER_REGISTERED'",
+    [registration.id],
+  );
+  assert.equal(Number(auditsAfterRecovery[0].count), 1);
+
   writeFileSync(process.env.DOCKLANE_FAILOVER_EVIDENCE, JSON.stringify({
     registeredEnforcement: true,
     registeredClusterId: registration.swarmClusterId,
@@ -120,6 +206,14 @@ try {
     before,
     after,
     restarted: { nodeId: restartedIdentity.nodeId, clusterId: restartedIdentity.clusterId },
+    managerNodeLoss: {
+      previousLeader: { id: previousLeader.id, hostname: previousLeader.hostname },
+      electedLeader: { id: electedLeader.id, hostname: electedLeader.hostname },
+      quorumAfterLoss: electedCluster.cluster.managers,
+      quorumAfterRecovery: recoveredCluster.cluster.managers,
+      registeredClusterIdAfterLoss: afterLeaderLoss.clusterId,
+      auditCountAfterRecovery: Number(auditsAfterRecovery[0].count),
+    },
   }, null, 2) + '\n');
 } finally {
   await db.onModuleDestroy();

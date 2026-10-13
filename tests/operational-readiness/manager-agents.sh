@@ -369,6 +369,8 @@ DOCKLANE_AGENT_CA_FILE="$CA_CERT" \
 DOCKLANE_AGENT_CERT_FILE="$CLIENT_CERT" \
 DOCKLANE_AGENT_KEY_FILE="$CLIENT_KEY" \
 DOCKLANE_MANAGER_01_CONTAINER="$MANAGER_01_CONTAINER" \
+DOCKLANE_MANAGER_02_CONTAINER="$MANAGER_02_CONTAINER" \
+DOCKLANE_MANAGER_03_CONTAINER="$MANAGER_03_CONTAINER" \
 DOCKLANE_FAILOVER_EVIDENCE="$LOG_DIR/manager-agent-failover.json" \
 node "$ROOT_DIR/tests/operational-readiness/manager-agents-registration.mjs"
 
@@ -383,6 +385,8 @@ single observed leader: PASS
 Control Plane primary Agent loss failover: PASS
 registered enforcement across Agent failover: PASS
 persisted immutable registration and audit: PASS
+manager node leader loss election under registration enforce: PASS
+former leader Docker manager recovery under registration enforce: PASS
 cluster id: $cluster_id
 EOF
 
