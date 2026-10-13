@@ -2,6 +2,7 @@ import { Body, Controller, Get, Inject, NotFoundException, Param, Post, Req, For
 import { RequireRole } from '../auth/auth.decorators.js';
 import type { AuthenticatedRequest } from '../auth/auth.types.js';
 import { ClusterBindingPolicy } from './cluster-binding.policy.js';
+import { MaintenanceDispatchEvidence } from './maintenance-dispatch-evidence.js';
 import { ClusterMaintenanceRepository } from './cluster-maintenance.repository.js';
 
 /**
@@ -15,6 +16,7 @@ export class ClusterMaintenanceController {
   constructor(
     @Inject(ClusterMaintenanceRepository) private readonly maintenance: ClusterMaintenanceRepository,
     @Inject(ClusterBindingPolicy) private readonly binding: ClusterBindingPolicy,
+    @Inject(MaintenanceDispatchEvidence) private readonly dispatchEvidence: MaintenanceDispatchEvidence,
   ) {}
 
   // Only OPEN -> CLOSING is exposed. CLOSED must await full manager barriers.
@@ -64,11 +66,13 @@ export class ClusterMaintenanceController {
     await this.binding.assertRegistered(clusterId);
     const record = await this.maintenance.requireRecord(clusterId);
     const unresolved = await this.maintenance.countUnresolvedOperations(clusterId);
+    const unresolvedDispatches = await this.dispatchEvidence.countUnresolved(clusterId);
     return {
       clusterId,
       state: record.state,
       generation: record.generation.toString(),
       unresolvedOperations: unresolved.toString(),
+      unresolvedDispatches: unresolvedDispatches.toString(),
       agentBarrierVerified: false,
       inFlightDispatchVerified: false,
       safeToClose: false,
