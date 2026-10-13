@@ -38,7 +38,7 @@ export class ClusterMaintenanceRepository {
     let rows: MaintenanceRow[];
     try {
       [rows] = await this.db.query<MaintenanceRow[]>(
-        'SELECT cluster_id, state, generation, owner_id, reason, changed_by, changed_at FROM cluster_maintenance_states WHERE cluster_id = ? LIMIT 1',
+        'SELECT cluster_id, state, CAST(generation AS CHAR) AS generation, owner_id, reason, changed_by, changed_at FROM cluster_maintenance_states WHERE cluster_id = ? LIMIT 1',
         [clusterId],
       );
     } catch {
