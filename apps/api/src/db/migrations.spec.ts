@@ -66,20 +66,20 @@ test('database migrations apply all known migrations once and skip them on repla
   await runDatabaseMigrations(state.connection as never);
   assert.deepEqual(
     state.applied.map((row) => row.version),
-    [1, 2, 3, 4, 5, 6],
+    [1, 2, 3, 4, 5, 6, 7],
   );
 
   const insertsAfterFirst = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterFirst, 6);
+  assert.equal(insertsAfterFirst, 7);
 
   await runDatabaseMigrations(state.connection as never);
 
   const insertsAfterReplay = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterReplay, 6);
+  assert.equal(insertsAfterReplay, 7);
 });
 
 test('database migrations reject metadata drift for an applied migration', async () => {
@@ -143,6 +143,7 @@ test('migration checksums are deterministic and catalog metadata is stable', () 
       [4, 'rollback-attempt-history'],
       [5, 'cluster-maintenance-state'],
       [6, 'maintenance-owner-unicode'],
+      [7, 'maintenance-dispatch-evidence'],
     ],
   );
 });
