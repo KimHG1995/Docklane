@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { migrateClusterMaintenanceState } from './cluster-maintenance.migration.js';
 import { migrateClusterRegistration } from './cluster-registration.migration.js';
 import { migrateMaintenanceOwnerUnicode } from './maintenance-owner-unicode.migration.js';
+import { migrateMaintenanceDispatch } from './maintenance-dispatch.migration.js';
 import { migrateRollbackAttemptHistory } from './rollback-attempt.migration.js';
 import type {
   PoolConnection,
@@ -54,6 +55,7 @@ export const DATABASE_MIGRATIONS: readonly Migration[] = [
   { version: 4, name: 'rollback-attempt-history', signature: '2026-10-08-rollback-attempt-history-v1', up: migrateRollbackAttemptHistory },
   { version: 5, name: 'cluster-maintenance-state', signature: '2026-10-13-cluster-maintenance-state-v1', up: migrateClusterMaintenanceState },
   { version: 6, name: 'maintenance-owner-unicode', signature: '2026-10-13-maintenance-owner-unicode-v1', up: migrateMaintenanceOwnerUnicode },
+  { version: 7, name: 'maintenance-dispatch-evidence', signature: '2026-10-14-maintenance-dispatch-evidence-v1', up: migrateMaintenanceDispatch },
 ];
 
 export async function runDatabaseMigrations(
