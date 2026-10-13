@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { migrateClusterMaintenanceState } from './cluster-maintenance.migration.js';
 import { migrateClusterRegistration } from './cluster-registration.migration.js';
 import { migrateRollbackAttemptHistory } from './rollback-attempt.migration.js';
 import type {
@@ -50,6 +51,7 @@ export const DATABASE_MIGRATIONS: readonly Migration[] = [
     up: migrateClusterRegistration,
   },
   { version: 4, name: 'rollback-attempt-history', signature: '2026-10-08-rollback-attempt-history-v1', up: migrateRollbackAttemptHistory },
+  { version: 5, name: 'cluster-maintenance-state', signature: '2026-10-13-cluster-maintenance-state-v1', up: migrateClusterMaintenanceState },
 ];
 
 export async function runDatabaseMigrations(
