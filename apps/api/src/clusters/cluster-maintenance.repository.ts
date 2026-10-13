@@ -63,6 +63,78 @@ export class ClusterMaintenanceRepository {
     };
   }
 
+
+  /**
+   * Operator initialization is explicit and limited to an already registered
+   * cluster. No implicit OPEN row is created on read/startup/migration.
+   * A duplicate request never resets a CLOSED or CLOSING state.
+   */
+  async initializeOpen(clusterId: string, actorId: string, reason: string): Promise<MaintenanceRecord> {
+    if (!actorId.trim() || !reason.trim() || reason.length > 1024) {
+      throw new ConflictException('Maintenance initializer requires actor and bounded reason');
+    }
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [registered] = await connection.query<RowDataPacket[]>(
+        'SELECT cluster_id FROM cluster_registrations WHERE cluster_id = ? LIMIT 1 FOR UPDATE',
+        [clusterId],
+      );
+      if (registered.length !== 1) {
+        throw new ConflictException('Cluster registration is required before maintenance initialization');
+      }
+      const [result] = await connection.execute(
+        `INSERT INTO cluster_maintenance_states
+         (cluster_id, state, generation, owner_id, reason, changed_by)
+         VALUES (?, 'OPEN', 1, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE cluster_id = cluster_id`,
+        [clusterId, actorId, reason, actorId],
+      );
+      // Replays never change the existing state; no automatic re-opening.
+      void result;
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+    return this.requireRecord(clusterId);
+  }
+
+  /**
+   * Compare-and-swap transition. Caller must separately prove in-flight
+   * completion and manager barriers before CLOSING -> CLOSED or reopening.
+   * This is a database primitive, NOT authorization or Docker fencing.
+   */
+  async compareAndSetState(
+    clusterId: string,
+    expectedState: MaintenanceState,
+    expectedGeneration: bigint,
+    targetState: MaintenanceState,
+    actorId: string,
+    reason: string,
+  ): Promise<boolean> {
+    const allowed: Record<MaintenanceState, readonly MaintenanceState[]> = {
+      OPEN: ['CLOSING'],
+      CLOSING: ['CLOSED'],
+      CLOSED: ['RECONCILING'],
+      RECONCILING: ['OPEN'],
+    };
+    if (!allowed[expectedState].includes(targetState) ||
+        expectedGeneration < 1n || !actorId.trim() || !reason.trim() || reason.length > 1024) {
+      throw new ConflictException('Invalid maintenance state transition');
+    }
+    const [result] = await this.db.query<import('mysql2/promise').ResultSetHeader>(
+      `UPDATE cluster_maintenance_states
+       SET state = ?, generation = generation + 1, owner_id = ?, reason = ?,
+           changed_by = ?, changed_at = UTC_TIMESTAMP(6)
+       WHERE cluster_id = ? AND state = ? AND generation = ?`,
+      [targetState, actorId, reason, actorId, clusterId, expectedState, expectedGeneration.toString()],
+    );
+    return result.affectedRows === 1;
+  }
+
   async requireOpen(clusterId: string): Promise<MaintenanceRecord> {
     const record = await this.requireRecord(clusterId);
     if (record.state !== 'OPEN') {

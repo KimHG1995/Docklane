@@ -46,3 +46,39 @@ test('unknown state and zero generation do not grant admission', async () => {
   await assert.rejects(() => repository([{ ...open, state: 'UNKNOWN' }]).requireOpen('default'), /missing or invalid/);
   await assert.rejects(() => repository([{ ...open, generation: '0' }]).requireOpen('default'), /generation is invalid/);
 });
+
+test('maintenance transition requires valid next state and generation', async () => {
+  const repository = repositoryForTransitions();
+  await assert.rejects(
+    () => repository.compareAndSetState('default', 'OPEN', 1n, 'CLOSED', 'admin', 'maintenance'),
+    /Invalid maintenance state transition/,
+  );
+  await assert.rejects(
+    () => repository.compareAndSetState('default', 'OPEN', 0n, 'CLOSING', 'admin', 'maintenance'),
+    /Invalid maintenance state transition/,
+  );
+});
+
+function repositoryForTransitions(affectedRows = 1) {
+  const db = { query: async () => [{ affectedRows }] };
+  return new ClusterMaintenanceRepository(db as never);
+}
+
+test('maintenance generation CAS uses expected state and avoids stale takeover', async () => {
+  const calls: unknown[][] = [];
+  const repo = new ClusterMaintenanceRepository({
+    query: async (_sql: string, args: unknown[]) => {
+      calls.push(args);
+      return [{ affectedRows: calls.length === 1 ? 1 : 0 }];
+    },
+  } as never);
+  assert.equal(await repo.compareAndSetState('default', 'OPEN', 2n, 'CLOSING', 'admin', 'scheduled maintenance'), true);
+  assert.equal(await repo.compareAndSetState('default', 'OPEN', 2n, 'CLOSING', 'admin', 'scheduled maintenance'), false);
+  assert.equal(calls[0]?.at(-1), '2');
+});
+
+test('initialization requires an actor and reason', async () => {
+  const repo = repositoryForTransitions();
+  await assert.rejects(() => repo.initializeOpen('default', '', 'maintenance'), /requires actor/);
+  await assert.rejects(() => repo.initializeOpen('default', 'admin', ''), /requires actor/);
+});
