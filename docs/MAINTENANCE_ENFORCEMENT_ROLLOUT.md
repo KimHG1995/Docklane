@@ -37,3 +37,6 @@ This is a partial operator API. It must not be described as a complete maintenan
 
 ## Unresolved operation readiness snapshot
 The maintenance repository can count all service and node operations in PENDING/RUNNING/VERIFYING/NEEDS_ATTENTION using the actual MySQL DB. Missing data, malformed counts, and query failure cause a 503 instead of an optimistic zero. The count is advisory and does **not** grant CLOSED: a zero count does not prove HTTP transmissions or all-manager Agent barriers have drained. In-flight dispatch lease/fencing and manager acknowledgements must be persisted and checked before introducing a CLOSED transition API.
+
+## Readiness API
+Scoped ADMIN `GET /v1/clusters/:clusterId/maintenance/readiness` reports durable nonterminal operation count and maintenance generation as decimal strings. `agentBarrierVerified`, `inFlightDispatchVerified`, and `safeToClose` remain **false**, including when the DB count is zero. This is diagnostic only; it is not a manager-barrier implementation, nor authorization to leave/reinitialize the Swarm.
