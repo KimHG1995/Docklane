@@ -55,6 +55,7 @@ import { ClusterRegistrationRepository } from './apps/api/dist/clusters/cluster-
 import { ClusterBindingPolicy } from './apps/api/dist/clusters/cluster-binding.policy.js';
 import { registeredAgentClient } from './apps/api/dist/clusters/registered-agent-client.js';
 import { RegisteredOperationLock } from './apps/api/dist/clusters/registered-operation-lock.js';
+import { ClusterMaintenanceRepository } from './apps/api/dist/clusters/cluster-maintenance.repository.js';
 
 const db = new Database();
 
@@ -302,6 +303,44 @@ try {
   }
   const [unchanged] = await db.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = 'CLUSTER_REGISTERED'");
   assert.equal(Number(unchanged[0].count), 1);
+  // Real InnoDB rollback acceptance: CLOSING and its audit MUST commit together.
+  const maintenance = new ClusterMaintenanceRepository(db);
+  const initialized = await maintenance.initializeOpen('default', '관리자', 'disposable acceptance');
+  assert.equal(initialized.state, 'OPEN');
+  assert.equal(initialized.ownerId, '관리자');
+  assert.equal(initialized.generation, 1n);
+  const concurrentClose = await Promise.all(Array.from({ length: 10 }, () =>
+    maintenance.requestClosing('default', 1n, '관리자', 'maintenance acceptance')));
+  assert.equal(concurrentClose.filter(Boolean).length, 1, 'only one close CAS may succeed');
+  let state = await maintenance.requireRecord('default');
+  assert.equal(state.state, 'CLOSING');
+  assert.equal(state.generation, 2n);
+  const [closeAudits] = await db.query(
+    "SELECT * FROM audit_events WHERE action = 'CLUSTER_MAINTENANCE_CLOSING' AND cluster_id = 'default'");
+  assert.equal(closeAudits.length, 1, 'close transaction must audit exactly once');
+  // Reset via SQL only inside this owned disposable fixture; no public re-open API.
+  await db.query("UPDATE cluster_maintenance_states SET state = 'OPEN', generation = 3 WHERE cluster_id = 'default'");
+  await db.query(`CREATE TRIGGER reject_test_maintenance_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_CLOSING' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'maintenance audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() =>
+      maintenance.requestClosing('default', 3n, '관리자', 'audit rollback acceptance'),
+      /maintenance audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_maintenance_audit');
+  }
+  state = await maintenance.requireRecord('default');
+  assert.equal(state.state, 'OPEN', 'audit insert failure must roll back close state');
+  assert.equal(state.generation, 3n, 'audit failure must roll back generation increment');
+  const [stillOneAudit] = await db.query(
+    "SELECT COUNT(*) AS count FROM audit_events WHERE action = 'CLUSTER_MAINTENANCE_CLOSING'");
+  assert.equal(Number(stillOneAudit[0].count), 1);
+  console.log('maintenance real MySQL concurrent CAS, Unicode owner and audit rollback: PASS');
+
   console.log('cluster registration MySQL transaction/replay/uniqueness: PASS');
 
   // Real mysql2 pool, actual InnoDB/GET_LOCK sessions and actual registration
