@@ -11,6 +11,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import {
   AGENT_CLIENT,
   AgentRequestError,
+  MaintenancePreDispatchRejection,
   isDeterministicAgentRejection,
   type AgentClient,
 } from '../agent/agent-client.js';
@@ -613,7 +614,9 @@ export class NodeMutationService implements OnApplicationBootstrap {
       await this.nodeOperations.markFailed(
         connection,
         operationId,
-        error.statusCode === 409
+        error instanceof MaintenancePreDispatchRejection
+          ? 'MAINTENANCE_DISPATCH_REJECTED'
+          : error.statusCode === 409
           ? 'NODE_VERSION_CONFLICT'
           : 'NODE_MUTATION_REJECTED',
         error.responseBody,
