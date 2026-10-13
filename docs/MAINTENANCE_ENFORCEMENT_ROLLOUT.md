@@ -29,3 +29,8 @@ When enforcement is enabled, the registered Agent client now rechecks maintenanc
 
 ## Pre-dispatch deterministic denial
 A maintenance check executed *before* sending any Agent HTTP mutation now throws `MaintenancePreDispatchRejection`. Only this branded error is added to deterministic rejection classification; generic 409/503 responses or unknown transmission outcomes remain unchanged. Existing durable operation rejection handlers persist FAILED and audit; service/node errors are tagged MAINTENANCE_DISPATCH_REJECTED. Docker request count must be zero. This does not mean the database check and outbound HTTP call are atomic, nor does it make the all-manager barrier complete.
+
+## Operator close request (OPEN → CLOSING only)
+Scoped ADMIN may POST `/v1/clusters/:clusterId/maintenance/close-request` with decimal-string `generation` and nonempty `reason`. A single InnoDB transaction updates the expected OPEN generation and inserts the audit event; if the audit insert fails, the transition rolls back. A stale generation fails closed. No API exists yet to enter CLOSED or to reopen: that requires proof of completed in-flight work and acknowledgment from **every manager Agent**, not merely absence of DB operation rows. Existing operations marked NEEDS_ATTENTION and unknown transmitted requests must block automatic rejoin.
+
+This is a partial operator API. It must not be described as a complete maintenance lifecycle or as Docker-native fencing. Production enforcement stays disabled until the remaining acceptance checks pass.
