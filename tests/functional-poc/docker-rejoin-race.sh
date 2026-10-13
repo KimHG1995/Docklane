@@ -92,6 +92,12 @@ fi
 docker swarm leave --force >"$LOG_DIR/docker-rejoin-leave.log"
 [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" == "inactive" ]] ||
   die "owned Swarm A did not leave"
+# Leaving the owned Swarm destroys its service; the old service ID can no
+# longer be inspected from the new or inactive Swarm. Retire its ownership
+# marker only after Docker confirms the original Swarm was actually left.
+[[ "$(cat "$OWNERSHIP_DIR/service.id")" == "$SERVICE_ID" ]] ||
+  die "service ownership marker changed during rejoin"
+rm -f "$OWNERSHIP_DIR/service.id"
 docker swarm init --advertise-addr "$DOCKLANE_REJOIN_ADVERTISE_ADDR" >"$LOG_DIR/docker-rejoin-init.log"
 NEW_NODE_ID="$(docker info --format '{{.Swarm.NodeID}}')"
 NEW_CLUSTER_ID="$(docker info --format '{{.Swarm.Cluster.ID}}')"
