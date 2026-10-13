@@ -31,9 +31,18 @@ class DockerUnixConnection(http.client.HTTPConnection):
         self.sock.settimeout(self.timeout)
         self.sock.connect(DOCKER_SOCKET)
 
-def record(event, path):
+def record(event, path, **details):
     with LOG.open("a", encoding="utf-8") as out:
-        out.write(json.dumps({"event": event, "path": path}, sort_keys=True) + "\n")
+        out.write(json.dumps({"event": event, "path": path, **details}, sort_keys=True) + "\n")
+
+def docker_error_message(payload):
+    try:
+        obj = json.loads(payload)
+        if isinstance(obj, dict) and isinstance(obj.get("message"), str):
+            return obj["message"][:512]
+    except (ValueError, UnicodeDecodeError, TypeError):
+        pass
+    return ""
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -82,6 +91,11 @@ class Handler(BaseHTTPRequestHandler):
             status = response.status
         finally:
             conn.close()
+
+        if update_request and MODE == "postguard":
+            record("docker_service_update_daemon_response", self.path,
+                   status=status, errorMessage=docker_error_message(payload),
+                   daemonResponded=True)
 
         if update_request and MODE == "preguard":
             record("docker_service_update_attempt", self.path)
