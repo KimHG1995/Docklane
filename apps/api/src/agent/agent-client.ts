@@ -144,11 +144,25 @@ export class AgentRequestError extends Error {
   }
 }
 
+/**
+ * Raised exclusively by Control Plane admission BEFORE invoking Agent transport.
+ * It is an AgentRequestError subclass solely to reuse the existing durable
+ * FAILED + audit handling; it is NOT a response received from an Agent.
+ * Never construct it after attempting HTTP dispatch or on uncertain transport.
+ */
+export class MaintenancePreDispatchRejection extends AgentRequestError {
+  constructor(code: 'MAINTENANCE_CLOSED' | 'MAINTENANCE_UNAVAILABLE') {
+    super(code === 'MAINTENANCE_CLOSED' ? 409 : 503, JSON.stringify({ code }));
+    this.name = 'MaintenancePreDispatchRejection';
+  }
+}
+
 // Only use for the response to the mutation request itself, never to infer the
 // outcome of an earlier request from a later read or from an unchanged spec.
 export function isDeterministicAgentRejection(
   error: unknown,
 ): error is AgentRequestError {
+  if (error instanceof MaintenancePreDispatchRejection) return true;
   if (!(error instanceof AgentRequestError)) return false;
   // Preserve the existing validation/version-conflict rejection contract.
   if (error.statusCode === 400 || error.statusCode === 409) return true;
