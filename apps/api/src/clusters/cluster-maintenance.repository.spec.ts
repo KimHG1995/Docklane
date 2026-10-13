@@ -82,3 +82,22 @@ test('initialization requires an actor and reason', async () => {
   await assert.rejects(() => repo.initializeOpen('default', '', 'maintenance'), /requires actor/);
   await assert.rejects(() => repo.initializeOpen('default', 'admin', ''), /requires actor/);
 });
+
+test('generation query casts BIGINT before mysql2 can round it', async () => {
+  let sql = '';
+  const repo = new ClusterMaintenanceRepository({
+    query: async (statement: string) => {
+      sql = statement;
+      return [[{
+        cluster_id: 'default', state: 'OPEN',
+        generation: '9007199254740993', owner_id: '관리자',
+        reason: 'maintenance', changed_by: '관리자',
+        changed_at: new Date('2026-10-13T00:00:00Z'),
+      }]];
+    },
+  } as never);
+  const result = await repo.requireRecord('default');
+  assert.match(sql, /CAST\(generation AS CHAR\) AS generation/);
+  assert.equal(result.generation, 9007199254740993n);
+  assert.equal(result.ownerId, '관리자');
+});
