@@ -24,7 +24,7 @@ test('maintenance final dispatch denies closed and missing row, preserving reads
     await assert.rejects(() => agent.restartService('test', {} as never), (error: unknown) => error instanceof MaintenancePreDispatchRejection && isDeterministicAgentRejection(error));
     assert.equal(dispatched, 0);
     state = [];
-    await assert.rejects(() => agent.restartService('test', {} as never), /Maintenance prevents/);
+    await assert.rejects(() => agent.restartService('test', {} as never), (error: unknown) => error instanceof MaintenancePreDispatchRejection && isDeterministicAgentRejection(error));
     state = [{ state: 'OPEN', generation: '3' }];
     await agent.restartService('test', {} as never);
     assert.equal(dispatched, 1);
