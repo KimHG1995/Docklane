@@ -399,6 +399,37 @@ try {
   assert.equal(Number(registrationRows[0].count), 1, 'admission checks must not modify registrations');
   console.log('registered operation real MySQL pool saturation (10/10), mismatch and absence: PASS');
 
+  // Maintenance enforcement ON: real MySQL/GET_LOCK with a held connection.
+  // Proves new mutation dispatch stops when CLOSING, while recovery still reads.
+  const savedEnforce = process.env.DOCKLANE_MAINTENANCE_ENFORCE;
+  process.env.DOCKLANE_MAINTENANCE_ENFORCE = '1';
+  try {
+    let mutationCalls = 0;
+    const protectedAgent = registeredAgentClient({
+      restartService: async () => {
+        mutationCalls += 1;
+        return { serviceId: 'disposable', version: 1, targetSpecHash: 'x' };
+      },
+      inspectService: async () => ({ service: { id: 'disposable' } }),
+    }, policy, db);
+    await assert.rejects(
+      () => mutex.withServiceLock('default', 'maintenance-block-test',
+        () => protectedAgent.restartService('disposable', {})),
+      /maintenance/i,
+    );
+    assert.equal(mutationCalls, 0, 'CLOSING must block Agent mutation before transport');
+    let recoveryReads = 0;
+    await mutex.withServiceRecoveryLock('default', 'maintenance-block-test', async () => {
+      await protectedAgent.inspectService('disposable');
+      recoveryReads += 1;
+    });
+    assert.equal(recoveryReads, 1, 'CLOSING must allow observation-only recovery');
+    console.log('maintenance enforcement ON real MySQL lock/dispatch/recovery: PASS');
+  } finally {
+    if (savedEnforce === undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
+    else process.env.DOCKLANE_MAINTENANCE_ENFORCE = savedEnforce;
+  }
+
   console.log('database migration PoC: PASS');
 } finally {
   await db.onModuleDestroy();
