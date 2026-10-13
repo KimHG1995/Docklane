@@ -7,6 +7,7 @@ import {
 import { HttpAgentClient } from './http-agent.client.js';
 import { ClusterBindingModule } from '../clusters/cluster-binding.module.js';
 import { ClusterBindingPolicy } from '../clusters/cluster-binding.policy.js';
+import { Database } from '../db/database.js';
 import { registeredAgentClient } from '../clusters/registered-agent-client.js';
 import type { AgentClient } from './agent-client.js';
 
@@ -19,8 +20,8 @@ import type { AgentClient } from './agent-client.js';
     },
     HttpAgentClient,
     { provide: AGENT_CLIENT,
-      useFactory: (raw: HttpAgentClient, policy: ClusterBindingPolicy): AgentClient => registeredAgentClient(raw, policy),
-      inject: [HttpAgentClient, ClusterBindingPolicy],
+      useFactory: (raw: HttpAgentClient, policy: ClusterBindingPolicy, db: Database): AgentClient => registeredAgentClient(raw, policy, db),
+      inject: [HttpAgentClient, ClusterBindingPolicy, Database],
     },
   ],
   exports: [AGENT_CLIENT, MANAGER_AGENT_CONFIG, HttpAgentClient],
