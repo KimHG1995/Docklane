@@ -31,7 +31,7 @@ export function registeredAgentClient(raw: AgentClient, policy: ClusterBindingPo
             throw new ServiceUnavailableException('Maintenance dispatch state unavailable');
           }
           const row = rows[0];
-          if (!row || row.state !== 'OPEN' || !/^\\d+$/.test(row.generation) || BigInt(row.generation) < 1n) {
+          if (!row || row.state !== 'OPEN' || !/^[0-9]+$/.test(row.generation) || BigInt(row.generation) < 1n) {
             throw new ConflictException('Maintenance prevents new Docker dispatch');
           }
         }
