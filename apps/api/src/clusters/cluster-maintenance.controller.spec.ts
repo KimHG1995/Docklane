@@ -13,6 +13,7 @@ test('maintenance read requires scoped ADMIN and serializes generation losslessl
       changedAt: new Date('2026-10-13T00:00:00Z'),
     }) } as never,
     { clusterId: 'default', assertRegistered: async () => { registrations += 1; } } as never,
+    { countUnresolved: async () => 0n } as never,
   );
   await assert.rejects(() => controller.get('default', request('VIEWER', ['default']) as never), /scoped ADMIN/);
   await assert.rejects(() => controller.get('default', request('ADMIN', ['other']) as never), /scoped ADMIN/);
@@ -27,6 +28,7 @@ test('maintenance close requires scoped ADMIN and sends precise generation', asy
     { requestClosing: async (...args: unknown[]) => { calls.push(args); return true; },
       requireRecord: async () => ({ clusterId:'default', state:'CLOSING', generation:2n }) } as never,
     { clusterId:'default', assertRegistered:async () => {} } as never,
+    { countUnresolved: async () => 0n } as never,
   );
   const body = { generation:'1', reason:'planned maintenance' };
   await assert.rejects(() => controller.requestClosing('default', request('OPERATOR', ['default']) as never, body), /scoped ADMIN/);
@@ -43,6 +45,7 @@ test('readiness remains unsafe with zero unresolved operations until Agent barri
       countUnresolvedOperations: async () => 0n,
     } as never,
     { clusterId: 'default', assertRegistered: async () => {} } as never,
+    { countUnresolved: async () => 0n } as never,
   );
   await assert.rejects(
     () => controller.readiness('default', request('OPERATOR', ['default']) as never),
@@ -51,7 +54,7 @@ test('readiness remains unsafe with zero unresolved operations until Agent barri
   const result = await controller.readiness('default', request('ADMIN', ['default']) as never);
   assert.deepEqual(result, {
     clusterId: 'default', state: 'CLOSING', generation: '8',
-    unresolvedOperations: '0', agentBarrierVerified: false,
+    unresolvedOperations: '0', unresolvedDispatches: '0', agentBarrierVerified: false,
     inFlightDispatchVerified: false, safeToClose: false,
   });
 });
