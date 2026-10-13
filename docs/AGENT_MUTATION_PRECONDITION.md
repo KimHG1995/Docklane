@@ -88,3 +88,5 @@ API와 Agent를 함께 바꾸는 하나의 작업이며, 별도의 heavy workflo
 
 ### 폐기 가능한 Swarm 재가입 장애 주입
 기존 단일노드 PoC의 정상 시나리오가 모두 완료된 뒤 소유권을 가진 Docker 호스트에서만 서비스 inspect 응답을 보류하고 실제 `swarm leave --force` 및 `swarm init`을 수행한다. 최종 검사에서 원래 기대 cluster ID와 달라진 ID를 확인해 412로 거절하고 update 호출 횟수 0건을 검증한다. 첫 번째 재가입 뒤 원래 Docker 서비스는 사라지므로 이 테스트는 반드시 마지막에 수행하고, 새 swarm node ID까지 cleanup에 기록한다. 최종 검사 직후 재가입하는 **더 좁은 구간**은 아직 원자성 보장이 없으며 후속 실험 대상이다.
+
+재가입 후 정리: 이전 Swarm A의 `docker swarm leave --force` 및 상태 `inactive`가 확인되면 기존 service의 관리 컨텍스트 자체가 소멸한다. 해당 실험의 서비스 ID가 ownership marker와 정확히 일치할 때만 이전 service marker를 만료한다. 실험이 소유한 새 Swarm B node ID는 복귀 및 cleanup 때 별도로 대조한다. 다른 Docker 리소스나 미확인 ID는 정리하지 않는다.

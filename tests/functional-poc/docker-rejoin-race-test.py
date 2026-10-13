@@ -13,6 +13,11 @@ class RejoinSafety(unittest.TestCase):
         self.assertIn('refusing rejoin experiment on an unverified cluster',script)
         self.assertIn('rejoin-swarm.node-id',script)
         self.assertIn('leave_owned_rejoin_swarm',cleanup)
+        self.assertIn('owned Swarm A did not leave',script)
+        self.assertIn('service ownership marker changed during rejoin',script)
+        self.assertLess(script.index('owned Swarm A did not leave'),script.index('rm -f "$OWNERSHIP_DIR/service.id"'))
+        self.assertLess(script.index('rm -f "$OWNERSHIP_DIR/service.id"'),script.index('docker swarm init --advertise-addr'))
+
         self.assertLess(run.index('scenario: audit completeness'),run.index('docker-rejoin-race.sh'))
         self.assertIn('CLUSTER_PRECONDITION_FAILED',script)
         self.assertIn('docker_service_update_attempt',script)
