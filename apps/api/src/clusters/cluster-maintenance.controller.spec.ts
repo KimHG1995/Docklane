@@ -35,3 +35,23 @@ test('maintenance close requires scoped ADMIN and sends precise generation', asy
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.[1], 1n);
 });
+
+test('readiness remains unsafe with zero unresolved operations until Agent barriers exist', async () => {
+  const controller = new ClusterMaintenanceController(
+    {
+      requireRecord: async () => ({ clusterId: 'default', state: 'CLOSING', generation: 8n }),
+      countUnresolvedOperations: async () => 0n,
+    } as never,
+    { clusterId: 'default', assertRegistered: async () => {} } as never,
+  );
+  await assert.rejects(
+    () => controller.readiness('default', request('OPERATOR', ['default']) as never),
+    /scoped ADMIN/,
+  );
+  const result = await controller.readiness('default', request('ADMIN', ['default']) as never);
+  assert.deepEqual(result, {
+    clusterId: 'default', state: 'CLOSING', generation: '8',
+    unresolvedOperations: '0', agentBarrierVerified: false,
+    inFlightDispatchVerified: false, safeToClose: false,
+  });
+});
