@@ -54,7 +54,7 @@ export class NodeMutationService implements OnApplicationBootstrap {
     const pending = await this.nodeOperations.listNonTerminal();
     for (const operation of pending) {
       try {
-        await this.lock.withNodeAndServiceLocks(
+        await this.lock.withNodeRecoveryLocks(
           operation.clusterId,
           operation.nodeId,
           operation.affectedServiceIds,
