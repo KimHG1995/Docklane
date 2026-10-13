@@ -20,3 +20,18 @@ test('maintenance read requires scoped ADMIN and serializes generation losslessl
   assert.equal(result.generation, '9007199254740993');
   assert.equal(registrations, 1);
 });
+
+test('maintenance close requires scoped ADMIN and sends precise generation', async () => {
+  const calls: unknown[][] = [];
+  const controller = new ClusterMaintenanceController(
+    { requestClosing: async (...args: unknown[]) => { calls.push(args); return true; },
+      requireRecord: async () => ({ clusterId:'default', state:'CLOSING', generation:2n }) } as never,
+    { clusterId:'default', assertRegistered:async () => {} } as never,
+  );
+  const body = { generation:'1', reason:'planned maintenance' };
+  await assert.rejects(() => controller.requestClosing('default', request('OPERATOR', ['default']) as never, body), /scoped ADMIN/);
+  const result = await controller.requestClosing('default', request('ADMIN', ['default']) as never, body);
+  assert.equal(result.generation, '2');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.[1], 1n);
+});
