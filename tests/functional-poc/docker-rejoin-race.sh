@@ -84,9 +84,9 @@ for _ in {1..120}; do
   if ! kill -0 "$request_pid" 2>/dev/null; then break; fi
   sleep 0.25
 done
-[[ "$held" == "true" ]] || die "Agent never reached the held Docker inspect response"
+[[ "$held" == "true" ]] || die "Agent never reached selected Docker barrier"
 
-if [[ -f "$LOG_DIR/docker-rejoin-proxy.jsonl" ]]; then
+if [[ "$RACE_MODE" == "preguard" && -f "$LOG_DIR/docker-rejoin-proxy.jsonl" ]]; then
   jq -se 'all(.[]; .event != "docker_service_update_attempt")' \
     "$LOG_DIR/docker-rejoin-proxy.jsonl" >/dev/null ||
     die "unexpected Docker update before controlled rejoin"
@@ -144,4 +144,4 @@ docker swarm leave --force >"$LOG_DIR/docker-rejoin-final-leave.log"
 [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" == "inactive" ]] ||
   die "rejoined Swarm did not leave cleanly"
 rm -f "$OWNERSHIP_DIR/rejoin-swarm.node-id"
-printf '[swarm-rejoin] real Docker leave/init at ${RACE_MODE} barrier: PASS\n'
+printf '[swarm-rejoin] real Docker leave/init at %s barrier: PASS\n' "$RACE_MODE"
