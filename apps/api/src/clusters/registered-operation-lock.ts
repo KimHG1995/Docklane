@@ -27,6 +27,26 @@ async function assertMaintenanceOpen(connection: PoolConnection, clusterId: stri
 }
 
 export class RegisteredOperationLock extends OperationLock {
+  // Observation-only recovery retains resource serialization and cluster binding,
+  // but bypasses admission which only governs NEW mutations. Callers MUST NOT
+  // dispatch Docker mutation from this callback.
+  override async withServiceRecoveryLock<T>(
+    clusterId: string, serviceId: string, fn: (connection: PoolConnection) => Promise<T>,
+  ): Promise<T> {
+    await this.binding.assertRegistered(clusterId);
+    return super.withServiceRecoveryLock(clusterId, serviceId,
+      connection => this.binding.withLockedConnection(connection, () => fn(connection)));
+  }
+
+  override async withNodeRecoveryLocks<T>(
+    clusterId: string, nodeId: string, serviceIds: string[],
+    fn: (connection: PoolConnection) => Promise<T>,
+  ): Promise<T> {
+    await this.binding.assertRegistered(clusterId);
+    return super.withNodeRecoveryLocks(clusterId, nodeId, serviceIds,
+      connection => this.binding.withLockedConnection(connection, () => fn(connection)));
+  }
+
   constructor(db: Database, private readonly binding: ClusterBindingPolicy) {
     super(db);
   }
