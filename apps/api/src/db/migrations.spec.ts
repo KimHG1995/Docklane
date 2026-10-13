@@ -232,7 +232,7 @@ test('maintenance Unicode owner migration does not change immutable v5', async (
   await runDatabaseMigrations(state.connection as never);
   const ddl = state.queries.find(sql => sql.includes('ALTER TABLE cluster_maintenance_states'));
   assert.ok(ddl);
-  assert.match(ddl, /owner_id VARCHAR\\(128\\)/);
+  assert.ok(ddl.includes('owner_id VARCHAR(128)'));
   assert.match(ddl, /CHARACTER SET utf8mb4 COLLATE utf8mb4_bin/);
   assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 1);
 });
