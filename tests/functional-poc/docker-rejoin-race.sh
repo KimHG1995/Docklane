@@ -16,6 +16,7 @@ AGENT_PORT=19446
 PROXY_PORT=12376
 EXPECTED="$DOCKLANE_REJOIN_EXPECTED_CLUSTER_ID"
 SERVICE_ID="$DOCKLANE_REJOIN_SERVICE_ID"
+RACE_MODE="${DOCKLANE_REJOIN_RACE_MODE:-preguard}"
 BASE_URL="http://127.0.0.1:$AGENT_PORT"
 mkdir -p "$LOG_DIR" "$OWNERSHIP_DIR"
 
@@ -23,6 +24,7 @@ die() {
   printf '[swarm-rejoin] ERROR: %s\n' "$*" >&2
   exit 1
 }
+[[ "$RACE_MODE" == "preguard" || "$RACE_MODE" == "postguard" ]] || die "invalid race mode"
 wait_http() {
   local url="$1"
   for _ in {1..80}; do
@@ -40,6 +42,7 @@ wait_http() {
 DOCKLANE_REJOIN_LOG_DIR="$LOG_DIR" \
 DOCKLANE_REJOIN_SERVICE_ID="$SERVICE_ID" \
 DOCKLANE_REJOIN_PROXY_PORT="$PROXY_PORT" \
+DOCKLANE_REJOIN_RACE_MODE="$RACE_MODE" \
 python3 "$ROOT_DIR/tests/functional-poc/docker-rejoin-proxy.py" >"$LOG_DIR/docker-rejoin-proxy.log" 2>&1 &
 echo "$!" >"$OWNERSHIP_DIR/rejoin-docker-proxy.pid"
 wait_http "http://127.0.0.1:$PROXY_PORT/__docklane_rejoin_probe"
@@ -64,8 +67,8 @@ request="$(jq -cn --argjson plan "$plan" '{
   targetSpecHash: $plan.targetSpecHash
 }')"
 
-# The proxy holds a service inspect response already read from Swarm A.
-# The Agent has already performed its HTTP admission identity check.
+# The opt-in barrier holds the old service inspect response (preguard) or
+# the Docker update request after final SwarmInspect (postguard).
 touch "$LOG_DIR/docker-rejoin.arm"
 (
   curl -sS --max-time 60 -o "$LOG_DIR/docker-rejoin-response.json" -w '%{http_code}' \
@@ -81,9 +84,9 @@ for _ in {1..120}; do
   if ! kill -0 "$request_pid" 2>/dev/null; then break; fi
   sleep 0.25
 done
-[[ "$held" == "true" ]] || die "Agent never reached the held Docker inspect response"
+[[ "$held" == "true" ]] || die "Agent never reached selected Docker barrier"
 
-if [[ -f "$LOG_DIR/docker-rejoin-proxy.jsonl" ]]; then
+if [[ "$RACE_MODE" == "preguard" && -f "$LOG_DIR/docker-rejoin-proxy.jsonl" ]]; then
   jq -se 'all(.[]; .event != "docker_service_update_attempt")' \
     "$LOG_DIR/docker-rejoin-proxy.jsonl" >/dev/null ||
     die "unexpected Docker update before controlled rejoin"
@@ -107,7 +110,8 @@ printf '%s\n' "$NEW_NODE_ID" >"$OWNERSHIP_DIR/rejoin-swarm.node-id"
 
 touch "$LOG_DIR/docker-rejoin.release"
 wait "$request_pid" || die "Agent restart transport failed"
-[[ "$(cat "$LOG_DIR/docker-rejoin-status.txt")" == "412" ]] ||
+if [[ "$RACE_MODE" == "preguard" ]]; then
+  [[ "$(cat "$LOG_DIR/docker-rejoin-status.txt")" == "412" ]] ||
   die "expected post-rejoin 412, got $(cat "$LOG_DIR/docker-rejoin-status.txt")"
 jq -e '.code == "CLUSTER_PRECONDITION_FAILED"' "$LOG_DIR/docker-rejoin-response.json" >/dev/null ||
   die "post-rejoin guard response code mismatch"
@@ -116,11 +120,22 @@ jq -se '([.[] | select(.event == "old_service_inspect_held")] | length) == 1 and
          ([.[] | select(.event == "docker_service_update_attempt")] | length) == 0' \
   "$LOG_DIR/docker-rejoin-proxy.jsonl" >/dev/null ||
   die "evidence does not show final guard before Docker update"
+else
+  jq -se '([.[] | select(.event == "postguard_update_held")] | length) == 1 and
+          ([.[] | select(.event == "postguard_update_released")] | length) == 1 and
+          ([.[] | select(.event == "docker_service_update_attempt")] | length) == 1' \
+    "$LOG_DIR/docker-rejoin-proxy.jsonl" >/dev/null || die "postguard evidence mismatch"
+  [[ "$(cat "$LOG_DIR/docker-rejoin-status.txt")" != "200" ]] ||
+    die "unexpected successful mutation after Swarm replacement"
+fi
 [[ -z "$(docker service ls -q)" ]] ||
   die "new Swarm B unexpectedly received a service"
 
-printf '{"beforeClusterId":"%s","afterClusterId":"%s","result":412,"guardCode":"CLUSTER_PRECONDITION_FAILED","dockerUpdateAttempts":0}\n' \
-  "$EXPECTED" "$NEW_CLUSTER_ID" >"$LOG_DIR/docker-rejoin-evidence.json"
+jq -cn --arg before "$EXPECTED" --arg after "$NEW_CLUSTER_ID" --arg mode "$RACE_MODE" \
+  --arg status "$(cat "$LOG_DIR/docker-rejoin-status.txt")" \
+  --argjson attempts "$([[ "$RACE_MODE" == "preguard" ]] && echo 0 || echo 1)" \
+  '{beforeClusterId:$before,afterClusterId:$after,mode:$mode,httpStatus:$status,dockerUpdateAttempts:$attempts}' \
+  >"$LOG_DIR/docker-rejoin-evidence.json"
 
 # Leave only the new Swarm node owned by this acceptance run.
 [[ "$(docker info --format '{{.Swarm.NodeID}}')" == "$NEW_NODE_ID" ]] ||
@@ -129,4 +144,4 @@ docker swarm leave --force >"$LOG_DIR/docker-rejoin-final-leave.log"
 [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" == "inactive" ]] ||
   die "rejoined Swarm did not leave cleanly"
 rm -f "$OWNERSHIP_DIR/rejoin-swarm.node-id"
-printf '[swarm-rejoin] real Docker leave/init between service inspect and final guard: PASS\n'
+printf '[swarm-rejoin] real Docker leave/init at %s barrier: PASS\n' "$RACE_MODE"

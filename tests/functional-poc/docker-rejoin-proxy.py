@@ -17,6 +17,9 @@ HOLD = DIR / "docker-rejoin.held"
 RELEASE = DIR / "docker-rejoin.release"
 LOG = DIR / "docker-rejoin-proxy.jsonl"
 SERVICE = os.environ["DOCKLANE_REJOIN_SERVICE_ID"]
+MODE = os.environ.get("DOCKLANE_REJOIN_RACE_MODE", "preguard")
+if MODE not in ("preguard", "postguard"):
+    raise ValueError("unsupported rejoin race mode")
 SERVICE_INSPECT = re.compile(r"^/v[0-9.]+/services/" + re.escape(SERVICE) + r"(?:\?.*)?$")
 SERVICE_UPDATE = re.compile(r"^/v[0-9.]+/services/[^/]+/update(?:\?.*)?$")
 HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
@@ -54,6 +57,22 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(size) if size else None
         headers = {k: v for k, v in self.headers.items()
                    if k.lower() not in HOP and k.lower() != "host"}
+        # Docker Update arrives only after the Agent's final SwarmInspect.
+        update_request = self.command == "POST" and SERVICE_UPDATE.match(self.path)
+        if update_request and MODE == "postguard":
+            record("docker_service_update_attempt", self.path)
+            try:
+                ARM.rename(DIR / "docker-rejoin.claimed")
+            except FileNotFoundError:
+                raise RuntimeError("unexpected extra Docker update")
+            record("postguard_update_held", self.path)
+            HOLD.write_text(self.path + "\n", encoding="utf-8")
+            deadline = time.monotonic() + 45
+            while not RELEASE.exists():
+                if time.monotonic() > deadline:
+                    raise TimeoutError("postguard release marker not received")
+                time.sleep(0.05)
+            record("postguard_update_released", self.path)
         conn = DockerUnixConnection("localhost", timeout=12)
         try:
             conn.request(self.command, self.path, body=body, headers=headers)
@@ -64,10 +83,10 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-        if self.command == "POST" and SERVICE_UPDATE.match(self.path):
+        if update_request and MODE == "preguard":
             record("docker_service_update_attempt", self.path)
 
-        if self.command == "GET" and status == 200 and SERVICE_INSPECT.match(self.path):
+        if MODE == "preguard" and self.command == "GET" and status == 200 and SERVICE_INSPECT.match(self.path):
             try:
                 ARM.rename(DIR / "docker-rejoin.claimed")
             except FileNotFoundError:
