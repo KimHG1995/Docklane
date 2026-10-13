@@ -66,20 +66,20 @@ test('database migrations apply all known migrations once and skip them on repla
   await runDatabaseMigrations(state.connection as never);
   assert.deepEqual(
     state.applied.map((row) => row.version),
-    [1, 2, 3, 4, 5],
+    [1, 2, 3, 4, 5, 6],
   );
 
   const insertsAfterFirst = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterFirst, 5);
+  assert.equal(insertsAfterFirst, 6);
 
   await runDatabaseMigrations(state.connection as never);
 
   const insertsAfterReplay = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterReplay, 5);
+  assert.equal(insertsAfterReplay, 6);
 });
 
 test('database migrations reject metadata drift for an applied migration', async () => {
@@ -142,6 +142,7 @@ test('migration checksums are deterministic and catalog metadata is stable', () 
       [3, 'cluster-registration'],
       [4, 'rollback-attempt-history'],
       [5, 'cluster-maintenance-state'],
+      [6, 'maintenance-owner-unicode'],
     ],
   );
 });
@@ -195,7 +196,7 @@ test('cluster registration migration is additive, unique and case-sensitive', as
   assert.match(query, /COLLATE ascii_bin/);
   assert.match(query, /UNIQUE KEY uq_cluster_registration_swarm \(swarm_cluster_id\)/);
   assert.equal(state.queries.some((sql) => sql.includes('UPDATE bootstrap_tokens')), false);
-  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 3);
+  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 4);
 });
 
 test('rollback history migration persists each attempt mapping and backfills only matching operations', async () => {
@@ -223,4 +224,15 @@ test('maintenance migration adds persistent fail-closed state without auto-openi
   assert.match(query, /ENUM\('OPEN', 'CLOSING', 'CLOSED', 'RECONCILING'\)/);
   assert.match(query, /generation BIGINT UNSIGNED NOT NULL/);
   assert.equal(state.queries.some(sql => sql.includes('INSERT INTO cluster_maintenance_states')), false);
+});
+
+
+test('maintenance Unicode owner migration does not change immutable v5', async () => {
+  const state = fakeConnection({ applied: DATABASE_MIGRATIONS.slice(0, 5).map(m => ({ version:m.version, name:m.name, checksum:migrationChecksum(m) })) });
+  await runDatabaseMigrations(state.connection as never);
+  const ddl = state.queries.find(sql => sql.includes('ALTER TABLE cluster_maintenance_states'));
+  assert.ok(ddl);
+  assert.match(ddl, /owner_id VARCHAR\\(128\\)/);
+  assert.match(ddl, /CHARACTER SET utf8mb4 COLLATE utf8mb4_bin/);
+  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 1);
 });
