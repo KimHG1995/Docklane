@@ -50,6 +50,13 @@ export class ClusterBindingPolicy {
     });
   }
 
+  // Reuse the active resource-lock session for admission reads. This prevents
+  // pool exhaustion when every concurrent operation already owns a connection.
+  activeLockConnection(): PoolConnection | null {
+    const scope = this.lockedScope.getStore();
+    return scope?.active ? scope.connection : null;
+  }
+
   async assertRegistered(clusterId: string = this.clusterId): Promise<void> {
     if (clusterId !== this.clusterId) throw new NotFoundException('Cluster not found');
     if (this.settings.mode !== 'enforce') return;
