@@ -11,6 +11,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import {
   AGENT_CLIENT,
   AgentRequestError,
+  MaintenancePreDispatchRejection,
   isDeterministicAgentRejection,
   type AgentClient,
 } from '../agent/agent-client.js';
@@ -637,7 +638,9 @@ export class MutationService implements OnApplicationBootstrap {
     error: AgentRequestError,
   ): Promise<void> {
     const code =
-      error.statusCode === 409
+      error instanceof MaintenancePreDispatchRejection
+        ? 'MAINTENANCE_DISPATCH_REJECTED'
+        : error.statusCode === 409
         ? 'AGENT_VERSION_CONFLICT'
         : 'AGENT_MUTATION_REJECTED';
 
