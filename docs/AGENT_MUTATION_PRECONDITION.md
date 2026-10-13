@@ -79,3 +79,9 @@ API와 Agent를 함께 바꾸는 하나의 작업이며, 별도의 heavy workflo
 - [HTTP header values](https://pkg.go.dev/net/http#Header.Values)
 - [요청 context](https://pkg.go.dev/net/http#Request.Context)
 - [Docker system info와 출력 형식](https://docs.docker.com/reference/cli/docker/system/info/)
+
+## 최종 Docker update 직전 동일-cluster 재확인 (단계별 개선)
+
+기존 Agent HTTP guard는 수락 직전에 한 번 현재 manager identity를 확인했다. 그 후 ServiceInspect/NodeInspect, spec 및 affected-resource 검증 사이에 실제 Swarm이 바뀌면 다른 cluster의 Docker update를 실행할 가능성이 있었다. 현재는 검증된 헤더의 실제 ID를 요청 context에 전달하고 모든 **7종 서비스/노드 mutation**에서 실제 `ServiceUpdate`/`NodeUpdate` 호출 **바로 전** 동일 Docker client의 `SwarmInspect` 결과를 다시 대조한다. 실패나 취소는 `503/CLUSTER_IDENTITY_UNAVAILABLE`, ID 불일치는 `412/CLUSTER_PRECONDITION_FAILED`를 고정 오류로 반환하고 변경을 호출하지 않는다. 조회, health, 계획 API와 기존 optimistic version/spec 조건은 바꾸지 않는다. 해당 거절은 전송 전이므로 기존 확정 거절 처리 계약을 따른다.
+
+**한계:** SwarmInspect와 그 다음 Docker update는 서로 다른 Docker API 요청이다. 외부 `docker swarm leave/join`이 두 요청 사이에 끼어들 수 있으며, Agent 내부 mutex는 외부 Docker CLI를 직렬화하지 못한다. 따라서 이 변경은 경쟁 구간을 줄이고 사전조건 변화를 마지막 경계에서 포착하는 완화책이지, 외부 재가입과 Docker 갱신의 원자적 격리를 보장하는 해결책이 아니다. 실제 동시 재가입 주입 acceptance와 Docker API 또는 운영 수준의 mutation/rejoin 상호배제 정책은 별도 검증 및 설계 대상이다. 후속 확인에서 전체 경쟁 조건을 해결한 것으로 ROADMAP을 완료 처리하지 않는다.

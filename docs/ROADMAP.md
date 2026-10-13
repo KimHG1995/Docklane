@@ -348,3 +348,7 @@ Docklane token과 native Swarm join token의 lifetime을 구분한다.
 2026-10-13 PR #124 병합 후 결과 동기화: main validate #37746669590 성공, 실제 3-manager mTLS Agent 등록 강제 failover #37746669667도 SUCCESS. primary Agent 프로세스 중단 후 다른 manager에서 immutable 등록과 audit 1건 유지, 새 Control Plane client 보호 조회, 증거 업로드 및 cleanup 성공. [PR #124 체크포인트](https://github.com/KimHG1995/Docklane/pull/124#issuecomment-6055461948). 이 결과는 Docker manager **노드** 손실 시 leader election을 입증하지 않는다.
 
 2026-10-13 manager node leader loss enforce acceptance 준비: 기존 disposable 3-manager/실제 mTLS/등록 MySQL 테스트에서 보호된 cluster snapshot으로 현재 실제 Leader의 소유 컨테이너를 확인 후 중단한다. 기존 등록으로 보호되는 새 Control Plane client가 동일 cluster ID, 새 리더, 2/3 quorum을 관찰하고, 동일 컨테이너 복원 후 3/3 quorum과 감사 불변을 재검증한다. 기존 topology와 workflow·DB schema를 유지한다. main에서 실제 성공하기 전 신규 acceptance는 미완료이며 외부 rejoin 도중의 Docker mutation race까지 해결했다는 뜻이 아니다.
+
+2026-10-13 PR #125 병합 후 acceptance 동기화: 3-manager mTLS 및 등록 강제 Leader 노드 중단/재선출 검증 #38337434562가 SUCCESS, 2/3→3/3 quorum 복원과 immutable 등록/감사 및 cleanup을 확인했다. main validation #38337434541도 SUCCESS. [PR #125 체크포인트](https://github.com/KimHG1995/Docklane/pull/125#issuecomment-6136961491). 외부 재가입과 실제 Docker update 경쟁은 별도 미완료다.
+
+2026-10-13 mutation 시점 Swarm ID 경계 완화: HTTP 수락 시 확인된 실제 Swarm ID를 request context에 전달해 모든 7종 NodeUpdate/ServiceUpdate 직전 SwarmInspect로 재검증한다. 실제 ID 불일치나 확인 실패이면 Docker update 미호출로 거절하며 성공 캐시나 Agent 재전송은 추가하지 않는다. SwarmInspect와 update는 원자적이지 않으므로 외부 CLI leave/join이 마지막 검사 뒤에 일어나는 잔여 경쟁은 미완료로 유지한다. 제품 Go 회귀와 CI 통과 근거는 해당 PR에 기록한다.

@@ -241,11 +241,12 @@ func (s *Server) drainNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireMutationCluster(w, r) {
+	guardedCtx, ok := s.requireMutationCluster(w, r)
+	if !ok {
 		return
 	}
 
-	result, err := s.reader.DrainNode(r.Context(), id, input)
+	result, err := s.reader.DrainNode(guardedCtx, id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -287,11 +288,12 @@ func (s *Server) activateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireMutationCluster(w, r) {
+	guardedCtx, ok := s.requireMutationCluster(w, r)
+	if !ok {
 		return
 	}
 
-	result, err := s.reader.ActivateNode(r.Context(), id, input)
+	result, err := s.reader.ActivateNode(guardedCtx, id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -337,11 +339,12 @@ func (s *Server) updateNodeLabels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireMutationCluster(w, r) {
+	guardedCtx, ok := s.requireMutationCluster(w, r)
+	if !ok {
 		return
 	}
 
-	result, err := s.reader.UpdateNodeLabels(r.Context(), id, input)
+	result, err := s.reader.UpdateNodeLabels(guardedCtx, id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -476,11 +479,12 @@ func (s *Server) scaleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireMutationCluster(w, r) {
+	guardedCtx, ok := s.requireMutationCluster(w, r)
+	if !ok {
 		return
 	}
 
-	result, err := s.reader.ScaleService(r.Context(), id, input)
+	result, err := s.reader.ScaleService(guardedCtx, id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -501,11 +505,12 @@ func (s *Server) restartService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireMutationCluster(w, r) {
+	guardedCtx, ok := s.requireMutationCluster(w, r)
+	if !ok {
 		return
 	}
 
-	result, err := s.reader.RestartService(r.Context(), id, input)
+	result, err := s.reader.RestartService(guardedCtx, id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -530,11 +535,12 @@ func (s *Server) updateServiceImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireMutationCluster(w, r) {
+	guardedCtx, ok := s.requireMutationCluster(w, r)
+	if !ok {
 		return
 	}
 
-	result, err := s.reader.UpdateServiceImage(r.Context(), id, input)
+	result, err := s.reader.UpdateServiceImage(guardedCtx, id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -555,11 +561,12 @@ func (s *Server) rollbackService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireMutationCluster(w, r) {
+	guardedCtx, ok := s.requireMutationCluster(w, r)
+	if !ok {
 		return
 	}
 
-	result, err := s.reader.RollbackService(r.Context(), id, input)
+	result, err := s.reader.RollbackService(guardedCtx, id, input)
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -591,6 +598,19 @@ func writeReadError(w http.ResponseWriter, err error) {
 }
 
 func writeMutationError(w http.ResponseWriter, err error) {
+	var guard *dockerengine.MutationClusterGuardError
+	if errors.As(err, &guard) {
+		if guard.Code == dockerengine.MutationClusterMismatch {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]string{
+				"code": guard.Code, "error": guard.Error(),
+			})
+		} else {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"code": guard.Code, "error": guard.Error(),
+			})
+		}
+		return
+	}
 	var notFound *dockerengine.NotFoundError
 	if errors.As(err, &notFound) {
 		writeError(w, http.StatusNotFound, err)

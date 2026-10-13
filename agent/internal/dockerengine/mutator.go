@@ -41,6 +41,10 @@ func (r *Reader) ScaleService(
 		}
 	}
 
+	if err := r.requireFinalMutationCluster(ctx); err != nil {
+		return model.ServiceMutationResponse{}, err
+	}
+
 	update, err := r.client.ServiceUpdate(ctx, service.ID, client.ServiceUpdateOptions{
 		Version: swarm.Version{Index: input.ExpectedVersion},
 		Spec:    service.Spec,
@@ -86,6 +90,10 @@ func (r *Reader) RestartService(
 		return model.ServiceMutationResponse{}, &ConflictError{
 			Message: "target service spec changed after mutation planning",
 		}
+	}
+
+	if err := r.requireFinalMutationCluster(ctx); err != nil {
+		return model.ServiceMutationResponse{}, err
 	}
 
 	update, err := r.client.ServiceUpdate(ctx, service.ID, client.ServiceUpdateOptions{
@@ -180,6 +188,10 @@ func (r *Reader) UpdateServiceImage(
 		}
 	}
 
+	if err := r.requireFinalMutationCluster(ctx); err != nil {
+		return model.ServiceMutationResponse{}, err
+	}
+
 	update, err := r.client.ServiceUpdate(ctx, service.ID, client.ServiceUpdateOptions{
 		Version: swarm.Version{Index: input.ExpectedVersion},
 		Spec:    service.Spec,
@@ -238,6 +250,10 @@ func (r *Reader) RollbackService(
 		return model.ServiceMutationResponse{}, &ConflictError{
 			Message: "previous service spec changed after rollback planning",
 		}
+	}
+
+	if err := r.requireFinalMutationCluster(ctx); err != nil {
+		return model.ServiceMutationResponse{}, err
 	}
 
 	update, err := r.client.ServiceUpdate(ctx, service.ID, client.ServiceUpdateOptions{
