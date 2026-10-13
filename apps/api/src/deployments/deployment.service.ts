@@ -96,7 +96,7 @@ export class DeploymentService
 
       for (const operation of pending) {
         try {
-          await this.lock.withServiceLock(
+          await this.lock.withServiceRecoveryLock(
             operation.clusterId,
             operation.serviceId,
             async (connection) => {
