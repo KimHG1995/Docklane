@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Run only AFTER existing disposable single-node Functional PoC scenarios.
+# preguard proves rejection before the final identity check.
+# postguard proves an UPDATE REQUEST reaches the daemon after the check;
+# it does not prove cross-cluster mutation or provide atomic fencing.
 set -Eeuo pipefail
 
 : "${DOCKLANE_REJOIN_LOG_DIR:?required}"
@@ -121,6 +124,8 @@ jq -se '([.[] | select(.event == "old_service_inspect_held")] | length) == 1 and
   "$LOG_DIR/docker-rejoin-proxy.jsonl" >/dev/null ||
   die "evidence does not show final guard before Docker update"
 else
+  # Require the observed daemon error, not merely a non-200 Agent result.
+  # A transport failure is NOT a valid reproduction of the postguard race.
   jq -se '([.[] | select(.event == "postguard_update_held")] | length) == 1 and
           ([.[] | select(.event == "postguard_update_released")] | length) == 1 and
           ([.[] | select(.event == "docker_service_update_attempt")] | length) == 1 and
