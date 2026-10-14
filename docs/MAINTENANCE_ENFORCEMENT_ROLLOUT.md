@@ -58,3 +58,6 @@ The disposable MySQL 8.4 migration PoC now holds 10 independent resource lock co
 
 ## Begin-send generation CAS (unwired)
 A PREPARED journal entry can advance to SENDING only when the same cluster, operation ID, target manager ID and generation match an OPEN maintenance state in one SQL update. This is a prerequisite for dispatch ownership, not a finished runtime implementation. The statement must commit before HTTP transport. Currently AgentClient mutation signatures do not carry durable operation identity, and manager ACK generation is not enforced. Accordingly beginSend is not yet invoked by the transport, and a race can still occur after the DB check. Keeping the PR Draft avoids mistakenly claiming atomic fencing.
+
+## MySQL beginSend acceptance
+The disposable MySQL PoC additionally verifies that a PREPARED record at the active OPEN generation becomes SENDING, while the same old generation is refused after the operator transitions to CLOSING. The rejected row stays PREPARED for conservative reconciliation. The actual Agent HTTP client remains unwired until stable operation identity, manager identity, committed send journal and failover ownership are defined. This test does not demonstrate Docker mutation fencing.
