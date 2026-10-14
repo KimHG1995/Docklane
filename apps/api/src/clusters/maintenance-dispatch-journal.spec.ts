@@ -70,14 +70,14 @@ test('journaled transport preserves uncertain response and does not resend', asy
   let sends = 0;
   const journal = new MaintenanceDispatchJournal({
     query: async (sql: string, params: unknown[] = []) => {
-      if (sql.startsWith('UPDATE maintenance_dispatches')) phases.push(String(params[0]));
+      if (sql.startsWith('UPDATE maintenance_dispatches SET phase')) phases.push(String(params[0]));
       return [{ affectedRows: 1 }];
     },
   } as never);
   await assert.rejects(() => journal.execute('default', 4n, 'manager-a', 'operation-1',
     async () => { sends++; throw new Error('response lost'); }, () => false), /response lost/);
   assert.equal(sends, 1);
-  assert.deepEqual(phases, ['UNCERTAIN'].length === 1 ? ['UNCERTAIN'] : []);
+  assert.deepEqual(phases, ['UNCERTAIN']);
 });
 
 test('journaled transport does not send if beginSend fails', async () => {
