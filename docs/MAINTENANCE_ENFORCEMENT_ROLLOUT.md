@@ -46,3 +46,6 @@ Two additive tables, `maintenance_dispatches` and `maintenance_agent_barriers`, 
 
 ## Dispatch readiness diagnostic
 The readiness API now reports `unresolvedDispatches` as a decimal string from persisted PREPARED/SENDING/UNCERTAIN rows. Query failures deny readiness instead of treating absence of evidence as safe. No runtime writer currently journals these rows and no manager barrier acknowledgements are verified, therefore `safeToClose` remains false even when both counts are zero. Do not enable CLOSED or perform Swarm rejoin based on these diagnostic counts.
+
+## Dispatch journal primitive (not yet wired)
+The repository now includes a dispatch journal writer with PREPARED → SENDING → ACKNOWLEDGED/REJECTED/UNCERTAIN transition validation. Database failure when preparing prevents send; SENDING left by a crashed process and UNCERTAIN are never converted into success without independent evidence. This is **only a persistence primitive**: the Agent transport is not yet invoking it, and a second DB checkout while ten resource lock connections are occupied could deadlock the pool. Do not wire it directly or enable enforcement until a scoped connection/dispatch ownership strategy and actual MySQL concurrency acceptance are implemented. A missing journal row is not proof of no in-flight request.
