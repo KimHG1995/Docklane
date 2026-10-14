@@ -64,3 +64,28 @@ test('beginSend binds prepared dispatch to OPEN maintenance generation and opera
     /generation or maintenance state changed/,
   );
 });
+
+test('journaled transport preserves uncertain response and does not resend', async () => {
+  const phases: string[] = [];
+  let sends = 0;
+  const journal = new MaintenanceDispatchJournal({
+    query: async (sql: string, params: unknown[] = []) => {
+      if (sql.startsWith('UPDATE maintenance_dispatches')) phases.push(String(params[0]));
+      return [{ affectedRows: 1 }];
+    },
+  } as never);
+  await assert.rejects(() => journal.execute('default', 4n, 'manager-a', 'operation-1',
+    async () => { sends++; throw new Error('response lost'); }, () => false), /response lost/);
+  assert.equal(sends, 1);
+  assert.deepEqual(phases, ['UNCERTAIN'].length === 1 ? ['UNCERTAIN'] : []);
+});
+
+test('journaled transport does not send if beginSend fails', async () => {
+  let sends = 0;
+  const journal = new MaintenanceDispatchJournal({
+    query: async (sql: string) => [{ affectedRows: sql.startsWith('UPDATE') ? 0 : 1 }],
+  } as never);
+  await assert.rejects(() => journal.execute('default', 4n, 'manager-a', 'operation-2',
+    async () => { sends++; }, () => false), /generation or maintenance state changed/);
+  assert.equal(sends, 0);
+});
