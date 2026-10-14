@@ -78,6 +78,44 @@ export class MaintenanceDispatchJournal {
     }
   }
 
+  /**
+   * Execute a mutation with durable state recorded before transport.
+   * The caller must supply the actual selected manager ID and durable operation
+   * ID, and guarantee that the supplied connection has no open transaction.
+   *
+   * ACKNOWLEDGED means the Agent returned a successful response; it does not
+   * mean Docker tasks converged. Unknown errors remain UNCERTAIN. If writing
+   * the final phase fails, the durable SENDING record remains unresolved.
+   */
+  async execute<T>(
+    clusterId: string,
+    generation: bigint,
+    agentId: string,
+    operationId: string,
+    send: () => Promise<T>,
+    isDefinitePreUpdateRejection: (error: unknown) => boolean,
+    connection?: PoolConnection,
+  ): Promise<T> {
+    const id = await this.prepare(clusterId, generation, agentId, operationId, connection);
+    await this.beginSend(id, clusterId, generation, agentId, operationId, connection);
+    try {
+      const response = await send();
+      await this.transition(id, 'SENDING', 'ACKNOWLEDGED', connection);
+      return response;
+    } catch (error) {
+      // Classification is limited to exact Agent pre-update rejection contracts.
+      // Generic HTTP 409/503 and transport failures MUST NOT be treated as
+      // definitive without a validated response envelope.
+      const next = isDefinitePreUpdateRejection(error) ? 'REJECTED' : 'UNCERTAIN';
+      try {
+        await this.transition(id, 'SENDING', next, connection);
+      } catch {
+        // Keep SENDING as unresolved; never retry mutation to repair a journal.
+      }
+      throw error;
+    }
+  }
+
   async transition(id: string, from: DispatchPhase, to: DispatchPhase, connection?: PoolConnection): Promise<void> {
     const allowed: Record<DispatchPhase, DispatchPhase[]> = {
       PREPARED: ['SENDING', 'REJECTED'],
