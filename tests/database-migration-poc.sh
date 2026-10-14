@@ -477,6 +477,28 @@ try {
     /Invalid dispatch evidence transition/);
   console.log('maintenance journal durable SENDING + 10/10 locked MySQL session reuse: PASS');
 
+  // Real InnoDB generation CAS at the final send boundary. This is separate
+  // from the actual Agent HTTP transport, which is not yet journal-wired.
+  await db.query("UPDATE cluster_maintenance_states SET state='OPEN', generation=5 WHERE cluster_id='default'");
+  const allowedId = await journal.prepare('default', 5n, 'agent-disposable', 'accepted-op');
+  await journal.beginSend(allowedId, 'default', 5n, 'agent-disposable', 'accepted-op');
+  assert.equal(await maintenance.requestClosing('default', 5n, '관리자', 'block stale sends'), true);
+  const deniedId = await journal.prepare('default', 5n, 'agent-disposable', 'denied-op');
+  await assert.rejects(
+    () => journal.beginSend(deniedId, 'default', 5n, 'agent-disposable', 'denied-op'),
+    /generation or maintenance state changed/,
+  );
+  const [phaseRows] = await db.query(
+    "SELECT operation_id, phase FROM maintenance_dispatches WHERE id IN (?, ?) ORDER BY operation_id",
+    [allowedId, deniedId],
+  );
+  assert.deepEqual(phaseRows.map(row => [row.operation_id, row.phase]), [
+    ['accepted-op', 'SENDING'],
+    ['denied-op', 'PREPARED'],
+  ]);
+  console.log('maintenance real MySQL beginSend generation race rejection: PASS');
+
+
   console.log('database migration PoC: PASS');
 } finally {
   await db.onModuleDestroy();
