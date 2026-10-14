@@ -52,3 +52,6 @@ The repository now includes a dispatch journal writer with PREPARED → SENDING 
 
 ## Journal session reuse
 Dispatch journal primitives now optionally accept the active resource-lock MySQL connection, avoiding a second pool checkout under 10/10 lock saturation. This only guarantees session reuse, **not** durable send-fencing when the caller has an uncommitted transaction. Runtime dispatch must still persist PREPARED and SENDING before transport, preserve UNCERTAIN after response loss, retain generation/owner association, and be tested with real concurrent MySQL sessions and Agent failover. Until those invariants are implemented and verified, no CLOSED transition may be exposed.
+
+## MySQL session saturation acceptance
+The disposable MySQL 8.4 migration PoC now holds 10 independent resource lock connections and writes PREPARED→SENDING dispatch records through those same sessions. It verifies that all 10 rows remain stored after session release, and forbids UNCERTAIN→ACKNOWLEDGED. This proves only the journal primitive's session reuse and persistence; no actual HTTP request is sent, so transport failure classification, cross-CP fencing and multi-manager acknowledgements are not yet proven.
