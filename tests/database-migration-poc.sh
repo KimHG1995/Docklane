@@ -499,6 +499,18 @@ try {
   ]);
   console.log('maintenance real MySQL beginSend generation race rejection: PASS');
 
+  // A second Control Plane must not create a fresh dispatch lineage for
+  // an operation whose earlier HTTP transmission may be uncertain.
+  const duplicateResults = await Promise.allSettled(Array.from({ length: 8 }, () =>
+    journal.prepare('default', 5n, 'agent-disposable', 'duplicate-op')));
+  assert.equal(duplicateResults.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal(duplicateResults.filter(r => r.status === 'rejected').length, 7);
+  const [duplicateRows] = await db.query(
+    "SELECT COUNT(*) AS count FROM maintenance_dispatches WHERE cluster_id = 'default' AND operation_id = 'duplicate-op'");
+  assert.equal(Number(duplicateRows[0].count), 1);
+  console.log('maintenance real MySQL duplicate operation lineage 1/8 accepted: PASS');
+
+
 
   console.log('database migration PoC: PASS');
 } finally {
