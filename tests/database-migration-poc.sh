@@ -56,6 +56,7 @@ import { ClusterBindingPolicy } from './apps/api/dist/clusters/cluster-binding.p
 import { registeredAgentClient } from './apps/api/dist/clusters/registered-agent-client.js';
 import { RegisteredOperationLock } from './apps/api/dist/clusters/registered-operation-lock.js';
 import { ClusterMaintenanceRepository } from './apps/api/dist/clusters/cluster-maintenance.repository.js';
+import { MaintenanceDispatchJournal } from './apps/api/dist/clusters/maintenance-dispatch-journal.js';
 
 const db = new Database();
 
@@ -437,6 +438,44 @@ try {
     if (savedEnforce === undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
     else process.env.DOCKLANE_MAINTENANCE_ENFORCE = savedEnforce;
   }
+
+  // Real pool 10/10: journal must use the existing resource-lock session.
+  // A SENDING row survives connection release and remains unresolved after
+  // a simulated CP crash; never infer an ACK from missing HTTP response.
+  const journal = new MaintenanceDispatchJournal(db);
+  const heldSessions = new Set();
+  const evidenceIds = [];
+  let ready = 0;
+  let release;
+  const readyBarrier = new Promise(resolve => { release = resolve; });
+  const journalWatchdog = setTimeout(() => {
+    console.error('maintenance journal session reuse deadlocked under 10/10 lock occupancy');
+    process.exit(1);
+  }, 12000);
+  try {
+    await Promise.all(Array.from({ length: 10 }, (_, index) =>
+      mutex.withServiceRecoveryLock('default', 'journal-session-' + index, async connection => {
+        const [sessionRows] = await connection.query('SELECT CONNECTION_ID() AS id');
+        heldSessions.add(Number(sessionRows[0].id));
+        ready += 1;
+        if (ready === 10) release();
+        await readyBarrier;
+        const id = await journal.prepare('default', 4n, 'agent-disposable', 'operation-' + index, connection);
+        await journal.transition(id, 'PREPARED', 'SENDING', connection);
+        evidenceIds.push(id);
+      }),
+    ));
+  } finally {
+    clearTimeout(journalWatchdog);
+  }
+  assert.equal(heldSessions.size, 10);
+  assert.equal(evidenceIds.length, 10);
+  const [persistedDispatch] = await db.query(
+    "SELECT COUNT(*) AS count FROM maintenance_dispatches WHERE cluster_id = 'default' AND phase = 'SENDING'");
+  assert.equal(Number(persistedDispatch[0].count), 10);
+  await assert.rejects(() => journal.transition(evidenceIds[0], 'UNCERTAIN', 'ACKNOWLEDGED'),
+    /Invalid dispatch evidence transition/);
+  console.log('maintenance journal durable SENDING + 10/10 locked MySQL session reuse: PASS');
 
   console.log('database migration PoC: PASS');
 } finally {
