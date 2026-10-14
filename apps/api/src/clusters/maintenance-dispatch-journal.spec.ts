@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MaintenanceDispatchJournal } from './maintenance-dispatch-journal.js';
+import { DuplicateDispatchEvidence, MaintenanceDispatchJournal } from './maintenance-dispatch-journal.js';
 import { isDeterministicAgentRejection, MaintenancePreDispatchRejection } from '../agent/agent-client.js';
 
 test('dispatch must durably prepare before any send', async () => {
@@ -117,5 +117,19 @@ test('journal prepare failure is definite pre-dispatch denial and HTTP is never 
     async () => { sends++; }, () => false),
     (error: unknown) => error instanceof MaintenancePreDispatchRejection &&
       isDeterministicAgentRejection(error));
+  assert.equal(sends, 0);
+});
+
+test('duplicate durable operation never invokes HTTP or claims definitive no-send', async () => {
+  let sends = 0;
+  const journal = new MaintenanceDispatchJournal({
+    query: async () => { throw { code: 'ER_DUP_ENTRY', errno: 1062 }; },
+  } as never);
+  await assert.rejects(
+    () => journal.execute('default', 1n, 'manager-a', 'operation-replayed',
+      async () => { sends += 1; }, () => false),
+    (error: unknown) => error instanceof DuplicateDispatchEvidence &&
+      !isDeterministicAgentRejection(error),
+  );
   assert.equal(sends, 0);
 });
