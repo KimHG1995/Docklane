@@ -36,6 +36,48 @@ export class MaintenanceDispatchJournal {
     return id;
   }
 
+  /**
+   * Atomically checks the current maintenance generation while promoting one
+   * PREPARED record to SENDING. A stale owner or CLOSING cluster cannot pass.
+   *
+   * The caller must commit this statement before invoking HTTP transport.
+   * This is a DB admission barrier, NOT an atomic Docker mutation barrier.
+   */
+  async beginSend(
+    id: string,
+    clusterId: string,
+    expectedGeneration: bigint,
+    agentId: string,
+    operationId: string,
+    connection?: PoolConnection,
+  ): Promise<void> {
+    const executor = connection ?? this.db;
+    let result: ResultSetHeader;
+    try {
+      [result] = await executor.query<ResultSetHeader>(
+        `UPDATE maintenance_dispatches AS dispatch
+         INNER JOIN cluster_maintenance_states AS maintenance
+           ON maintenance.cluster_id = dispatch.cluster_id
+         SET dispatch.phase = 'SENDING'
+         WHERE dispatch.id = ?
+           AND dispatch.cluster_id = ?
+           AND dispatch.agent_id = ?
+           AND dispatch.operation_id = ?
+           AND dispatch.phase = 'PREPARED'
+           AND dispatch.generation = ?
+           AND maintenance.generation = ?
+           AND maintenance.state = 'OPEN'`,
+        [id, clusterId, agentId, operationId,
+         expectedGeneration.toString(), expectedGeneration.toString()],
+      );
+    } catch {
+      throw new ServiceUnavailableException('Mutation dispatch evidence unavailable before send');
+    }
+    if (result.affectedRows !== 1) {
+      throw new ServiceUnavailableException('Mutation dispatch generation or maintenance state changed');
+    }
+  }
+
   async transition(id: string, from: DispatchPhase, to: DispatchPhase, connection?: PoolConnection): Promise<void> {
     const allowed: Record<DispatchPhase, DispatchPhase[]> = {
       PREPARED: ['SENDING', 'REJECTED'],
