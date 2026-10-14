@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MaintenanceDispatchJournal } from './maintenance-dispatch-journal.js';
+import { isDeterministicAgentRejection, MaintenancePreDispatchRejection } from '../agent/agent-client.js';
 
 test('dispatch must durably prepare before any send', async () => {
   const calls: string[] = [];
@@ -87,5 +88,32 @@ test('journaled transport does not send if beginSend fails', async () => {
   } as never);
   await assert.rejects(() => journal.execute('default', 4n, 'manager-a', 'operation-2',
     async () => { sends++; }, () => false), /generation or maintenance state changed/);
+  assert.equal(sends, 0);
+});
+
+test('failed journal acknowledgement after successful transport never replays HTTP', async () => {
+  let sends = 0;
+  const journal = new MaintenanceDispatchJournal({
+    query: async (sql: string, args: unknown[] = []) => {
+      if (sql.startsWith('UPDATE maintenance_dispatches SET phase') && args[0] === 'ACKNOWLEDGED') {
+        throw new Error('commit response lost');
+      }
+      return [{ affectedRows: 1 }];
+    },
+  } as never);
+  await assert.rejects(() => journal.execute('default', 1n, 'manager-a', 'op',
+    async () => { sends++; return { accepted: true }; }, () => false),
+    /commit response lost/);
+  assert.equal(sends, 1);
+});
+test('journal prepare failure is definite pre-dispatch denial and HTTP is never called', async () => {
+  let sends = 0;
+  const journal = new MaintenanceDispatchJournal({
+    query: async () => { throw new Error('db unavailable'); },
+  } as never);
+  await assert.rejects(() => journal.execute('default', 1n, 'manager-a', 'op',
+    async () => { sends++; }, () => false),
+    (error: unknown) => error instanceof MaintenancePreDispatchRejection &&
+      isDeterministicAgentRejection(error));
   assert.equal(sends, 0);
 });
