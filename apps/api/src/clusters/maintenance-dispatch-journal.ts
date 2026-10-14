@@ -4,6 +4,13 @@ import type { PoolConnection, ResultSetHeader } from 'mysql2/promise';
 import { Database } from '../db/database.js';
 import { MaintenancePreDispatchRejection } from '../agent/agent-client.js';
 
+/**
+ * Another CP already persisted this operation lineage. The previous request
+ * might have reached Docker; never classify a duplicate as unsent.
+ */
+export class DuplicateDispatchEvidence extends Error {
+  constructor() { super('Existing mutation dispatch evidence requires reconciliation'); }
+}
 export type DispatchPhase = 'PREPARED' | 'SENDING' | 'ACKNOWLEDGED' | 'REJECTED' | 'UNCERTAIN';
 
 /**
@@ -31,7 +38,10 @@ export class MaintenanceDispatchJournal {
          VALUES (?, ?, ?, ?, ?, 'PREPARED')`,
         [id, clusterId, generation.toString(), agentId, operationId],
       );
-    } catch {
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'ER_DUP_ENTRY') {
+        throw new DuplicateDispatchEvidence();
+      }
       throw new ServiceUnavailableException('Mutation dispatch journal unavailable before send');
     }
     return id;
@@ -105,7 +115,8 @@ export class MaintenanceDispatchJournal {
     try {
       id = await this.prepare(clusterId, generation, agentId, operationId, connection);
       await this.beginSend(id, clusterId, generation, agentId, operationId, connection);
-    } catch {
+    } catch (error) {
+      if (error instanceof DuplicateDispatchEvidence) throw error;
       if (id !== null) {
         try {
           await this.transition(id, 'PREPARED', 'REJECTED', connection);
