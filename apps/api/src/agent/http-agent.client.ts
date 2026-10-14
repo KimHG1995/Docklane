@@ -1,7 +1,7 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { currentMutationAdmission, currentMutationOperation } from './mutation-dispatch-context.js';
 import { MaintenanceDispatchJournal } from '../clusters/maintenance-dispatch-journal.js';
-import { isDeterministicAgentRejection } from './agent-client.js';
+import { isDeterministicAgentRejection, MaintenancePreDispatchRejection } from './agent-client.js';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import { z } from 'zod';
@@ -462,7 +462,12 @@ export class HttpAgentClient implements AgentClient {
         this.markActive(config);
         return value;
       }
-      if (admission) throw new Error('Mutation dispatch journal unavailable');
+      if (admission) throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+      // A direct raw HttpAgentClient call must never bypass journaling when
+      // enforcement is enabled; the registered wrapper supplies this scope.
+      if (process.env.DOCKLANE_MAINTENANCE_ENFORCE === '1') {
+        throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+      }
       const value = await this.requestTo(
         config, method, path, schema, body, expectedClusterId,
       );
