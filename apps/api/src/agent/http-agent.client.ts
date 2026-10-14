@@ -1,4 +1,7 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import { currentMutationAdmission, currentMutationOperation } from './mutation-dispatch-context.js';
+import { MaintenanceDispatchJournal } from '../clusters/maintenance-dispatch-journal.js';
+import { isDeterministicAgentRejection } from './agent-client.js';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import { z } from 'zod';
@@ -84,6 +87,7 @@ export class HttpAgentClient implements AgentClient {
   constructor(
     @Inject(MANAGER_AGENT_CONFIG)
     registry: ManagerAgentConfig = loadManagerAgentConfig(),
+    @Optional() @Inject(MaintenanceDispatchJournal) private readonly dispatchJournal?: MaintenanceDispatchJournal,
   ) {
     const primary = registry.agents.find(
       (agent) => agent.id === registry.primaryId,
@@ -446,6 +450,19 @@ export class HttpAgentClient implements AgentClient {
     // Only v2 mutations: an older Agent must fail closed, not ignore the header.
     // Never downgrade or resend after this request, even on a precondition error.
     try {
+      const admission = currentMutationAdmission();
+      const operationId = currentMutationOperation();
+      if (admission && this.dispatchJournal) {
+        if (!operationId) throw new Error('Durable operation identity missing before Agent mutation');
+        const value = await this.dispatchJournal.execute(
+          admission.clusterId, admission.generation, config.id, operationId,
+          () => this.requestTo(config, method, path, schema, body, expectedClusterId),
+          isDeterministicAgentRejection, admission.connection ?? undefined,
+        );
+        this.markActive(config);
+        return value;
+      }
+      if (admission) throw new Error('Mutation dispatch journal unavailable');
       const value = await this.requestTo(
         config, method, path, schema, body, expectedClusterId,
       );
