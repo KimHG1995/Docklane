@@ -55,3 +55,6 @@ Dispatch journal primitives now optionally accept the active resource-lock MySQL
 
 ## MySQL session saturation acceptance
 The disposable MySQL 8.4 migration PoC now holds 10 independent resource lock connections and writes PREPARED→SENDING dispatch records through those same sessions. It verifies that all 10 rows remain stored after session release, and forbids UNCERTAIN→ACKNOWLEDGED. This proves only the journal primitive's session reuse and persistence; no actual HTTP request is sent, so transport failure classification, cross-CP fencing and multi-manager acknowledgements are not yet proven.
+
+## Begin-send generation CAS (unwired)
+A PREPARED journal entry can advance to SENDING only when the same cluster, operation ID, target manager ID and generation match an OPEN maintenance state in one SQL update. This is a prerequisite for dispatch ownership, not a finished runtime implementation. The statement must commit before HTTP transport. Currently AgentClient mutation signatures do not carry durable operation identity, and manager ACK generation is not enforced. Accordingly beginSend is not yet invoked by the transport, and a race can still occur after the DB check. Keeping the PR Draft avoids mistakenly claiming atomic fencing.
