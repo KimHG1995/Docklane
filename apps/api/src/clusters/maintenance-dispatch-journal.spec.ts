@@ -44,3 +44,23 @@ test('journal uses provided lock session without acquiring another pool connecti
   assert.equal(captured.length, 2);
   assert.equal(captured[0]?.[2], '3');
 });
+
+test('beginSend binds prepared dispatch to OPEN maintenance generation and operation', async () => {
+  const statements: string[] = [];
+  const parameters: unknown[][] = [];
+  const journal = new MaintenanceDispatchJournal({
+    query: async (sql: string, args: unknown[]) => {
+      statements.push(sql);
+      parameters.push(args);
+      return [{ affectedRows: statements.length === 1 ? 1 : 0 }];
+    },
+  } as never);
+  await journal.beginSend('id', 'default', 5n, 'agent-a', 'operation-a');
+  assert.match(statements[0]!, /maintenance.state = 'OPEN'/);
+  assert.match(statements[0]!, /maintenance.generation = \?/);
+  assert.deepEqual(parameters[0], ['id','default','agent-a','operation-a','5','5']);
+  await assert.rejects(
+    () => journal.beginSend('id','default',5n,'agent-a','operation-a'),
+    /generation or maintenance state changed/,
+  );
+});
