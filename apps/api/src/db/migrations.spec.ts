@@ -66,20 +66,20 @@ test('database migrations apply all known migrations once and skip them on repla
   await runDatabaseMigrations(state.connection as never);
   assert.deepEqual(
     state.applied.map((row) => row.version),
-    [1, 2, 3, 4, 5, 6, 7],
+    [1, 2, 3, 4, 5, 6, 7, 8],
   );
 
   const insertsAfterFirst = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterFirst, 7);
+  assert.equal(insertsAfterFirst, 8);
 
   await runDatabaseMigrations(state.connection as never);
 
   const insertsAfterReplay = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterReplay, 7);
+  assert.equal(insertsAfterReplay, 8);
 });
 
 test('database migrations reject metadata drift for an applied migration', async () => {
@@ -144,6 +144,7 @@ test('migration checksums are deterministic and catalog metadata is stable', () 
       [5, 'cluster-maintenance-state'],
       [6, 'maintenance-owner-unicode'],
       [7, 'maintenance-dispatch-evidence'],
+      [8, 'maintenance-dispatch-uniqueness'],
     ],
   );
 });
@@ -197,7 +198,7 @@ test('cluster registration migration is additive, unique and case-sensitive', as
   assert.match(query, /COLLATE ascii_bin/);
   assert.match(query, /UNIQUE KEY uq_cluster_registration_swarm \(swarm_cluster_id\)/);
   assert.equal(state.queries.some((sql) => sql.includes('UPDATE bootstrap_tokens')), false);
-  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 5);
+  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 6);
 });
 
 test('rollback history migration persists each attempt mapping and backfills only matching operations', async () => {
@@ -235,7 +236,7 @@ test('maintenance Unicode owner migration does not change immutable v5', async (
   assert.ok(ddl);
   assert.ok(ddl.includes('owner_id VARCHAR(128)'));
   assert.match(ddl, /CHARACTER SET utf8mb4 COLLATE utf8mb4_bin/);
-  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 2);
+  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 3);
 });
 
 test('maintenance dispatch evidence migration records uncertainty and barriers without auto-acknowledgement', async () => {
