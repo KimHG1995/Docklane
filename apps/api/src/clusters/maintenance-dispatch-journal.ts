@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import type { PoolConnection, ResultSetHeader } from 'mysql2/promise';
 import { Database } from '../db/database.js';
+import { MaintenancePreDispatchRejection } from '../agent/agent-client.js';
 
 export type DispatchPhase = 'PREPARED' | 'SENDING' | 'ACKNOWLEDGED' | 'REJECTED' | 'UNCERTAIN';
 
@@ -96,24 +97,46 @@ export class MaintenanceDispatchJournal {
     isDefinitePreUpdateRejection: (error: unknown) => boolean,
     connection?: PoolConnection,
   ): Promise<T> {
-    const id = await this.prepare(clusterId, generation, agentId, operationId, connection);
-    await this.beginSend(id, clusterId, generation, agentId, operationId, connection);
+    // No Agent transport is invoked until both statements have returned.
+    // Pre-send DB failures are deterministic to the caller, even if an INSERT
+    // or UPDATE committed but its DB acknowledgement was lost. Such stale
+    // records remain conservatively unresolved and block CLOSED.
+    let id: string | null = null;
     try {
-      const response = await send();
-      await this.transition(id, 'SENDING', 'ACKNOWLEDGED', connection);
-      return response;
+      id = await this.prepare(clusterId, generation, agentId, operationId, connection);
+      await this.beginSend(id, clusterId, generation, agentId, operationId, connection);
+    } catch {
+      if (id !== null) {
+        try {
+          await this.transition(id, 'PREPARED', 'REJECTED', connection);
+        } catch {
+          // DB failure or a committed SENDING state: retain unresolved evidence.
+        }
+      }
+      throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+    }
+
+    // Never combine transport exceptions with the journal acknowledgement
+    // update: a failed ACKNOWLEDGED write is not an Agent rejection.
+    let response: T;
+    try {
+      response = await send();
     } catch (error) {
-      // Classification is limited to exact Agent pre-update rejection contracts.
-      // Generic HTTP 409/503 and transport failures MUST NOT be treated as
-      // definitive without a validated response envelope.
+      // Only the established exact pre-update Agent rejection contract permits
+      // REJECTED; response loss and generic 409/503 remain UNCERTAIN.
       const next = isDefinitePreUpdateRejection(error) ? 'REJECTED' : 'UNCERTAIN';
       try {
         await this.transition(id, 'SENDING', next, connection);
       } catch {
-        // Keep SENDING as unresolved; never retry mutation to repair a journal.
+        // Keep SENDING unresolved; never replay HTTP to repair the journal.
       }
       throw error;
     }
+
+    // If persisting this successful Agent response fails, let the error reach
+    // reconciliation. Never replay an already accepted Docker mutation.
+    await this.transition(id, 'SENDING', 'ACKNOWLEDGED', connection);
+    return response;
   }
 
   async transition(id: string, from: DispatchPhase, to: DispatchPhase, connection?: PoolConnection): Promise<void> {
