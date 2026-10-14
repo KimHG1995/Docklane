@@ -3,6 +3,7 @@ import type { ClusterBindingPolicy } from './cluster-binding.policy.js';
 import { MaintenancePreDispatchRejection } from '../agent/agent-client.js';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { Database } from '../db/database.js';
+import { withMutationAdmission } from '../agent/mutation-dispatch-context.js';
 
 // Protect every current and future Agent method, except the liveness check.
 // Only the registration service gets the raw HttpAgentClient for initial binding.
@@ -34,6 +35,7 @@ export function registeredAgentClient(raw: AgentClient, policy: ClusterBindingPo
           if (!row || row.state !== 'OPEN' || !/^[0-9]+$/.test(row.generation) || BigInt(row.generation) < 1n) {
             throw new MaintenancePreDispatchRejection('MAINTENANCE_CLOSED');
           }
+          return withMutationAdmission({ clusterId: policy.clusterId, generation: BigInt(row.generation), connection: policy.activeLockConnection() }, () => value.apply(target, args));
         }
         return value.apply(target, args);
       };
