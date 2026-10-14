@@ -1,3 +1,4 @@
+import { withMutationOperation } from '../agent/mutation-dispatch-context.js';
 import {
   BadGatewayException,
   ConflictException,
@@ -180,7 +181,7 @@ export class MutationService implements OnApplicationBootstrap {
         });
 
         try {
-          const accepted = await this.agentClient.scaleService(
+          const accepted = await withMutationOperation(input.operationId, () => this.agentClient.scaleService(
             canonicalServiceId,
             {
               expectedVersion: plan.version,
@@ -188,7 +189,7 @@ export class MutationService implements OnApplicationBootstrap {
               targetSpecHash: plan.targetSpecHash,
               replicas: input.replicas,
             },
-          );
+          ));
           this.assertAcceptedMatchesPlan(accepted, plan);
           await this.markVerifying(connection, input.operationId, accepted);
         } catch (error) {
@@ -293,14 +294,14 @@ export class MutationService implements OnApplicationBootstrap {
         });
 
         try {
-          const accepted = await this.agentClient.restartService(
+          const accepted = await withMutationOperation(input.operationId, () => this.agentClient.restartService(
             canonicalServiceId,
             {
               expectedVersion: plan.version,
               expectedSpecHash: plan.beforeSpecHash,
               targetSpecHash: plan.targetSpecHash,
             },
-          );
+          ));
           this.assertAcceptedMatchesPlan(accepted, plan);
           await this.markVerifying(connection, input.operationId, accepted);
         } catch (error) {
