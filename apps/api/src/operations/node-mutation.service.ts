@@ -1,3 +1,4 @@
+import { withMutationOperation } from '../agent/mutation-dispatch-context.js';
 import {
   BadGatewayException,
   ConflictException,
@@ -313,7 +314,7 @@ export class NodeMutationService implements OnApplicationBootstrap {
         }
 
         try {
-          const accepted = await this.execute(type, canonicalNodeId, plan);
+          const accepted = await withMutationOperation(input.operationId, () => this.execute(type, canonicalNodeId, plan));
           this.assertAcceptedMatchesPlan(accepted, plan);
           await this.nodeOperations.markVerifying(
             connection,
