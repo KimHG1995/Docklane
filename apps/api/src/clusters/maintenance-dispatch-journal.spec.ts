@@ -29,3 +29,18 @@ test('uncertain dispatch cannot be acknowledged later', async () => {
   const journal = new MaintenanceDispatchJournal({ query: async () => [{ affectedRows: 1 }] } as never);
   await assert.rejects(() => journal.transition('id', 'UNCERTAIN', 'ACKNOWLEDGED'), /Invalid dispatch evidence transition/);
 });
+
+test('journal uses provided lock session without acquiring another pool connection', async () => {
+  const captured: unknown[][] = [];
+  const connection = { query: async (_sql: string, args: unknown[]) => {
+    captured.push(args);
+    return [{ affectedRows: 1 }];
+  }};
+  const journal = new MaintenanceDispatchJournal({
+    query: async () => { throw new Error('unexpected extra pool checkout'); },
+  } as never);
+  const id = await journal.prepare('default', 3n, 'agent1', 'operation1', connection as never);
+  await journal.transition(id, 'PREPARED', 'SENDING', connection as never);
+  assert.equal(captured.length, 2);
+  assert.equal(captured[0]?.[2], '3');
+});
