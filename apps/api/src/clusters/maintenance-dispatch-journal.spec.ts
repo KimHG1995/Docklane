@@ -87,7 +87,9 @@ test('journaled transport does not send if beginSend fails', async () => {
     query: async (sql: string) => [{ affectedRows: sql.startsWith('UPDATE') ? 0 : 1 }],
   } as never);
   await assert.rejects(() => journal.execute('default', 4n, 'manager-a', 'operation-2',
-    async () => { sends++; }, () => false), /generation or maintenance state changed/);
+    async () => { sends++; }, () => false),
+    (error: unknown) => error instanceof MaintenancePreDispatchRejection &&
+      isDeterministicAgentRejection(error));
   assert.equal(sends, 0);
 });
 
