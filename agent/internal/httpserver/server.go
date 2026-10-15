@@ -44,9 +44,9 @@ type DockerReader interface {
 }
 
 type Server struct {
-	cfg    config.Config
-	reader DockerReader
-	server *http.Server
+	cfg     config.Config
+	reader  DockerReader
+	server  *http.Server
 	barrier *mutationBarrier
 }
 
