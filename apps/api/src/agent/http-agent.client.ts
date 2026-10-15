@@ -406,7 +406,7 @@ export class HttpAgentClient implements AgentClient {
   }
 
   private async safeRequest<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     path: string,
     schema: z.ZodType<T>,
     body?: unknown,
@@ -519,6 +519,84 @@ export class HttpAgentClient implements AgentClient {
     }
 
     throw normalizeError(lastError);
+  }
+
+  /**
+   * Get an exact, fresh manager membership snapshot from every configured
+   * manager Agent. Never mistake configured endpoint count for real Swarm
+   * manager coverage; the roster and quorum must agree across all endpoints.
+   *
+   * This operation does not fail over: one unreachable/foreign manager is a
+   * failed maintenance barrier, not a reason to skip that member.
+   */
+  async inspectConfiguredManagers(
+    clusterId: string,
+  ): Promise<Array<{ agentId: string; nodeId: string }>> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(clusterId)) {
+      throw new Error('A fixed Swarm cluster ID is required for manager barriers');
+    }
+    const expected = this.registry.agents.length;
+    const targets: Array<{ agentId: string; nodeId: string }> = [];
+    let roster: string | null = null;
+    for (const config of this.registry.agents) {
+      const identity = await this.requestTo(
+        config, 'GET', '/v1/identity', AgentIdentityResponseSchema,
+      );
+      const cluster = await this.requestTo(
+        config, 'GET', '/v1/cluster', ClusterResponseSchema,
+      );
+      const nodes = cluster.nodes
+        .filter((node) => node.manager)
+        .map((node) => node.id)
+        .sort();
+      if (identity.clusterId !== clusterId || !identity.manager ||
+          cluster.cluster.id !== clusterId ||
+          !cluster.cluster.managers.available ||
+          cluster.cluster.managers.total !== expected ||
+          nodes.length !== expected ||
+          new Set(nodes).size !== expected ||
+          !nodes.includes(identity.nodeId)) {
+        throw new Error('Manager Agent identity or Swarm manager membership mismatch');
+      }
+      const current = JSON.stringify(nodes);
+      if (roster !== null && roster !== current) {
+        throw new Error('Swarm manager roster changed between Agent observations');
+      }
+      roster = current;
+      targets.push({ agentId: config.id, nodeId: identity.nodeId });
+    }
+    if (new Set(targets.map((target) => target.nodeId)).size !== expected) {
+      throw new Error('Duplicate manager Agent node identities');
+    }
+    return targets;
+  }
+
+  /**
+   * Persist a BLOCKED barrier on one specific manager, never via failover.
+   * A lost acknowledgement is not a success; the next attempt can retry the
+   * idempotent PUT with the same generation and validate a fresh response.
+   */
+  async blockConfiguredManager(
+    agentId: string,
+    nodeId: string,
+    clusterId: string,
+    generation: bigint,
+  ): Promise<void> {
+    const config = this.registry.agents.find((agent) => agent.id === agentId);
+    if (!config) throw new Error('Manager Agent is absent from configured membership');
+    const expected = generation.toString();
+    const schema = z.object({
+      clusterId: z.string(), nodeId: z.string(), generation: z.string(),
+      state: z.enum(['OPEN', 'BLOCKED']),
+    });
+    const response = await this.requestTo(
+      config, 'PUT', '/v1/maintenance/barrier', schema,
+      { clusterId, generation: expected, state: 'BLOCKED' },
+    );
+    if (response.clusterId !== clusterId || response.nodeId !== nodeId ||
+        response.generation !== expected || response.state !== 'BLOCKED') {
+      throw new Error('Manager barrier acknowledgement does not match target');
+    }
   }
 
   private async selectMutationAgent(): Promise<AgentConfig> {
