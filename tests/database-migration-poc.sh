@@ -57,6 +57,7 @@ import { registeredAgentClient } from './apps/api/dist/clusters/registered-agent
 import { RegisteredOperationLock } from './apps/api/dist/clusters/registered-operation-lock.js';
 import { ClusterMaintenanceRepository } from './apps/api/dist/clusters/cluster-maintenance.repository.js';
 import { MaintenanceDispatchJournal } from './apps/api/dist/clusters/maintenance-dispatch-journal.js';
+import { MaintenanceControlLease } from './apps/api/dist/clusters/maintenance-control-lease.js';
 
 const db = new Database();
 
@@ -583,6 +584,30 @@ try {
   }
   assert.deepEqual(liveAdmissions, [1]);
   console.log('maintenance real MySQL active admission lifecycle: PASS');
+
+  const leases = new MaintenanceControlLease(db);
+  const initialLease = await leases.acquire('default', 30);
+  assert.equal(initialLease.token, 1n);
+  await assert.rejects(() => leases.acquire('default', 30), /Another Control Plane/);
+  const conn = await db.getConnection();
+  try {
+    await leases.assertOwner(conn, initialLease);
+  } finally {
+    conn.release();
+  }
+  await leases.release(initialLease);
+  const nextLease = await leases.acquire('default', 30);
+  assert.equal(nextLease.token, 2n);
+  const conn2 = await db.getConnection();
+  try {
+    await assert.rejects(() => leases.assertOwner(conn2, initialLease), /fenced/);
+    await leases.assertOwner(conn2, nextLease);
+  } finally {
+    conn2.release();
+  }
+  await assert.rejects(() => leases.release(initialLease), /ownership lost/);
+  await leases.release(nextLease);
+  console.log('maintenance lease real MySQL monotonic fencing and takeover: PASS');
 
   console.log('database migration PoC: PASS');
 } finally {
