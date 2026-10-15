@@ -19,6 +19,43 @@ export class MaintenanceManagerBarrier {
     @Inject(MANAGER_AGENT_CONFIG) private readonly config: ManagerAgentConfig,
   ) {}
 
+  /**
+   * Called after OPEN has been durably committed, never from CLOSED or
+   * RECONCILING. Partial failure leaves other managers BLOCKED; operators
+   * may retry the exact committed generation, never downgrade.
+   */
+  async openAll(clusterId: string, swarmClusterId: string, generation: bigint) {
+    const state = await this.maintenance.requireRecord(clusterId);
+    if (state.state !== 'OPEN' || state.generation !== generation ||
+        this.config.expectedClusterId !== swarmClusterId) {
+      throw new ConflictException('Recovery requires committed OPEN generation');
+    }
+    const targets = await this.agent.inspectConfiguredManagers(swarmClusterId);
+    if (targets.length !== this.config.agents.length) {
+      throw new ConflictException('Incomplete manager membership for resume');
+    }
+    for (const target of targets) {
+      await this.agent.openConfiguredManager(
+        target.agentId, target.nodeId, swarmClusterId, generation);
+    }
+    // Fresh observations are required: an earlier successful PUT is not a
+    // durable final proof across manager restart or roster changes.
+    const fresh = await this.agent.inspectConfiguredManagers(swarmClusterId);
+    if (JSON.stringify(targets) !== JSON.stringify(fresh)) {
+      throw new ConflictException('Manager roster changed during resume');
+    }
+    for (const target of targets) {
+      await this.agent.inspectManagerBarrier(
+        target.agentId, target.nodeId, swarmClusterId, generation, 'OPEN');
+    }
+    const latest = await this.maintenance.requireRecord(clusterId);
+    if (latest.state !== 'OPEN' || latest.generation !== generation) {
+      throw new ConflictException('Recovery generation changed while reopening managers');
+    }
+    return { clusterId, generation: generation.toString(),
+      openManagerIds: targets.map(t => t.agentId).sort() };
+  }
+
   async blockAll(clusterId: string, swarmClusterId: string, generation: bigint) {
     const state = await this.maintenance.requireRecord(clusterId);
     if (!['CLOSING', 'RECONCILING'].includes(state.state) || state.generation !== generation ||
