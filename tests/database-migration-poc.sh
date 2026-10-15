@@ -531,6 +531,15 @@ try {
       "SELECT COUNT(*) AS count FROM maintenance_active_admissions WHERE cluster_id='default'");
     assert.equal(Number(cleared[0].count), 0);
     assert.equal(await maintenance.requestClosing('default', 7n, '관리자', 'admission test'), true);
+    // The previous simulated CP failures deliberately left SENDING/UNCERTAIN
+    // evidence. CLOSED must refuse to erase or ignore it, even when active
+    // callback admissions have drained.
+    await assert.rejects(
+      () => maintenance.commitClosed('default', 8n, '관리자', 'unsafe close test', ['manager-0']),
+      /unresolved admission, operation or dispatch/);
+    const stillClosing = await maintenance.requireRecord('default');
+    assert.equal(stillClosing.state, 'CLOSING');
+    assert.equal(stillClosing.generation, 8n);
     await assert.rejects(
       () => admissionLock.withServiceLock('default', 'new-admission-test', async () => {}),
       /maintenance/i);
