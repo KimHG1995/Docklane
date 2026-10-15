@@ -209,6 +209,26 @@ export class ClusterMaintenanceRepository {
     }
   }
 
+  /**
+   * Persisted admission rows represent callbacks that may still send Docker
+   * updates. Unclean process termination leaves them present on purpose.
+   * A zero count is necessary but is not an Agent barrier acknowledgement.
+   */
+  async countActiveAdmissions(clusterId: string): Promise<bigint> {
+    try {
+      const [rows] = await this.db.query<(RowDataPacket & { count: string })[]>(
+        'SELECT CAST(COUNT(*) AS CHAR) AS count FROM maintenance_active_admissions WHERE cluster_id = ?',
+        [clusterId],
+      );
+      if (!rows[0] || !/^[0-9]+$/.test(String(rows[0].count))) {
+        throw new Error('Invalid admission count');
+      }
+      return BigInt(rows[0].count);
+    } catch {
+      throw new ServiceUnavailableException('In-flight admission evidence unavailable');
+    }
+  }
+
   async requireOpen(clusterId: string): Promise<MaintenanceRecord> {
     const record = await this.requireRecord(clusterId);
     if (record.state !== 'OPEN') {
