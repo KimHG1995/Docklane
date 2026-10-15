@@ -611,6 +611,41 @@ try {
   await leases.release(nextLease);
   console.log('maintenance lease real MySQL monotonic fencing and takeover: PASS');
 
+  // Fixture-only reconciliation: operators first reconcile every unresolved
+  // mutation, and manager BLOCKED ACKs are refreshed for the new generation.
+  const recoveryLease = await leases.acquire('default', 30);
+  assert.equal(recoveryLease.token, 4n);
+  assert.equal(await maintenance.commitRecoveryTransition(
+    'default', 9n, '관리자', 'start reconciliation', 'CLOSED', recoveryLease), true);
+  assert.equal((await maintenance.requireRecord('default')).state, 'RECONCILING');
+  assert.equal((await maintenance.requireRecord('default')).generation, 10n);
+  await db.query(`UPDATE maintenance_agent_barriers SET generation=10
+    WHERE cluster_id='default' AND agent_id='manager-0'`);
+  await db.query(`CREATE TRIGGER reject_test_open_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_OPEN' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'open audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() => maintenance.commitRecoveryTransition(
+      'default', 10n, '관리자', 'resume test', 'RECONCILING', recoveryLease, ['manager-0']),
+      /open audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_open_audit');
+  }
+  assert.equal((await maintenance.requireRecord('default')).state, 'RECONCILING');
+  assert.equal((await maintenance.requireRecord('default')).generation, 10n);
+  assert.equal(await maintenance.commitRecoveryTransition(
+    'default', 10n, '관리자', 'resume test', 'RECONCILING', recoveryLease, ['manager-0']), true);
+  assert.equal((await maintenance.requireRecord('default')).state, 'OPEN');
+  assert.equal((await maintenance.requireRecord('default')).generation, 11n);
+  assert.equal(await maintenance.commitRecoveryTransition(
+    'default', 10n, '관리자', 'replayed resume', 'RECONCILING', recoveryLease, ['manager-0']), false);
+  await leases.release(recoveryLease);
+  console.log('maintenance real MySQL CLOSED→RECONCILING→OPEN atomic audit and fencing: PASS');
+
+
   console.log('database migration PoC: PASS');
 } finally {
   await db.onModuleDestroy();
