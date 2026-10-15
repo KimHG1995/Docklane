@@ -43,6 +43,7 @@ test('readiness remains unsafe with zero unresolved operations until Agent barri
     {
       requireRecord: async () => ({ clusterId: 'default', state: 'CLOSING', generation: 8n }),
       countUnresolvedOperations: async () => 0n,
+      countActiveAdmissions: async () => 0n,
     } as never,
     { clusterId: 'default', assertRegistered: async () => {} } as never,
     { countUnresolved: async () => 0n } as never,
@@ -54,7 +55,7 @@ test('readiness remains unsafe with zero unresolved operations until Agent barri
   const result = await controller.readiness('default', request('ADMIN', ['default']) as never);
   assert.deepEqual(result, {
     clusterId: 'default', state: 'CLOSING', generation: '8',
-    unresolvedOperations: '0', unresolvedDispatches: '0', agentBarrierVerified: false,
+    unresolvedOperations: '0', unresolvedDispatches: '0', activeAdmissions: '0', agentBarrierVerified: false,
     inFlightDispatchVerified: false, safeToClose: false,
   });
 });
