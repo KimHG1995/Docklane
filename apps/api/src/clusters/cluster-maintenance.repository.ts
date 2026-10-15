@@ -295,6 +295,100 @@ export class ClusterMaintenanceRepository {
     }
   }
 
+  /**
+   * Recovery state transitions are always guarded by a live fencing lease,
+   * expected generation and atomic audit. An OPEN commit additionally requires
+   * zero unresolved work and complete BLOCKED acknowledgements for this
+   * reconciliation generation. Manager reopening happens only AFTER this
+   * transaction commits, so raw Agent mutation is never opened too early.
+   */
+  async commitRecoveryTransition(
+    clusterId: string,
+    generation: bigint,
+    actorId: string,
+    reason: string,
+    from: 'CLOSED' | 'RECONCILING',
+    lease: MaintenanceLease,
+    expectedAgentIds: readonly string[] = [],
+  ): Promise<boolean> {
+    if (!this.controlLease || lease.clusterId !== clusterId ||
+        generation < 1n || !actorId.trim() || !reason.trim() ||
+        reason.length > 1024) {
+      throw new ConflictException('Invalid maintenance recovery ownership');
+    }
+    const to = from === 'CLOSED' ? 'RECONCILING' : 'OPEN';
+    if (to === 'OPEN' &&
+        (expectedAgentIds.length < 1 || expectedAgentIds.length !== new Set(expectedAgentIds).size)) {
+      throw new ConflictException('Recovery requires all manager acknowledgements');
+    }
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+      await this.controlLease.assertOwner(connection, lease);
+      const [rows] = await connection.query<(RowDataPacket & {state:string; generation:string})[]>(
+        `SELECT state, CAST(generation AS CHAR) AS generation
+         FROM cluster_maintenance_states WHERE cluster_id = ? FOR UPDATE`,
+        [clusterId]);
+      if (rows[0]?.state !== from || rows[0]?.generation !== generation.toString()) {
+        await connection.rollback();
+        return false;
+      }
+      if (to === 'OPEN') {
+        const [counts] = await connection.query<(RowDataPacket & {
+          active:string; operations:string; dispatches:string;
+        })[]>(
+          `SELECT
+             (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_active_admissions WHERE cluster_id=?) AS active,
+             (SELECT COUNT(*) FROM operations WHERE cluster_id=?
+                AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
+              + (SELECT COUNT(*) FROM node_operations WHERE cluster_id=?
+                AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION')) AS operations,
+             (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_dispatches WHERE cluster_id=?
+                AND phase IN ('PREPARED','SENDING','UNCERTAIN')) AS dispatches`,
+          [clusterId,clusterId,clusterId,clusterId]);
+        const proof = counts[0];
+        if (!proof || String(proof.active)!=='0' ||
+            String(proof.operations)!=='0' || String(proof.dispatches)!=='0') {
+          throw new ConflictException('Reconciliation has unresolved mutation evidence');
+        }
+        const [acks] = await connection.query<(RowDataPacket & {
+          agent_id:string; generation:string; state:string;
+        })[]>(
+          `SELECT agent_id, CAST(generation AS CHAR) AS generation, state
+           FROM maintenance_agent_barriers WHERE cluster_id=? ORDER BY agent_id`,
+          [clusterId]);
+        const expected = [...expectedAgentIds].sort();
+        if (acks.length !== expected.length || acks.some((ack,i) =>
+          ack.agent_id !== expected[i] || ack.state !== 'ACKNOWLEDGED' ||
+          ack.generation !== generation.toString())) {
+          throw new ConflictException('Reconciliation manager barrier ACK mismatch');
+        }
+      }
+      const [updated] = await connection.execute<import('mysql2/promise').ResultSetHeader>(
+        `UPDATE cluster_maintenance_states
+         SET state=?, generation=generation+1, owner_id=?,
+             changed_by=?, reason=?, changed_at=UTC_TIMESTAMP(6)
+         WHERE cluster_id=? AND state=? AND generation=?`,
+        [to,actorId,actorId,reason,clusterId,from,generation.toString()]);
+      if (updated.affectedRows !== 1) throw new ConflictException('Maintenance recovery changed');
+      await connection.execute(
+        `INSERT INTO audit_events
+         (operation_id, actor_id, cluster_id, service_id, resource_type,
+          resource_id, action, after_json)
+         VALUES (?,?,?,?, 'cluster', ?, ?, ?)`,
+        [randomUUID(),actorId,clusterId,clusterId,clusterId,
+          to === 'OPEN' ? 'CLUSTER_MAINTENANCE_OPEN' : 'CLUSTER_MAINTENANCE_RECONCILING',
+          JSON.stringify({from,to,generation:(generation+1n).toString(),reason})]);
+      await connection.commit();
+      return true;
+    } catch(error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   async countActiveAdmissions(clusterId: string): Promise<bigint> {
     try {
       const [rows] = await this.db.query<(RowDataPacket & { count: string })[]>(
