@@ -281,7 +281,7 @@ test('dispatch unique-index migration skips an already-created valid index', asy
   });
   await runDatabaseMigrations(state.connection as never);
   assert.equal(state.queries.some(sql => sql.includes('ADD UNIQUE KEY uq_maintenance_dispatch_operation')), false);
-  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 1);
+  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 2);
 });
 
 test('dispatch unique-index migration rejects a partial or nonunique existing index', async () => {
