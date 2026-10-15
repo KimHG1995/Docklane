@@ -514,6 +514,36 @@ try {
 
 
 
+  // Durable in-flight admission must survive until the callback exits.
+  // A CLOSING transition cannot consider a still-running callback safe.
+  await db.query("UPDATE cluster_maintenance_states SET state='OPEN', generation=7 WHERE cluster_id='default'");
+  const liveAdmissions = [];
+  const admissionLock = new RegisteredOperationLock(db, policy);
+  process.env.DOCKLANE_MAINTENANCE_ENFORCE = '1';
+  try {
+    await admissionLock.withServiceLock('default', 'live-admission-test', async () => {
+      const [active] = await db.query(
+        "SELECT COUNT(*) AS count FROM maintenance_active_admissions WHERE cluster_id='default'");
+      assert.equal(Number(active[0].count), 1);
+      liveAdmissions.push(Number(active[0].count));
+    });
+    const [cleared] = await db.query(
+      "SELECT COUNT(*) AS count FROM maintenance_active_admissions WHERE cluster_id='default'");
+    assert.equal(Number(cleared[0].count), 0);
+    assert.equal(await maintenance.requestClosing('default', 7n, '관리자', 'admission test'), true);
+    await assert.rejects(
+      () => admissionLock.withServiceLock('default', 'new-admission-test', async () => {}),
+      /maintenance/i);
+    const [afterClose] = await db.query(
+      "SELECT COUNT(*) AS count FROM maintenance_active_admissions WHERE cluster_id='default'");
+    assert.equal(Number(afterClose[0].count), 0);
+  } finally {
+    if (savedEnforce === undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
+    else process.env.DOCKLANE_MAINTENANCE_ENFORCE = savedEnforce;
+  }
+  assert.deepEqual(liveAdmissions, [1]);
+  console.log('maintenance real MySQL active admission lifecycle: PASS');
+
   console.log('database migration PoC: PASS');
 } finally {
   await db.onModuleDestroy();
