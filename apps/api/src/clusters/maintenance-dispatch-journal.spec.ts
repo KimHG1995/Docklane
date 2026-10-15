@@ -133,3 +133,24 @@ test('duplicate durable operation never invokes HTTP or claims definitive no-sen
   );
   assert.equal(sends, 0);
 });
+
+test('a prior uncertain operation cannot acquire another dispatch slot', async () => {
+  let sends = 0;
+  let prepares = 0;
+  const journal = new MaintenanceDispatchJournal({
+    query: async (sql: string) => {
+      if (sql.startsWith('INSERT INTO maintenance_dispatches')) {
+        prepares += 1;
+        if (prepares > 1) throw { code: 'ER_DUP_ENTRY', errno: 1062 };
+      }
+      return [{ affectedRows: 1 }];
+    },
+  } as never);
+  await assert.rejects(() => journal.execute('default', 6n, 'manager-a', 'same-op',
+    async () => { sends++; throw new Error('response lost'); }, () => false), /response lost/);
+  await assert.rejects(() => journal.execute('default', 6n, 'manager-b', 'same-op',
+    async () => { sends++; }, () => false),
+    (error: unknown) => error instanceof DuplicateDispatchEvidence &&
+      !isDeterministicAgentRejection(error));
+  assert.equal(sends, 1);
+});
