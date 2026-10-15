@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ConflictException, Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import type { RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
+import { MaintenanceControlLease, type MaintenanceLease } from './maintenance-control-lease.js';
 
 /**
  * Durable maintenance read boundary shared by all Control Plane processes.
@@ -33,7 +34,8 @@ const STATES = new Set<MaintenanceState>(['OPEN', 'CLOSING', 'CLOSED', 'RECONCIL
 
 @Injectable()
 export class ClusterMaintenanceRepository {
-  constructor(@Inject(Database) private readonly db: Database) {}
+  constructor(@Inject(Database) private readonly db: Database,
+    private readonly controlLease?: MaintenanceControlLease) {}
 
   async requireRecord(clusterId: string): Promise<MaintenanceRecord> {
     let rows: MaintenanceRow[];
@@ -226,14 +228,18 @@ export class ClusterMaintenanceRepository {
    */
   async commitClosed(
     clusterId: string, generation: bigint, actorId: string, reason: string,
-    expectedAgentIds: readonly string[],
+    expectedAgentIds: readonly string[], lease?: MaintenanceLease,
   ): Promise<boolean> {
     if (generation < 1n || !actorId.trim() || !reason.trim() ||
         expectedAgentIds.length < 1 || new Set(expectedAgentIds).size !== expectedAgentIds.length ||
         reason.length > 1024) throw new ConflictException('Invalid maintenance closure evidence');
+    if (!lease || lease.clusterId !== clusterId || !this.controlLease) {
+      throw new ConflictException('Maintenance closure requires current Control Plane lease');
+    }
     const connection = await this.db.getConnection();
     try {
       await connection.beginTransaction();
+      await this.controlLease.assertOwner(connection, lease);
       const [state] = await connection.query<(RowDataPacket & {state:string; generation:string})[]>(
         `SELECT state, CAST(generation AS CHAR) AS generation FROM cluster_maintenance_states
          WHERE cluster_id = ? FOR UPDATE`, [clusterId]);
