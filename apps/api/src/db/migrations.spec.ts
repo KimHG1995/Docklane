@@ -16,6 +16,7 @@ type Applied = {
 function fakeConnection(options?: {
   lock?: boolean;
   applied?: Applied[];
+  dispatchIndex?: 'valid' | 'invalid';
 }) {
   const applied = [...(options?.applied ?? [])];
   const queries: string[] = [];
@@ -41,6 +42,15 @@ function fakeConnection(options?: {
         // The v8 uniqueness migration reads index metadata, unlike the
         // baseline migrations that only SELECT COUNT(*) for existing indexes.
         if (sql.includes("index_name = 'uq_maintenance_dispatch_operation'")) {
+          if (options?.dispatchIndex === 'valid') {
+            return [[
+              { column_name: 'cluster_id', non_unique: 0, seq_in_index: 1 },
+              { column_name: 'operation_id', non_unique: 0, seq_in_index: 2 },
+            ], []];
+          }
+          if (options?.dispatchIndex === 'invalid') {
+            return [[{ column_name: 'cluster_id', non_unique: 1, seq_in_index: 1 }], []];
+          }
           return [[], []]; // Fresh database: the unique index is not present.
         }
         return [[{ count: 1 }], []];
@@ -263,20 +273,11 @@ test('maintenance dispatch evidence migration records uncertainty and barriers w
 
 test('dispatch unique-index migration skips an already-created valid index', async () => {
   const state = fakeConnection({
+    dispatchIndex: 'valid',
     applied: DATABASE_MIGRATIONS.slice(0, 7).map(m => ({
       version: m.version, name: m.name, checksum: migrationChecksum(m),
     })),
   });
-  const baseQuery = state.connection.query;
-  state.connection.query = async (sql: string, params: unknown[] = []) => {
-    if (sql.includes("index_name = 'uq_maintenance_dispatch_operation'")) {
-      return [[
-        { column_name: 'cluster_id', non_unique: 0, seq_in_index: 1 },
-        { column_name: 'operation_id', non_unique: 0, seq_in_index: 2 },
-      ], []];
-    }
-    return baseQuery(sql, params);
-  };
   await runDatabaseMigrations(state.connection as never);
   assert.equal(state.queries.some(sql => sql.includes('ADD UNIQUE KEY uq_maintenance_dispatch_operation')), false);
   assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 1);
@@ -284,17 +285,11 @@ test('dispatch unique-index migration skips an already-created valid index', asy
 
 test('dispatch unique-index migration rejects a partial or nonunique existing index', async () => {
   const state = fakeConnection({
+    dispatchIndex: 'invalid',
     applied: DATABASE_MIGRATIONS.slice(0, 7).map(m => ({
       version: m.version, name: m.name, checksum: migrationChecksum(m),
     })),
   });
-  const baseQuery = state.connection.query;
-  state.connection.query = async (sql: string, params: unknown[] = []) => {
-    if (sql.includes("index_name = 'uq_maintenance_dispatch_operation'")) {
-      return [[{ column_name: 'cluster_id', non_unique: 1, seq_in_index: 1 }], []];
-    }
-    return baseQuery(sql, params);
-  };
   await assert.rejects(() => runDatabaseMigrations(state.connection as never),
     /uniqueness index metadata mismatch/);
 });
