@@ -21,7 +21,7 @@ export class MaintenanceManagerBarrier {
 
   async blockAll(clusterId: string, swarmClusterId: string, generation: bigint) {
     const state = await this.maintenance.requireRecord(clusterId);
-    if (state.state !== 'CLOSING' || state.generation !== generation ||
+    if (!['CLOSING', 'RECONCILING'].includes(state.state) || state.generation !== generation ||
         this.config.expectedClusterId !== swarmClusterId) {
       throw new ConflictException('Maintenance generation or registered Swarm mismatch');
     }
@@ -47,7 +47,7 @@ export class MaintenanceManagerBarrier {
       throw new ConflictException('Manager membership changed during barrier');
     }
     const latest = await this.maintenance.requireRecord(clusterId);
-    if (latest.state !== 'CLOSING' || latest.generation !== generation) {
+    if (latest.state !== state.state || latest.generation !== generation) {
       throw new ConflictException('Maintenance generation changed during barrier');
     }
     const [rows] = await this.db.query<(RowDataPacket & { agent_id: string; generation: string; state: string })[]>(
