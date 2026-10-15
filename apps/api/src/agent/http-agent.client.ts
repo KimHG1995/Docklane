@@ -453,7 +453,27 @@ export class HttpAgentClient implements AgentClient {
       const admission = currentMutationAdmission();
       const operationId = currentMutationOperation();
       if (admission && this.dispatchJournal) {
-        if (!operationId) throw new Error('Durable operation identity missing before Agent mutation');
+        if (!operationId) throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+        // Check the actual selected manager, not a cached healthy manager or
+        // another failover target. The Agent checks the same generation again
+        // under its local barrier read-lock when the mutation arrives.
+        let barrier;
+        try {
+          barrier = await this.requestTo(config, 'GET', '/v1/maintenance/barrier',
+            z.object({
+              clusterId: z.string(),
+              nodeId: z.string(),
+              generation: z.string(),
+              state: z.enum(['OPEN', 'BLOCKED']),
+            }));
+        } catch {
+          throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+        }
+        if (barrier.clusterId !== expectedClusterId ||
+            barrier.state !== 'OPEN' ||
+            barrier.generation !== admission.generation.toString()) {
+          throw new MaintenancePreDispatchRejection('MAINTENANCE_CLOSED');
+        }
         const value = await this.dispatchJournal.execute(
           admission.clusterId, admission.generation, config.id, operationId,
           () => this.requestTo(config, method, path, schema, body, expectedClusterId),
