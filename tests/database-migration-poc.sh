@@ -540,6 +540,35 @@ try {
     const stillClosing = await maintenance.requireRecord('default');
     assert.equal(stillClosing.state, 'CLOSING');
     assert.equal(stillClosing.generation, 8n);
+    // Only in this disposable fixture: explicitly reconcile synthetic SENDING
+    // records, then test atomic CLOSED+audit. Never auto-delete such rows in
+    // product code or mistake one mocked manager ACK for real Swarm coverage.
+    await db.query("DELETE FROM maintenance_dispatches WHERE cluster_id='default'");
+    await db.query(`INSERT INTO maintenance_agent_barriers
+      (cluster_id, agent_id, generation, state)
+      VALUES ('default', 'manager-0', 8, 'ACKNOWLEDGED')`);
+    await db.query(`CREATE TRIGGER reject_test_closed_audit BEFORE INSERT ON audit_events
+      FOR EACH ROW BEGIN
+        IF NEW.action = 'CLUSTER_MAINTENANCE_CLOSED' THEN
+          SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'closed audit failure';
+        END IF;
+      END`);
+    try {
+      await assert.rejects(() =>
+        maintenance.commitClosed('default', 8n, '관리자', 'audited closure', ['manager-0']),
+        /closed audit failure/);
+    } finally {
+      await db.query('DROP TRIGGER reject_test_closed_audit');
+    }
+    assert.equal((await maintenance.requireRecord('default')).state, 'CLOSING');
+    assert.equal((await maintenance.requireRecord('default')).generation, 8n);
+    assert.equal(await maintenance.commitClosed('default', 8n, '관리자',
+      'audited closure', ['manager-0']), true);
+    assert.equal((await maintenance.requireRecord('default')).state, 'CLOSED');
+    assert.equal(await maintenance.commitClosed('default', 8n, '관리자',
+      'stale replay', ['manager-0']), false);
+    console.log('maintenance real MySQL atomic CLOSED evidence/audit rollback/CAS: PASS');
+
     await assert.rejects(
       () => admissionLock.withServiceLock('default', 'new-admission-test', async () => {}),
       /maintenance/i);
