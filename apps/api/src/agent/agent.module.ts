@@ -9,6 +9,8 @@ import { ClusterBindingModule } from '../clusters/cluster-binding.module.js';
 import { ClusterBindingPolicy } from '../clusters/cluster-binding.policy.js';
 import { Database } from '../db/database.js';
 import { MaintenanceDispatchJournal } from '../clusters/maintenance-dispatch-journal.js';
+import { MaintenanceManagerBarrier } from '../clusters/maintenance-manager-barrier.js';
+import { ClusterMaintenanceRepository } from '../clusters/cluster-maintenance.repository.js';
 import { DbModule } from '../db/db.module.js';
 import { registeredAgentClient } from '../clusters/registered-agent-client.js';
 import type { AgentClient } from './agent-client.js';
@@ -21,12 +23,14 @@ import type { AgentClient } from './agent-client.js';
       useFactory: loadManagerAgentConfig,
     },
     MaintenanceDispatchJournal,
+    ClusterMaintenanceRepository,
+    MaintenanceManagerBarrier,
     HttpAgentClient,
     { provide: AGENT_CLIENT,
       useFactory: (raw: HttpAgentClient, policy: ClusterBindingPolicy, db: Database): AgentClient => registeredAgentClient(raw, policy, db),
       inject: [HttpAgentClient, ClusterBindingPolicy, Database],
     },
   ],
-  exports: [AGENT_CLIENT, MANAGER_AGENT_CONFIG, HttpAgentClient],
+  exports: [AGENT_CLIENT, MANAGER_AGENT_CONFIG, HttpAgentClient, MaintenanceManagerBarrier],
 })
 export class AgentModule {}
