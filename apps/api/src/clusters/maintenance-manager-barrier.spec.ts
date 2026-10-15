@@ -42,3 +42,32 @@ test('stale generation refuses barrier requests before mutation', async () => {
   await assert.rejects(()=>barrier.blockAll('default','swarm-a',1n),/generation/);
   assert.equal(calls.length,0);
 });
+
+
+test('manager reopening is verified only after committed OPEN generation', async () => {
+  const calls: string[] = [];
+  const agent = {
+    inspectConfiguredManagers: async () => [
+      {agentId:'manager-0',nodeId:'node-0'},
+      {agentId:'manager-1',nodeId:'node-1'},
+    ],
+    openConfiguredManager: async (id:string) => { calls.push('open-'+id); },
+    inspectManagerBarrier: async (id:string) => { calls.push('inspect-'+id); },
+  };
+  const maintenance = {requireRecord: async () => ({state:'OPEN',generation:11n})};
+  const barrier = new MaintenanceManagerBarrier(agent as never,maintenance as never,{} as never,
+    {expectedClusterId:'swarm-a',agents:[{id:'manager-0'},{id:'manager-1'}]} as never);
+  const result=await barrier.openAll('default','swarm-a',11n);
+  assert.deepEqual(result.openManagerIds,['manager-0','manager-1']);
+  assert.deepEqual(calls,['open-manager-0','open-manager-1','inspect-manager-0','inspect-manager-1']);
+});
+
+test('reopening must reject stale generation before contacting Agent', async () => {
+  let called=false;
+  const agent = {inspectConfiguredManagers:async()=>{called=true;return []}};
+  const barrier = new MaintenanceManagerBarrier(agent as never,
+    {requireRecord:async()=>({state:'RECONCILING',generation:10n})} as never,
+    {} as never,{expectedClusterId:'swarm-a',agents:[{id:'manager-0'}]} as never);
+  await assert.rejects(()=>barrier.openAll('default','swarm-a',11n),/committed OPEN/);
+  assert.equal(called,false);
+});
