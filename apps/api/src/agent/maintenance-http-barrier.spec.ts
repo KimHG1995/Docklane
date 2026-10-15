@@ -33,7 +33,7 @@ test('actual selected manager barrier generation precedes journalled mutation tr
       res.end('{}');
     }
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   t.after(() => new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
     server.closeAllConnections();
