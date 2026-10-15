@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ConflictException, Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Optional, ServiceUnavailableException } from '@nestjs/common';
 import type { RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
 import { MaintenanceControlLease, type MaintenanceLease } from './maintenance-control-lease.js';
@@ -35,7 +35,7 @@ const STATES = new Set<MaintenanceState>(['OPEN', 'CLOSING', 'CLOSED', 'RECONCIL
 @Injectable()
 export class ClusterMaintenanceRepository {
   constructor(@Inject(Database) private readonly db: Database,
-    private readonly controlLease?: MaintenanceControlLease) {}
+    @Optional() @Inject(MaintenanceControlLease) private readonly controlLease?: MaintenanceControlLease) {}
 
   async requireRecord(clusterId: string): Promise<MaintenanceRecord> {
     let rows: MaintenanceRow[];
