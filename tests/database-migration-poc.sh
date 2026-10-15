@@ -314,7 +314,8 @@ try {
   const [unchanged] = await db.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = 'CLUSTER_REGISTERED'");
   assert.equal(Number(unchanged[0].count), 1);
   // Real InnoDB rollback acceptance: CLOSING and its audit MUST commit together.
-  const maintenance = new ClusterMaintenanceRepository(db);
+  const leases = new MaintenanceControlLease(db);
+  const maintenance = new ClusterMaintenanceRepository(db, leases);
   const initialized = await maintenance.initializeOpen('default', '관리자', 'disposable acceptance');
   assert.equal(initialized.state, 'OPEN');
   assert.equal(initialized.ownerId, '관리자');
@@ -534,11 +535,12 @@ try {
       "SELECT COUNT(*) AS count FROM maintenance_active_admissions WHERE cluster_id='default'");
     assert.equal(Number(cleared[0].count), 0);
     assert.equal(await maintenance.requestClosing('default', 7n, '관리자', 'admission test'), true);
+    const closeLease = await leases.acquire('default', 30);
     // The previous simulated CP failures deliberately left SENDING/UNCERTAIN
     // evidence. CLOSED must refuse to erase or ignore it, even when active
     // callback admissions have drained.
     await assert.rejects(
-      () => maintenance.commitClosed('default', 8n, '관리자', 'unsafe close test', ['manager-0']),
+      () => maintenance.commitClosed('default', 8n, '관리자', 'unsafe close test', ['manager-0'], closeLease),
       /unresolved admission, operation or dispatch/);
     const stillClosing = await maintenance.requireRecord('default');
     assert.equal(stillClosing.state, 'CLOSING');
@@ -558,7 +560,7 @@ try {
       END`);
     try {
       await assert.rejects(() =>
-        maintenance.commitClosed('default', 8n, '관리자', 'audited closure', ['manager-0']),
+        maintenance.commitClosed('default', 8n, '관리자', 'audited closure', ['manager-0'], closeLease),
         /closed audit failure/);
     } finally {
       await db.query('DROP TRIGGER reject_test_closed_audit');
@@ -566,10 +568,11 @@ try {
     assert.equal((await maintenance.requireRecord('default')).state, 'CLOSING');
     assert.equal((await maintenance.requireRecord('default')).generation, 8n);
     assert.equal(await maintenance.commitClosed('default', 8n, '관리자',
-      'audited closure', ['manager-0']), true);
+      'audited closure', ['manager-0'], closeLease), true);
     assert.equal((await maintenance.requireRecord('default')).state, 'CLOSED');
     assert.equal(await maintenance.commitClosed('default', 8n, '관리자',
-      'stale replay', ['manager-0']), false);
+      'stale replay', ['manager-0'], closeLease), false);
+    await leases.release(closeLease);
     console.log('maintenance real MySQL atomic CLOSED evidence/audit rollback/CAS: PASS');
 
     await assert.rejects(
@@ -585,9 +588,8 @@ try {
   assert.deepEqual(liveAdmissions, [1]);
   console.log('maintenance real MySQL active admission lifecycle: PASS');
 
-  const leases = new MaintenanceControlLease(db);
   const initialLease = await leases.acquire('default', 30);
-  assert.equal(initialLease.token, 1n);
+  assert.equal(initialLease.token, 2n);
   await assert.rejects(() => leases.acquire('default', 30), /Another Control Plane/);
   const conn = await db.getConnection();
   try {
@@ -597,7 +599,7 @@ try {
   }
   await leases.release(initialLease);
   const nextLease = await leases.acquire('default', 30);
-  assert.equal(nextLease.token, 2n);
+  assert.equal(nextLease.token, 3n);
   const conn2 = await db.getConnection();
   try {
     await assert.rejects(() => leases.assertOwner(conn2, initialLease), /fenced/);
