@@ -26,8 +26,10 @@ function fixture(options?: { failManager?: boolean; active?: boolean; registrati
       return true;
     },
   };
+  const lease = { acquire: async () => { calls.push('lease'); return {clusterId:'default',holderId:'owner',token:1n}; },
+    release: async () => { calls.push('release'); } };
   return { controller: new MaintenanceCloseController(
-    binding as never, repository as never, barrier as never), calls };
+    binding as never, repository as never, barrier as never, lease as never), calls };
 }
 const body = { generation: '8', reason: 'planned maintenance' };
 
@@ -60,7 +62,7 @@ test('all managers are blocked before the atomic CLOSED commit', async () => {
     const { controller, calls } = fixture();
     const result = await controller.confirmClosed(
       'default', req('ADMIN', ['default']) as never, body);
-    assert.deepEqual(calls, ['registration', 'barrier', 'commit']);
+    assert.deepEqual(calls, ['registration', 'lease', 'barrier', 'commit', 'release']);
     assert.deepEqual(result, { clusterId: 'default', state: 'CLOSED', generation: '9' });
   } finally {
     if (prior === undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
@@ -76,7 +78,7 @@ test('missing manager refuses CLOSED before the repository is called', async () 
     await assert.rejects(
       () => controller.confirmClosed('default', req('ADMIN', ['default']) as never, body),
       /Manager B unavailable/);
-    assert.deepEqual(calls, ['registration', 'barrier']);
+    assert.deepEqual(calls, ['registration', 'lease', 'barrier', 'release']);
   } finally {
     if (prior === undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
     else process.env.DOCKLANE_MAINTENANCE_ENFORCE = prior;
