@@ -691,7 +691,7 @@ export class HttpAgentClient implements AgentClient {
 
   private async requestTo<T>(
     config: AgentConfig,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     path: string,
     schema: z.ZodType<T>,
     body?: unknown,
