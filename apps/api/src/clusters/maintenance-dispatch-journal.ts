@@ -116,6 +116,8 @@ export class MaintenanceDispatchJournal {
       id = await this.prepare(clusterId, generation, agentId, operationId, connection);
       await this.beginSend(id, clusterId, generation, agentId, operationId, connection);
     } catch (error) {
+      // A duplicate means a previous Control Plane may already have sent this
+      // operation. Never retry transport or report deterministic non-send.
       if (error instanceof DuplicateDispatchEvidence) throw error;
       if (id !== null) {
         try {
