@@ -7,6 +7,7 @@ import { RequireRole } from '../auth/auth.decorators.js';
 import { ClusterBindingPolicy } from './cluster-binding.policy.js';
 import { ClusterMaintenanceRepository } from './cluster-maintenance.repository.js';
 import { MaintenanceManagerBarrier } from './maintenance-manager-barrier.js';
+import { MaintenanceControlLease } from './maintenance-control-lease.js';
 
 /**
  * Operator-controlled OPEN->CLOSING->CLOSED finalisation. This controller lives
@@ -23,6 +24,7 @@ export class MaintenanceCloseController {
     @Inject(ClusterBindingPolicy) private readonly binding: ClusterBindingPolicy,
     @Inject(ClusterMaintenanceRepository) private readonly maintenance: ClusterMaintenanceRepository,
     @Inject(MaintenanceManagerBarrier) private readonly barrier: MaintenanceManagerBarrier,
+    @Inject(MaintenanceControlLease) private readonly controlLease: MaintenanceControlLease,
   ) {}
 
   @Post('confirm-closed')
@@ -57,11 +59,20 @@ export class MaintenanceCloseController {
       throw new BadRequestException('Maintenance generation exceeds MySQL BIGINT range');
     }
     await this.binding.assertRegistered(clusterId);
-    const result = await this.barrier.blockAll(
-      clusterId, this.binding.settings.expectedSwarmClusterId, generation);
-    const updated = await this.maintenance.commitClosed(
-      clusterId, generation, principal.actorId, body.reason, result.blockedManagerIds);
-    if (!updated) throw new ConflictException('Maintenance closure generation changed');
-    return { clusterId, state: 'CLOSED', generation: (generation + 1n).toString() };
+    // Only one coordinator may collect ACK and commit closure at a time.
+    // Lease expiry during a long barrier fails closed in commitClosed.
+    const lease = await this.controlLease.acquire(clusterId, 30);
+    try {
+      const result = await this.barrier.blockAll(
+        clusterId, this.binding.settings.expectedSwarmClusterId, generation);
+      const updated = await this.maintenance.commitClosed(
+        clusterId, generation, principal.actorId, body.reason,
+        result.blockedManagerIds, lease);
+      if (!updated) throw new ConflictException('Maintenance closure generation changed');
+      return { clusterId, state: 'CLOSED', generation: (generation + 1n).toString() };
+    } finally {
+      try { await this.controlLease.release(lease); }
+      catch { /* A lost lease must never turn a successful/failed close into a retry. */ }
+    }
   }
 }
