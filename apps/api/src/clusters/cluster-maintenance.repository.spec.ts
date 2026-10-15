@@ -118,3 +118,10 @@ test('missing unresolved operation evidence fails closed', async () => {
   } as never);
   await assert.rejects(() => repo.countUnresolvedOperations('default'), /cannot be verified/);
 });
+
+
+test('in-flight admission count remains lossless and fails closed on DB errors', async () => {
+  const repo = new ClusterMaintenanceRepository({query:async()=>[[{count:'9007199254740993'}]]} as never);
+  assert.equal(await repo.countActiveAdmissions('default'),9007199254740993n);
+  await assert.rejects(() => new ClusterMaintenanceRepository({query:async()=>{throw new Error('offline')}} as never).countActiveAdmissions('default'),/unavailable/);
+});
