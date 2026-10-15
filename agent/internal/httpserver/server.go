@@ -47,12 +47,15 @@ type Server struct {
 	cfg    config.Config
 	reader DockerReader
 	server *http.Server
+	barrier *mutationBarrier
 }
 
 func New(cfg config.Config, reader DockerReader) *Server {
-	s := &Server{cfg: cfg, reader: reader}
+	s := &Server{cfg: cfg, reader: reader, barrier: newMutationBarrier(os.Getenv("DOCKLANE_AGENT_MAINTENANCE_STATE_FILE"))}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", s.health)
+	mux.HandleFunc("GET /v1/maintenance/barrier", s.getMaintenanceBarrier)
+	mux.HandleFunc("PUT /v1/maintenance/barrier", s.setMaintenanceBarrier)
 	mux.HandleFunc("GET /v1/identity", s.identity)
 	mux.HandleFunc("GET /v1/cluster", s.cluster)
 	mux.HandleFunc("GET /v1/services", s.services)
@@ -85,7 +88,7 @@ func New(cfg config.Config, reader DockerReader) *Server {
 
 	s.server = &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           requestLogger(mux),
+		Handler:           requestLogger(s.barrier.guard(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
