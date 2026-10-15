@@ -705,6 +705,12 @@ export class HttpAgentClient implements AgentClient {
 
       if (expectedClusterId !== undefined) {
         req.setHeader('X-Docklane-Expected-Cluster-ID', expectedClusterId);
+        // Propagate the exact admitted maintenance generation to the Agent
+        // mutation barrier. Reads and planning requests never carry it.
+        const admission = currentMutationAdmission();
+        if (admission) {
+          req.setHeader('X-Docklane-Maintenance-Generation', admission.generation.toString());
+        }
       }
       if (body !== undefined) {
         req.setHeader('Content-Type', 'application/json');
