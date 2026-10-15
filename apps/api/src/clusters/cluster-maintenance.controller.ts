@@ -67,12 +67,14 @@ export class ClusterMaintenanceController {
     const record = await this.maintenance.requireRecord(clusterId);
     const unresolved = await this.maintenance.countUnresolvedOperations(clusterId);
     const unresolvedDispatches = await this.dispatchEvidence.countUnresolved(clusterId);
+    const activeAdmissions = await this.maintenance.countActiveAdmissions(clusterId);
     return {
       clusterId,
       state: record.state,
       generation: record.generation.toString(),
       unresolvedOperations: unresolved.toString(),
       unresolvedDispatches: unresolvedDispatches.toString(),
+      activeAdmissions: activeAdmissions.toString(),
       agentBarrierVerified: false,
       inFlightDispatchVerified: false,
       safeToClose: false,
