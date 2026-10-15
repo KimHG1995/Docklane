@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 // mutationBarrier serializes *all* seven Docker mutation handlers with a
