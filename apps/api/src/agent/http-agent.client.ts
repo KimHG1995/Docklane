@@ -599,6 +599,49 @@ export class HttpAgentClient implements AgentClient {
     }
   }
 
+  /**
+   * Resume an explicitly chosen manager only after Control Plane has committed
+   * the matching OPEN generation. A failed acknowledgement remains unsafe for
+   * traffic and can be retried with the same desired generation.
+   */
+  async openConfiguredManager(
+    agentId: string, nodeId: string, clusterId: string, generation: bigint,
+  ): Promise<void> {
+    const config = this.registry.agents.find(agent => agent.id === agentId);
+    if (!config) throw new Error('Unknown manager Agent during recovery');
+    const schema = z.object({
+      clusterId: z.string(), nodeId: z.string(), generation: z.string(),
+      state: z.enum(['OPEN','BLOCKED']),
+    });
+    const actual = await this.requestTo(
+      config, 'PUT', '/v1/maintenance/barrier', schema,
+      { clusterId, generation: generation.toString(), state: 'OPEN' },
+    );
+    if (actual.clusterId !== clusterId || actual.nodeId !== nodeId ||
+        actual.generation !== generation.toString() || actual.state !== 'OPEN') {
+      throw new Error('Manager reopen acknowledgement mismatch');
+    }
+  }
+
+  async inspectManagerBarrier(
+    agentId: string, nodeId: string, clusterId: string, generation: bigint,
+    desiredState: 'OPEN' | 'BLOCKED',
+  ): Promise<void> {
+    const config = this.registry.agents.find(agent => agent.id === agentId);
+    if (!config) throw new Error('Unknown manager Agent');
+    const schema = z.object({
+      clusterId: z.string(), nodeId: z.string(), generation: z.string(),
+      state: z.enum(['OPEN','BLOCKED']),
+    });
+    const actual = await this.requestTo(
+      config, 'GET', '/v1/maintenance/barrier', schema,
+    );
+    if (actual.clusterId !== clusterId || actual.nodeId !== nodeId ||
+        actual.generation !== generation.toString() || actual.state !== desiredState) {
+      throw new Error('Manager barrier state mismatches expected recovery generation');
+    }
+  }
+
   private async selectMutationAgent(): Promise<AgentConfig> {
     let lastError: unknown = new Error('No manager Agent is available');
 
