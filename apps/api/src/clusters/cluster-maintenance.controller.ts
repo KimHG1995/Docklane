@@ -19,6 +19,37 @@ export class ClusterMaintenanceController {
     @Inject(MaintenanceDispatchEvidence) private readonly dispatchEvidence: MaintenanceDispatchEvidence,
   ) {}
 
+  /**
+   * Initializer is explicit, never startup-time auto-OPEN. The currently
+   * registered Swarm must match the operator-owned expected cluster ID.
+   */
+  @Post('initialize')
+  async initialize(
+    @Param('clusterId') clusterId: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    const principal = request.principal;
+    if (!principal || principal.role !== 'ADMIN' ||
+        (!principal.clusters.includes('*') && !principal.clusters.includes(clusterId))) {
+      throw new ForbiddenException('Maintenance initialization requires scoped ADMIN');
+    }
+    if (clusterId !== this.binding.clusterId) throw new NotFoundException('Cluster not found');
+    if (this.binding.settings.mode !== 'enforce' || !this.binding.settings.expectedSwarmClusterId) {
+      throw new ConflictException('Explicit Swarm registration enforcement is required');
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        typeof (body as Record<string,unknown>).reason !== 'string' ||
+        !(body as {reason:string}).reason.trim() ||
+        (body as {reason:string}).reason.length > 1024) {
+      throw new BadRequestException('A bounded initialization reason is required');
+    }
+    await this.binding.assertRegistered(clusterId);
+    const record = await this.maintenance.initializeOpen(
+      clusterId, principal.actorId, (body as {reason:string}).reason);
+    return { ...record, generation: record.generation.toString() };
+  }
+
   // Only OPEN -> CLOSING is exposed. CLOSED must await full manager barriers.
   @Post('close-request')
   async requestClosing(
