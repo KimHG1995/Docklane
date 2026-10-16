@@ -88,7 +88,7 @@ func New(cfg config.Config, reader DockerReader) *Server {
 
 	s.server = &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           requestLogger(s.barrier.guard(mux)),
+		Handler:           requestLogger(s.barrier.guard(mux, s.reader.Identity)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
