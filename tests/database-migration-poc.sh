@@ -58,6 +58,7 @@ import { RegisteredOperationLock } from './apps/api/dist/clusters/registered-ope
 import { ClusterMaintenanceRepository } from './apps/api/dist/clusters/cluster-maintenance.repository.js';
 import { MaintenanceDispatchJournal } from './apps/api/dist/clusters/maintenance-dispatch-journal.js';
 import { MaintenanceControlLease } from './apps/api/dist/clusters/maintenance-control-lease.js';
+import { MaintenanceEvidenceRecovery } from './apps/api/dist/clusters/maintenance-evidence-recovery.js';
 
 const db = new Database();
 
@@ -647,6 +648,41 @@ try {
   await leases.release(recoveryLease);
   console.log('maintenance real MySQL CLOSED→RECONCILING→OPEN atomic audit and fencing: PASS');
 
+
+  // Failure-recovery acceptance. Raw orphan admission is NEVER deleted;
+  // an operator-backed resolution and audit must commit together.
+  await db.query("UPDATE cluster_maintenance_states SET state='CLOSING', generation=12 WHERE cluster_id='default'");
+  const recoveryEvidenceId = '88888888-8888-4888-8888-888888888888';
+  await db.query(`INSERT INTO maintenance_active_admissions
+    (id,cluster_id,generation,owner_id,resource_type,resource_id)
+    VALUES (?, 'default', 11, '99999999-9999-4999-9999-999999999999','service','orphan-test')`,
+    [recoveryEvidenceId]);
+  const evidence = new MaintenanceEvidenceRecovery(db, maintenance, leases);
+  assert.equal(await maintenance.countActiveAdmissions('default'), 1n);
+  const evidenceLease = await leases.acquire('default',30);
+  const resolveInput = {clusterId:'default',generation:12n,type:'ADMISSION',
+    evidenceId:recoveryEvidenceId,actorId:'관리자',reason:'CP SIGKILL observed',
+    observation:'all managers blocked, prior CP terminated and resource examined',lease:evidenceLease};
+  await db.query(`CREATE TRIGGER reject_test_resolution_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_EVIDENCE_RESOLVED' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'evidence audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() => evidence.resolve(resolveInput), /evidence audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_resolution_audit');
+  }
+  assert.equal(await maintenance.countActiveAdmissions('default'),1n);
+  await evidence.resolve(resolveInput);
+  assert.equal(await maintenance.countActiveAdmissions('default'),0n);
+  await assert.rejects(() => evidence.resolve(resolveInput), /Duplicate entry/);
+  const [rawAdmission] = await db.query(
+    'SELECT id FROM maintenance_active_admissions WHERE id=?',[recoveryEvidenceId]);
+  assert.equal(rawAdmission.length,1, 'original evidence must remain immutable');
+  await leases.release(evidenceLease);
+  console.log('maintenance evidence MySQL audit rollback, immutable record, manual recovery: PASS');
 
   console.log('database migration PoC: PASS');
 } finally {
