@@ -21,7 +21,7 @@ func TestMaintenanceBarrierDurableAndFailClosed(t *testing.T) {
 	s := New(config.Config{InsecureDev: true}, fakeReader{})
 	s.barrier = b
 	// Install barrier wrapper around the real mux handler for this test.
-	handler := b.guard(s.server.Handler)
+	handler := b.guard(s.server.Handler, s.reader.Identity)
 	for _, route := range []string{"/v2/services/service-1/restart", "/v2/nodes/node-1/drain"} {
 		req := httptest.NewRequest(http.MethodPost, route, strings.NewReader("{}"))
 		res := httptest.NewRecorder()
