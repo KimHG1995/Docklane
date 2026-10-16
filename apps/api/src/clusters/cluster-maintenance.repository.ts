@@ -405,7 +405,7 @@ export class ClusterMaintenanceRepository {
   async countActiveAdmissions(clusterId: string): Promise<bigint> {
     try {
       const [rows] = await this.db.query<(RowDataPacket & { count: string })[]>(
-        'SELECT CAST(COUNT(*) AS CHAR) AS count FROM maintenance_active_admissions a WHERE a.cluster_id = ? AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=a.cluster_id AND r.evidence_type='ADMISSION' AND r.evidence_id=a.id)',
+        `SELECT CAST(COUNT(*) AS CHAR) AS count FROM maintenance_active_admissions a WHERE a.cluster_id = ? AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=a.cluster_id AND r.evidence_type='ADMISSION' AND r.evidence_id=a.id)`,
         [clusterId],
       );
       if (!rows[0] || !/^[0-9]+$/.test(String(rows[0].count))) {
