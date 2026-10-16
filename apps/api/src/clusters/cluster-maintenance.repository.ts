@@ -86,15 +86,28 @@ export class ClusterMaintenanceRepository {
       if (registered.length !== 1) {
         throw new ConflictException('Cluster registration is required before maintenance initialization');
       }
-      const [result] = await connection.execute(
-        `INSERT INTO cluster_maintenance_states
-         (cluster_id, state, generation, owner_id, reason, changed_by)
-         VALUES (?, 'OPEN', 1, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE cluster_id = cluster_id`,
-        [clusterId, actorId, reason, actorId],
+      const [existing] = await connection.query<RowDataPacket[]>(
+        'SELECT cluster_id FROM cluster_maintenance_states WHERE cluster_id = ? LIMIT 1 FOR UPDATE',
+        [clusterId],
       );
-      // Replays never change the existing state; no automatic re-opening.
-      void result;
+      if (existing.length === 0) {
+        await connection.execute(
+          `INSERT INTO cluster_maintenance_states
+           (cluster_id, state, generation, owner_id, reason, changed_by)
+           VALUES (?, 'OPEN', 1, ?, ?, ?)`,
+          [clusterId, actorId, reason, actorId],
+        );
+        // Same transaction: a failed audit must roll back the initializer.
+        await connection.execute(
+          `INSERT INTO audit_events
+           (operation_id, actor_id, cluster_id, service_id,
+            resource_type, resource_id, action, after_json)
+           VALUES (?, ?, ?, ?, 'cluster', ?, 'CLUSTER_MAINTENANCE_INITIALIZED', ?)`,
+          [randomUUID(), actorId, clusterId, clusterId, clusterId,
+            JSON.stringify({ state: 'OPEN', generation: '1', reason })],
+        );
+      }
+      // A duplicate request preserves CLOSED/CLOSING, generation and owner.
       await connection.commit();
     } catch (error) {
       await connection.rollback();
