@@ -6,6 +6,7 @@ import { migrateMaintenanceDispatch } from './maintenance-dispatch.migration.js'
 import { migrateMaintenanceDispatchUniqueness } from './maintenance-dispatch-uniqueness.migration.js';
 import { migrateMaintenanceActiveAdmissions } from './maintenance-active-admissions.migration.js';
 import { migrateMaintenanceControlLease } from './maintenance-control-lease.migration.js';
+import { migrateMaintenanceEvidenceResolution } from './maintenance-evidence-resolution.migration.js';
 import { migrateRollbackAttemptHistory } from './rollback-attempt.migration.js';
 import type {
   PoolConnection,
@@ -62,6 +63,7 @@ export const DATABASE_MIGRATIONS: readonly Migration[] = [
   { version: 8, name: 'maintenance-dispatch-uniqueness', signature: '2026-10-14-maintenance-dispatch-uniqueness-v1', up: migrateMaintenanceDispatchUniqueness },
   { version: 9, name: 'maintenance-active-admissions', signature: '2026-10-16-maintenance-active-admissions-v1', up: migrateMaintenanceActiveAdmissions },
   { version: 10, name: 'maintenance-control-lease', signature: '2026-10-16-maintenance-control-lease-v1', up: migrateMaintenanceControlLease },
+  { version: 11, name: 'maintenance-evidence-resolution', signature: '2026-10-16-maintenance-evidence-resolution-v1', up: migrateMaintenanceEvidenceResolution },
 ];
 
 export async function runDatabaseMigrations(
