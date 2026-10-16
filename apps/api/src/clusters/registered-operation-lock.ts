@@ -6,6 +6,7 @@ import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
 import { OperationLock } from '../operations/operation-lock.js';
 import { ClusterBindingPolicy } from './cluster-binding.policy.js';
+import { withActiveAdmission } from './maintenance-admission-context.js';
 
 // Opt-in while administrative transitions and manager barriers are unfinished.
 // This is an admission guard, not Docker-native atomic fencing.
@@ -81,8 +82,10 @@ export class RegisteredOperationLock extends OperationLock {
       clusterId, canonicalServiceId,
       (connection) => this.binding.withLockedConnection(connection, async () => {
         const admission = await assertMaintenanceOpen(connection, clusterId, 'service', canonicalServiceId);
-        try { return await fn(connection); }
-        finally { await releaseAdmission(connection, admission); }
+        try {
+          return await (admission === null ? fn(connection) :
+            withActiveAdmission({ id: admission, clusterId, connection }, () => fn(connection)));
+        } finally { await releaseAdmission(connection, admission); }
       }),
     );
   }
