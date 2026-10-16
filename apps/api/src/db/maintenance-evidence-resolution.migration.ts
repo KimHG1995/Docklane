@@ -10,6 +10,7 @@ export async function migrateMaintenanceEvidenceResolution(connection: PoolConne
     "owner_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL",
     "resource_type VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NULL",
     "resource_id VARCHAR(128) NULL",
+    "operation_id VARCHAR(64) NULL",
   ]) {
     const name = column.split(' ')[0];
     const [rows] = await connection.query<import('mysql2/promise').RowDataPacket[]>(
