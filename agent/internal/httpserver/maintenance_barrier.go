@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/KimHG1995/Docklane/agent/internal/model"
 )
 
 // mutationBarrier serializes *all* seven Docker mutation handlers with a
@@ -93,7 +95,7 @@ func isMutationPath(r *http.Request) bool {
 // guard holds a read lock until a mutation handler finishes. The maintenance
 // write lock therefore drains in-flight handlers before returning BLOCKED.
 // A restart with missing/corrupt state remains blocked; it is never OPEN by default.
-func (b *mutationBarrier) guard(next http.Handler) http.Handler {
+func (b *mutationBarrier) guard(next http.Handler, readIdentity func(context.Context) (model.AgentIdentityResponse, error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !b.enabled || !isMutationPath(r) {
 			next.ServeHTTP(w, r)
@@ -104,6 +106,35 @@ func (b *mutationBarrier) guard(next http.Handler) http.Handler {
 		if b.invalid || b.state.State != "OPEN" {
 			writeJSON(w, http.StatusConflict, map[string]string{
 				"code": "MAINTENANCE_AGENT_BLOCKED", "error": "Agent mutation barrier is closed",
+			})
+			return
+		}
+		// The expected cluster header, persisted barrier cluster and *current*
+		// Docker Swarm ID must all agree. A restored OPEN file from another
+		// Swarm cannot authorize a mutation on the new cluster.
+		clusterHeaders := r.Header.Values(expectedClusterHeader)
+		if len(clusterHeaders) != 1 || !clusterIDValue.MatchString(clusterHeaders[0]) {
+			writeJSON(w, http.StatusPreconditionRequired, map[string]string{
+				"code": "CLUSTER_PRECONDITION_REQUIRED", "error": "a valid expected cluster ID is required",
+			})
+			return
+		}
+		if b.state.ClusterID != clusterHeaders[0] {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]string{
+				"code": "CLUSTER_PRECONDITION_FAILED", "error": "saved maintenance barrier belongs to another Swarm",
+			})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		identity, err := readIdentity(ctx)
+		if err != nil || ctx.Err() != nil || !identity.Manager || identity.NodeID == "" || identity.ClusterID == "" {
+			writeClusterUnavailable(w)
+			return
+		}
+		if identity.ClusterID != b.state.ClusterID {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]string{
+				"code": "CLUSTER_PRECONDITION_FAILED", "error": "current Swarm differs from saved maintenance barrier",
 			})
 			return
 		}
@@ -133,8 +164,15 @@ func (s *Server) getMaintenanceBarrier(w http.ResponseWriter, r *http.Request) {
 		writeClusterUnavailable(w)
 		return
 	}
+	// Never pair a fresh identity with stale persisted OPEN/BLOCKED state.
+	if b.state.ClusterID != identity.ClusterID || !validBarrierState(b.state) {
+		writeJSON(w, http.StatusPreconditionFailed, map[string]string{
+			"code": "CLUSTER_PRECONDITION_FAILED", "error": "saved barrier does not match current Swarm",
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{
-		"clusterId": identity.ClusterID, "nodeId": identity.NodeID,
+		"clusterId": b.state.ClusterID, "nodeId": identity.NodeID,
 		"generation": b.state.Generation, "state": b.state.State,
 	})
 }
