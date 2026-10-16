@@ -59,3 +59,22 @@ test('readiness remains unsafe with zero unresolved operations until Agent barri
     inFlightDispatchVerified: false, safeToClose: false,
   });
 });
+
+test('initialization is scoped ADMIN and preserves the original generation', async () => {
+  const calls: unknown[][] = [];
+  const controller = new ClusterMaintenanceController(
+    { initializeOpen: async (...args: unknown[]) => {
+      calls.push(args);
+      return { clusterId:'default', state:'OPEN', generation:1n };
+    } } as never,
+    { clusterId:'default',settings:{mode:'enforce',expectedSwarmClusterId:'swarm-a'},
+      assertRegistered:async()=>{} } as never,
+    {countUnresolved:async()=>0n} as never,
+  );
+  await assert.rejects(() => controller.initialize('default',
+    request('VIEWER',['default']) as never,{reason:'bootstrap'}),/scoped ADMIN/);
+  const result=await controller.initialize('default',
+    request('ADMIN',['default']) as never,{reason:'bootstrap'});
+  assert.equal(result.generation,'1');
+  assert.deepEqual(calls,[['default','관리자','bootstrap']]);
+});
