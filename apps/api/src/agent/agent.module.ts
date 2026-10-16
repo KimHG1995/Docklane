@@ -12,6 +12,8 @@ import { MaintenanceDispatchJournal } from '../clusters/maintenance-dispatch-jou
 import { MaintenanceManagerBarrier } from '../clusters/maintenance-manager-barrier.js';
 import { MaintenanceCloseController } from '../clusters/maintenance-close.controller.js';
 import { MaintenanceRecoveryController } from '../clusters/maintenance-recovery.controller.js';
+import { MaintenanceEvidenceController } from '../clusters/maintenance-evidence.controller.js';
+import { MaintenanceEvidenceRecovery } from '../clusters/maintenance-evidence-recovery.js';
 import { ClusterMaintenanceRepository } from '../clusters/cluster-maintenance.repository.js';
 import { MaintenanceControlLease } from '../clusters/maintenance-control-lease.js';
 import { DbModule } from '../db/db.module.js';
@@ -19,7 +21,7 @@ import { registeredAgentClient } from '../clusters/registered-agent-client.js';
 import type { AgentClient } from './agent-client.js';
 
 @Module({
-  controllers: [MaintenanceCloseController, MaintenanceRecoveryController],
+  controllers: [MaintenanceCloseController, MaintenanceRecoveryController, MaintenanceEvidenceController],
   imports: [ClusterBindingModule, DbModule],
   providers: [
     {
@@ -30,6 +32,7 @@ import type { AgentClient } from './agent-client.js';
     MaintenanceControlLease,
     ClusterMaintenanceRepository,
     MaintenanceManagerBarrier,
+    MaintenanceEvidenceRecovery,
     HttpAgentClient,
     { provide: AGENT_CLIENT,
       useFactory: (raw: HttpAgentClient, policy: ClusterBindingPolicy, db: Database): AgentClient => registeredAgentClient(raw, policy, db),
