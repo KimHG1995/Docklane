@@ -262,13 +262,13 @@ export class ClusterMaintenanceRepository {
       }
       const [counts] = await connection.query<(RowDataPacket & {active:string; operations:string; dispatches:string})[]>(
         `SELECT
-          (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_active_admissions WHERE cluster_id = ?) AS active,
+          (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_active_admissions a WHERE a.cluster_id = ? AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=a.cluster_id AND r.evidence_type='ADMISSION' AND r.evidence_id=a.id)) AS active,
           (SELECT CAST(COUNT(*) AS CHAR) FROM operations
            WHERE cluster_id = ? AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
           + (SELECT COUNT(*) FROM node_operations
              WHERE cluster_id = ? AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION')) AS operations,
-          (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_dispatches
-           WHERE cluster_id = ? AND phase IN ('PREPARED','SENDING','UNCERTAIN')) AS dispatches`,
+          (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_dispatches d
+           WHERE d.cluster_id = ? AND d.phase IN ('PREPARED','SENDING','UNCERTAIN') AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=d.cluster_id AND r.evidence_type='DISPATCH' AND r.evidence_id=d.id)) AS dispatches`,
         [clusterId, clusterId, clusterId, clusterId],
       );
       const proof=counts[0];
@@ -351,13 +351,13 @@ export class ClusterMaintenanceRepository {
           active:string; operations:string; dispatches:string;
         })[]>(
           `SELECT
-             (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_active_admissions WHERE cluster_id=?) AS active,
+             (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_active_admissions a WHERE a.cluster_id=? AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=a.cluster_id AND r.evidence_type='ADMISSION' AND r.evidence_id=a.id)) AS active,
              (SELECT COUNT(*) FROM operations WHERE cluster_id=?
                 AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
               + (SELECT COUNT(*) FROM node_operations WHERE cluster_id=?
                 AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION')) AS operations,
-             (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_dispatches WHERE cluster_id=?
-                AND phase IN ('PREPARED','SENDING','UNCERTAIN')) AS dispatches`,
+             (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_dispatches d WHERE d.cluster_id=?
+                AND d.phase IN ('PREPARED','SENDING','UNCERTAIN') AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=d.cluster_id AND r.evidence_type='DISPATCH' AND r.evidence_id=d.id)) AS dispatches`,
           [clusterId,clusterId,clusterId,clusterId]);
         const proof = counts[0];
         if (!proof || String(proof.active)!=='0' ||
@@ -405,7 +405,7 @@ export class ClusterMaintenanceRepository {
   async countActiveAdmissions(clusterId: string): Promise<bigint> {
     try {
       const [rows] = await this.db.query<(RowDataPacket & { count: string })[]>(
-        'SELECT CAST(COUNT(*) AS CHAR) AS count FROM maintenance_active_admissions WHERE cluster_id = ?',
+        'SELECT CAST(COUNT(*) AS CHAR) AS count FROM maintenance_active_admissions a WHERE a.cluster_id = ? AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=a.cluster_id AND r.evidence_type='ADMISSION' AND r.evidence_id=a.id)',
         [clusterId],
       );
       if (!rows[0] || !/^[0-9]+$/.test(String(rows[0].count))) {
