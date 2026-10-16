@@ -55,6 +55,10 @@ import { ClusterRegistrationRepository } from './apps/api/dist/clusters/cluster-
 import { ClusterBindingPolicy } from './apps/api/dist/clusters/cluster-binding.policy.js';
 import { registeredAgentClient } from './apps/api/dist/clusters/registered-agent-client.js';
 import { RegisteredOperationLock } from './apps/api/dist/clusters/registered-operation-lock.js';
+import { ClusterMaintenanceRepository } from './apps/api/dist/clusters/cluster-maintenance.repository.js';
+import { MaintenanceDispatchJournal } from './apps/api/dist/clusters/maintenance-dispatch-journal.js';
+import { MaintenanceControlLease } from './apps/api/dist/clusters/maintenance-control-lease.js';
+import { MaintenanceEvidenceRecovery } from './apps/api/dist/clusters/maintenance-evidence-recovery.js';
 
 const db = new Database();
 
@@ -178,7 +182,7 @@ try {
   const [migrationRows] = await db.pool.query(
     'SELECT version, name, checksum FROM schema_migrations ORDER BY version',
   );
-  assert.equal(migrationRows.length, 5);
+  assert.equal(migrationRows.length, 11);
   assert.deepEqual(
     migrationRows.map((row) => [Number(row.version), row.name]),
     [
@@ -187,6 +191,12 @@ try {
       [3, 'cluster-registration'],
       [4, 'rollback-attempt-history'],
       [5, 'cluster-maintenance-state'],
+      [6, 'maintenance-owner-unicode'],
+      [7, 'maintenance-dispatch-evidence'],
+      [8, 'maintenance-dispatch-uniqueness'],
+      [9, 'maintenance-active-admissions'],
+      [10, 'maintenance-control-lease'],
+      [11, 'maintenance-evidence-resolution'],
     ],
   );
   for (const row of migrationRows) {
@@ -199,6 +209,11 @@ try {
     'bootstrap_tokens',
     'cluster_registrations',
     'cluster_maintenance_states',
+    'maintenance_dispatches',
+    'maintenance_agent_barriers',
+    'maintenance_active_admissions',
+    'maintenance_control_leases',
+    'maintenance_evidence_resolutions',
     'deployment_targets',
     'deployments',
     'node_operations',
@@ -301,6 +316,65 @@ try {
   }
   const [unchanged] = await db.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = 'CLUSTER_REGISTERED'");
   assert.equal(Number(unchanged[0].count), 1);
+  // Real InnoDB rollback acceptance: CLOSING and its audit MUST commit together.
+  const leases = new MaintenanceControlLease(db);
+  const maintenance = new ClusterMaintenanceRepository(db, leases);
+  await db.query(`CREATE TRIGGER reject_test_initialization_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_INITIALIZED' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'initialize audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() => maintenance.initializeOpen('default', '관리자', 'audit error'),
+      /initialize audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_initialization_audit');
+  }
+  const [preInitialState] = await db.query(
+    "SELECT COUNT(*) AS count FROM cluster_maintenance_states WHERE cluster_id='default'");
+  assert.equal(Number(preInitialState[0].count), 0, 'failed audit rolls back OPEN initialization');
+  const initialized = await maintenance.initializeOpen('default', '관리자', 'disposable acceptance');
+  assert.equal(initialized.state, 'OPEN');
+  assert.equal(initialized.ownerId, '관리자');
+  assert.equal(initialized.generation, 1n);
+  const [initAudits] = await db.query("SELECT COUNT(*) AS count FROM audit_events WHERE cluster_id='default' AND action='CLUSTER_MAINTENANCE_INITIALIZED'");
+  assert.equal(Number(initAudits[0].count), 1);
+  const repeatInit = await maintenance.initializeOpen('default', '관리자2', 'replay');
+  assert.equal(repeatInit.generation, 1n);
+  assert.equal(repeatInit.ownerId, '관리자');
+  const concurrentClose = await Promise.all(Array.from({ length: 10 }, () =>
+    maintenance.requestClosing('default', 1n, '관리자', 'maintenance acceptance')));
+  assert.equal(concurrentClose.filter(Boolean).length, 1, 'only one close CAS may succeed');
+  let state = await maintenance.requireRecord('default');
+  assert.equal(state.state, 'CLOSING');
+  assert.equal(state.generation, 2n);
+  const [closeAudits] = await db.query(
+    "SELECT * FROM audit_events WHERE action = 'CLUSTER_MAINTENANCE_CLOSING' AND cluster_id = 'default'");
+  assert.equal(closeAudits.length, 1, 'close transaction must audit exactly once');
+  // Reset via SQL only inside this owned disposable fixture; no public re-open API.
+  await db.query("UPDATE cluster_maintenance_states SET state = 'OPEN', generation = 3 WHERE cluster_id = 'default'");
+  await db.query(`CREATE TRIGGER reject_test_maintenance_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_CLOSING' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'maintenance audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() =>
+      maintenance.requestClosing('default', 3n, '관리자', 'audit rollback acceptance'),
+      /maintenance audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_maintenance_audit');
+  }
+  state = await maintenance.requireRecord('default');
+  assert.equal(state.state, 'OPEN', 'audit insert failure must roll back close state');
+  assert.equal(state.generation, 3n, 'audit failure must roll back generation increment');
+  const [stillOneAudit] = await db.query(
+    "SELECT COUNT(*) AS count FROM audit_events WHERE action = 'CLUSTER_MAINTENANCE_CLOSING'");
+  assert.equal(Number(stillOneAudit[0].count), 1);
+  console.log('maintenance real MySQL concurrent CAS, Unicode owner and audit rollback: PASS');
+
   console.log('cluster registration MySQL transaction/replay/uniqueness: PASS');
 
   // Real mysql2 pool, actual InnoDB/GET_LOCK sessions and actual registration
@@ -358,6 +432,277 @@ try {
     'SELECT COUNT(*) AS count FROM cluster_registrations WHERE cluster_id = ?', ['default']);
   assert.equal(Number(registrationRows[0].count), 1, 'admission checks must not modify registrations');
   console.log('registered operation real MySQL pool saturation (10/10), mismatch and absence: PASS');
+
+  // The rollback test deliberately left the cluster OPEN at generation 3.
+  // Close it again before checking the enforcement=1 denial branch.
+  assert.equal(await maintenance.requestClosing('default', 3n, '관리자', 'enforcement acceptance'), true);
+  assert.equal((await maintenance.requireRecord('default')).state, 'CLOSING');
+
+  // Maintenance enforcement ON: real MySQL/GET_LOCK with a held connection.
+  // Proves new mutation dispatch stops when CLOSING, while recovery still reads.
+  const savedEnforce = process.env.DOCKLANE_MAINTENANCE_ENFORCE;
+  process.env.DOCKLANE_MAINTENANCE_ENFORCE = '1';
+  try {
+    let mutationCalls = 0;
+    const protectedAgent = registeredAgentClient({
+      restartService: async () => {
+        mutationCalls += 1;
+        return { serviceId: 'disposable', version: 1, targetSpecHash: 'x' };
+      },
+      inspectService: async () => ({ service: { id: 'disposable' } }),
+    }, policy, db);
+    await assert.rejects(
+      () => mutex.withServiceLock('default', 'maintenance-block-test',
+        () => protectedAgent.restartService('disposable', {})),
+      /maintenance/i,
+    );
+    assert.equal(mutationCalls, 0, 'CLOSING must block Agent mutation before transport');
+    let recoveryReads = 0;
+    await mutex.withServiceRecoveryLock('default', 'maintenance-block-test', async () => {
+      await protectedAgent.inspectService('disposable');
+      recoveryReads += 1;
+    });
+    assert.equal(recoveryReads, 1, 'CLOSING must allow observation-only recovery');
+    console.log('maintenance enforcement ON real MySQL lock/dispatch/recovery: PASS');
+  } finally {
+    if (savedEnforce === undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
+    else process.env.DOCKLANE_MAINTENANCE_ENFORCE = savedEnforce;
+  }
+
+  // Real pool 10/10: journal must use the existing resource-lock session.
+  // A SENDING row survives connection release and remains unresolved after
+  // a simulated CP crash; never infer an ACK from missing HTTP response.
+  const journal = new MaintenanceDispatchJournal(db);
+  const heldSessions = new Set();
+  const evidenceIds = [];
+  let ready = 0;
+  let release;
+  const readyBarrier = new Promise(resolve => { release = resolve; });
+  const journalWatchdog = setTimeout(() => {
+    console.error('maintenance journal session reuse deadlocked under 10/10 lock occupancy');
+    process.exit(1);
+  }, 12000);
+  try {
+    await Promise.all(Array.from({ length: 10 }, (_, index) =>
+      mutex.withServiceRecoveryLock('default', 'journal-session-' + index, async connection => {
+        const [sessionRows] = await connection.query('SELECT CONNECTION_ID() AS id');
+        heldSessions.add(Number(sessionRows[0].id));
+        ready += 1;
+        if (ready === 10) release();
+        await readyBarrier;
+        const id = await journal.prepare('default', 4n, 'agent-disposable', 'operation-' + index, connection);
+        await journal.transition(id, 'PREPARED', 'SENDING', connection);
+        evidenceIds.push(id);
+      }),
+    ));
+  } finally {
+    clearTimeout(journalWatchdog);
+  }
+  assert.equal(heldSessions.size, 10);
+  assert.equal(evidenceIds.length, 10);
+  const [persistedDispatch] = await db.query(
+    "SELECT COUNT(*) AS count FROM maintenance_dispatches WHERE cluster_id = 'default' AND phase = 'SENDING'");
+  assert.equal(Number(persistedDispatch[0].count), 10);
+  await assert.rejects(() => journal.transition(evidenceIds[0], 'UNCERTAIN', 'ACKNOWLEDGED'),
+    /Invalid dispatch evidence transition/);
+  console.log('maintenance journal durable SENDING + 10/10 locked MySQL session reuse: PASS');
+
+  // Real InnoDB generation CAS at the final send boundary. This is separate
+  // from the actual Agent HTTP transport, which is not yet journal-wired.
+  await db.query("UPDATE cluster_maintenance_states SET state='OPEN', generation=5 WHERE cluster_id='default'");
+  const allowedId = await journal.prepare('default', 5n, 'agent-disposable', 'accepted-op');
+  await journal.beginSend(allowedId, 'default', 5n, 'agent-disposable', 'accepted-op');
+  assert.equal(await maintenance.requestClosing('default', 5n, '관리자', 'block stale sends'), true);
+  const deniedId = await journal.prepare('default', 5n, 'agent-disposable', 'denied-op');
+  await assert.rejects(
+    () => journal.beginSend(deniedId, 'default', 5n, 'agent-disposable', 'denied-op'),
+    /generation or maintenance state changed/,
+  );
+  const [phaseRows] = await db.query(
+    "SELECT operation_id, phase FROM maintenance_dispatches WHERE id IN (?, ?) ORDER BY operation_id",
+    [allowedId, deniedId],
+  );
+  assert.deepEqual(phaseRows.map(row => [row.operation_id, row.phase]), [
+    ['accepted-op', 'SENDING'],
+    ['denied-op', 'PREPARED'],
+  ]);
+  console.log('maintenance real MySQL beginSend generation race rejection: PASS');
+
+  // A second Control Plane must not create a fresh dispatch lineage for
+  // an operation whose earlier HTTP transmission may be uncertain.
+  const duplicateResults = await Promise.allSettled(Array.from({ length: 8 }, () =>
+    journal.prepare('default', 5n, 'agent-disposable', 'duplicate-op')));
+  assert.equal(duplicateResults.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal(duplicateResults.filter(r => r.status === 'rejected').length, 7);
+  const [duplicateRows] = await db.query(
+    "SELECT COUNT(*) AS count FROM maintenance_dispatches WHERE cluster_id = 'default' AND operation_id = 'duplicate-op'");
+  assert.equal(Number(duplicateRows[0].count), 1);
+  console.log('maintenance real MySQL duplicate operation lineage 1/8 accepted: PASS');
+
+
+
+  // Durable in-flight admission must survive until the callback exits.
+  // A CLOSING transition cannot consider a still-running callback safe.
+  await db.query("UPDATE cluster_maintenance_states SET state='OPEN', generation=7 WHERE cluster_id='default'");
+  const liveAdmissions = [];
+  const admissionLock = new RegisteredOperationLock(db, policy);
+  process.env.DOCKLANE_MAINTENANCE_ENFORCE = '1';
+  try {
+    await admissionLock.withServiceLock('default', 'live-admission-test', async () => {
+      const [active] = await db.query(
+        "SELECT COUNT(*) AS count FROM maintenance_active_admissions WHERE cluster_id='default'");
+      assert.equal(Number(active[0].count), 1);
+      liveAdmissions.push(Number(active[0].count));
+    });
+    const [cleared] = await db.query(
+      "SELECT COUNT(*) AS count FROM maintenance_active_admissions WHERE cluster_id='default'");
+    assert.equal(Number(cleared[0].count), 0);
+    assert.equal(await maintenance.requestClosing('default', 7n, '관리자', 'admission test'), true);
+    const closeLease = await leases.acquire('default', 30);
+    // The previous simulated CP failures deliberately left SENDING/UNCERTAIN
+    // evidence. CLOSED must refuse to erase or ignore it, even when active
+    // callback admissions have drained.
+    await assert.rejects(
+      () => maintenance.commitClosed('default', 8n, '관리자', 'unsafe close test', ['manager-0'], closeLease),
+      /unresolved admission, operation or dispatch/);
+    const stillClosing = await maintenance.requireRecord('default');
+    assert.equal(stillClosing.state, 'CLOSING');
+    assert.equal(stillClosing.generation, 8n);
+    // Only in this disposable fixture: explicitly reconcile synthetic SENDING
+    // records, then test atomic CLOSED+audit. Never auto-delete such rows in
+    // product code or mistake one mocked manager ACK for real Swarm coverage.
+    await db.query("DELETE FROM maintenance_dispatches WHERE cluster_id='default'");
+    await db.query(`INSERT INTO maintenance_agent_barriers
+      (cluster_id, agent_id, generation, state)
+      VALUES ('default', 'manager-0', 8, 'ACKNOWLEDGED')`);
+    await db.query(`CREATE TRIGGER reject_test_closed_audit BEFORE INSERT ON audit_events
+      FOR EACH ROW BEGIN
+        IF NEW.action = 'CLUSTER_MAINTENANCE_CLOSED' THEN
+          SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'closed audit failure';
+        END IF;
+      END`);
+    try {
+      await assert.rejects(() =>
+        maintenance.commitClosed('default', 8n, '관리자', 'audited closure', ['manager-0'], closeLease),
+        /closed audit failure/);
+    } finally {
+      await db.query('DROP TRIGGER reject_test_closed_audit');
+    }
+    assert.equal((await maintenance.requireRecord('default')).state, 'CLOSING');
+    assert.equal((await maintenance.requireRecord('default')).generation, 8n);
+    assert.equal(await maintenance.commitClosed('default', 8n, '관리자',
+      'audited closure', ['manager-0'], closeLease), true);
+    assert.equal((await maintenance.requireRecord('default')).state, 'CLOSED');
+    assert.equal(await maintenance.commitClosed('default', 8n, '관리자',
+      'stale replay', ['manager-0'], closeLease), false);
+    await leases.release(closeLease);
+    console.log('maintenance real MySQL atomic CLOSED evidence/audit rollback/CAS: PASS');
+
+    await assert.rejects(
+      () => admissionLock.withServiceLock('default', 'new-admission-test', async () => {}),
+      /maintenance/i);
+    const [afterClose] = await db.query(
+      "SELECT COUNT(*) AS count FROM maintenance_active_admissions WHERE cluster_id='default'");
+    assert.equal(Number(afterClose[0].count), 0);
+  } finally {
+    if (savedEnforce === undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
+    else process.env.DOCKLANE_MAINTENANCE_ENFORCE = savedEnforce;
+  }
+  assert.deepEqual(liveAdmissions, [1]);
+  console.log('maintenance real MySQL active admission lifecycle: PASS');
+
+  const initialLease = await leases.acquire('default', 30);
+  assert.equal(initialLease.token, 2n);
+  await assert.rejects(() => leases.acquire('default', 30), /Another Control Plane/);
+  const conn = await db.getConnection();
+  try {
+    await leases.assertOwner(conn, initialLease);
+  } finally {
+    conn.release();
+  }
+  await leases.release(initialLease);
+  const nextLease = await leases.acquire('default', 30);
+  assert.equal(nextLease.token, 3n);
+  const conn2 = await db.getConnection();
+  try {
+    await assert.rejects(() => leases.assertOwner(conn2, initialLease), /fenced/);
+    await leases.assertOwner(conn2, nextLease);
+  } finally {
+    conn2.release();
+  }
+  await assert.rejects(() => leases.release(initialLease), /ownership lost/);
+  await leases.release(nextLease);
+  console.log('maintenance lease real MySQL monotonic fencing and takeover: PASS');
+
+  // Fixture-only reconciliation: operators first reconcile every unresolved
+  // mutation, and manager BLOCKED ACKs are refreshed for the new generation.
+  const recoveryLease = await leases.acquire('default', 30);
+  assert.equal(recoveryLease.token, 4n);
+  assert.equal(await maintenance.commitRecoveryTransition(
+    'default', 9n, '관리자', 'start reconciliation', 'CLOSED', recoveryLease), true);
+  assert.equal((await maintenance.requireRecord('default')).state, 'RECONCILING');
+  assert.equal((await maintenance.requireRecord('default')).generation, 10n);
+  await db.query(`UPDATE maintenance_agent_barriers SET generation=10
+    WHERE cluster_id='default' AND agent_id='manager-0'`);
+  await db.query(`CREATE TRIGGER reject_test_open_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_OPEN' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'open audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() => maintenance.commitRecoveryTransition(
+      'default', 10n, '관리자', 'resume test', 'RECONCILING', recoveryLease, ['manager-0']),
+      /open audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_open_audit');
+  }
+  assert.equal((await maintenance.requireRecord('default')).state, 'RECONCILING');
+  assert.equal((await maintenance.requireRecord('default')).generation, 10n);
+  assert.equal(await maintenance.commitRecoveryTransition(
+    'default', 10n, '관리자', 'resume test', 'RECONCILING', recoveryLease, ['manager-0']), true);
+  assert.equal((await maintenance.requireRecord('default')).state, 'OPEN');
+  assert.equal((await maintenance.requireRecord('default')).generation, 11n);
+  assert.equal(await maintenance.commitRecoveryTransition(
+    'default', 10n, '관리자', 'replayed resume', 'RECONCILING', recoveryLease, ['manager-0']), false);
+  await leases.release(recoveryLease);
+  console.log('maintenance real MySQL CLOSED→RECONCILING→OPEN atomic audit and fencing: PASS');
+
+
+  // Failure-recovery acceptance. Raw orphan admission is NEVER deleted;
+  // an operator-backed resolution and audit must commit together.
+  await db.query("UPDATE cluster_maintenance_states SET state='CLOSING', generation=12 WHERE cluster_id='default'");
+  const recoveryEvidenceId = '88888888-8888-4888-8888-888888888888';
+  await db.query(`INSERT INTO maintenance_active_admissions
+    (id,cluster_id,generation,owner_id,resource_type,resource_id)
+    VALUES (?, 'default', 11, '99999999-9999-4999-9999-999999999999','service','orphan-test')`,
+    [recoveryEvidenceId]);
+  const evidence = new MaintenanceEvidenceRecovery(db, maintenance, leases);
+  assert.equal(await maintenance.countActiveAdmissions('default'), 1n);
+  const evidenceLease = await leases.acquire('default',30);
+  const resolveInput = {clusterId:'default',generation:12n,type:'ADMISSION',
+    evidenceId:recoveryEvidenceId,actorId:'관리자',reason:'CP SIGKILL observed',
+    observation:'all managers blocked, prior CP terminated and resource examined',lease:evidenceLease};
+  await db.query(`CREATE TRIGGER reject_test_resolution_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_EVIDENCE_RESOLVED' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'evidence audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() => evidence.resolve(resolveInput), /evidence audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_resolution_audit');
+  }
+  assert.equal(await maintenance.countActiveAdmissions('default'),1n);
+  await evidence.resolve(resolveInput);
+  assert.equal(await maintenance.countActiveAdmissions('default'),0n);
+  await assert.rejects(() => evidence.resolve(resolveInput), /Duplicate entry/);
+  const [rawAdmission] = await db.query(
+    'SELECT id FROM maintenance_active_admissions WHERE id=?',[recoveryEvidenceId]);
+  assert.equal(rawAdmission.length,1, 'original evidence must remain immutable');
+  await leases.release(evidenceLease);
+  console.log('maintenance evidence MySQL audit rollback, immutable record, manual recovery: PASS');
 
   console.log('database migration PoC: PASS');
 } finally {

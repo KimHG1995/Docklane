@@ -604,7 +604,7 @@ test('deployment bootstrap reconciles target state without replaying mutation', 
   };
 
   const lock = {
-    withServiceLock: async (
+    withServiceRecoveryLock: async (
       _clusterId: string,
       _serviceId: string,
       fn: (value: unknown) => Promise<unknown>,

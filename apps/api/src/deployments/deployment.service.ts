@@ -1,3 +1,4 @@
+import { withMutationOperation } from '../agent/mutation-dispatch-context.js';
 import {
   BadGatewayException,
   ConflictException,
@@ -96,7 +97,7 @@ export class DeploymentService
 
       for (const operation of pending) {
         try {
-          await this.lock.withServiceLock(
+          await this.lock.withServiceRecoveryLock(
             operation.clusterId,
             operation.serviceId,
             async (connection) => {
@@ -508,14 +509,14 @@ export class DeploymentService
 
         let accepted: ServiceMutationResponse;
         try {
-          accepted = await this.agentClient.rollbackService(
+          accepted = await withMutationOperation(input.operationId, () => this.agentClient.rollbackService(
             target.dockerServiceId,
             {
               expectedVersion: plan.version,
               expectedSpecHash: plan.beforeSpecHash,
               targetSpecHash: plan.targetSpecHash,
             },
-          );
+          ));
         } catch (error) {
           if (isDeterministicAgentRejection(error)) {
             await this.rollbackRejected(
@@ -792,7 +793,7 @@ export class DeploymentService
 
         let accepted: ServiceMutationResponse;
         try {
-          accepted = await this.agentClient.updateServiceImage(
+          accepted = await withMutationOperation(input.operationId, () => this.agentClient.updateServiceImage(
             target.dockerServiceId,
             {
               expectedVersion: plan.version,
@@ -800,7 +801,7 @@ export class DeploymentService
               targetSpecHash: plan.targetSpecHash,
               image: targetImage,
             },
-          );
+          ));
         } catch (error) {
           if (isDeterministicAgentRejection(error)) {
             await this.fail(

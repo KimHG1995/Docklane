@@ -20,10 +20,12 @@ test('health verifier requires a continuous stable success window', async () => 
     } as never);
     await verifier.verify({
       url: 'https://health.example.com/ready',
-      intervalMs: 2,
-      timeoutMs: 20,
+      // Use a scheduling margin: the test verifies the reset after a 503,
+      // not Node timer precision under concurrent CI workload.
+      intervalMs: 5,
+      timeoutMs: 500,
       retries: 2,
-      stabilityWindowMs: 5,
+      stabilityWindowMs: 15,
       expectedStatus: 200,
     });
     assert.ok(calls >= 4);

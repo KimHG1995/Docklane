@@ -82,3 +82,46 @@ test('initialization requires an actor and reason', async () => {
   await assert.rejects(() => repo.initializeOpen('default', '', 'maintenance'), /requires actor/);
   await assert.rejects(() => repo.initializeOpen('default', 'admin', ''), /requires actor/);
 });
+
+test('generation query casts BIGINT before mysql2 can round it', async () => {
+  let sql = '';
+  const repo = new ClusterMaintenanceRepository({
+    query: async (statement: string) => {
+      sql = statement;
+      return [[{
+        cluster_id: 'default', state: 'OPEN',
+        generation: '9007199254740993', owner_id: '관리자',
+        reason: 'maintenance', changed_by: '관리자',
+        changed_at: new Date('2026-10-13T00:00:00Z'),
+      }]];
+    },
+  } as never);
+  const result = await repo.requireRecord('default');
+  assert.match(sql, /CAST\(generation AS CHAR\) AS generation/);
+  assert.equal(result.generation, 9007199254740993n);
+  assert.equal(result.ownerId, '관리자');
+});
+
+test('unresolved operation count includes service and node attention states', async () => {
+  let query = '';
+  const repo = new ClusterMaintenanceRepository({
+    query: async (sql: string) => { query = sql; return [[{ count: '9007199254740993' }]]; },
+  } as never);
+  assert.equal(await repo.countUnresolvedOperations('default'), 9007199254740993n);
+  assert.match(query, /FROM operations/);
+  assert.match(query, /FROM node_operations/);
+  assert.match(query, /NEEDS_ATTENTION/);
+});
+test('missing unresolved operation evidence fails closed', async () => {
+  const repo = new ClusterMaintenanceRepository({
+    query: async () => [[]],
+  } as never);
+  await assert.rejects(() => repo.countUnresolvedOperations('default'), /cannot be verified/);
+});
+
+
+test('in-flight admission count remains lossless and fails closed on DB errors', async () => {
+  const repo = new ClusterMaintenanceRepository({query:async()=>[[{count:'9007199254740993'}]]} as never);
+  assert.equal(await repo.countActiveAdmissions('default'),9007199254740993n);
+  await assert.rejects(() => new ClusterMaintenanceRepository({query:async()=>{throw new Error('offline')}} as never).countActiveAdmissions('default'),/unavailable/);
+});

@@ -42,6 +42,18 @@ export class OperationLock {
     return this.withResourceLocks(keys, fn);
   }
 
+  /**
+   * Recovery-only lock. Callers may inspect and persist outcomes, but MUST NOT
+   * issue fresh Docker mutations. Resource locking remains identical.
+   */
+  async withServiceRecoveryLock<T>(clusterId: string, serviceId: string, fn: (connection: PoolConnection) => Promise<T>): Promise<T> {
+    return this.withResourceLocks([resourceLockKey('service', clusterId, serviceId)], fn);
+  }
+
+  async withNodeRecoveryLocks<T>(clusterId: string, nodeId: string, serviceIds: string[], fn: (connection: PoolConnection) => Promise<T>): Promise<T> {
+    return this.withResourceLocks([resourceLockKey('node', clusterId, nodeId), ...serviceIds.map(id => resourceLockKey('service', clusterId, id))], fn);
+  }
+
   private async withResourceLocks<T>(
     resourceKeys: string[],
     fn: (connection: PoolConnection) => Promise<T>,

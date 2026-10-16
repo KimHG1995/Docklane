@@ -1,6 +1,8 @@
-import { ConflictException, Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { ConflictException, Inject, Injectable, Optional, ServiceUnavailableException } from '@nestjs/common';
 import type { RowDataPacket } from 'mysql2/promise';
 import { Database } from '../db/database.js';
+import { MaintenanceControlLease, type MaintenanceLease } from './maintenance-control-lease.js';
 
 /**
  * Durable maintenance read boundary shared by all Control Plane processes.
@@ -32,13 +34,14 @@ const STATES = new Set<MaintenanceState>(['OPEN', 'CLOSING', 'CLOSED', 'RECONCIL
 
 @Injectable()
 export class ClusterMaintenanceRepository {
-  constructor(@Inject(Database) private readonly db: Database) {}
+  constructor(@Inject(Database) private readonly db: Database,
+    @Optional() @Inject(MaintenanceControlLease) private readonly controlLease?: MaintenanceControlLease) {}
 
   async requireRecord(clusterId: string): Promise<MaintenanceRecord> {
     let rows: MaintenanceRow[];
     try {
       [rows] = await this.db.query<MaintenanceRow[]>(
-        'SELECT cluster_id, state, generation, owner_id, reason, changed_by, changed_at FROM cluster_maintenance_states WHERE cluster_id = ? LIMIT 1',
+        'SELECT cluster_id, state, CAST(generation AS CHAR) AS generation, owner_id, reason, changed_by, changed_at FROM cluster_maintenance_states WHERE cluster_id = ? LIMIT 1',
         [clusterId],
       );
     } catch {
@@ -83,15 +86,28 @@ export class ClusterMaintenanceRepository {
       if (registered.length !== 1) {
         throw new ConflictException('Cluster registration is required before maintenance initialization');
       }
-      const [result] = await connection.execute(
-        `INSERT INTO cluster_maintenance_states
-         (cluster_id, state, generation, owner_id, reason, changed_by)
-         VALUES (?, 'OPEN', 1, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE cluster_id = cluster_id`,
-        [clusterId, actorId, reason, actorId],
+      const [existing] = await connection.query<RowDataPacket[]>(
+        'SELECT cluster_id FROM cluster_maintenance_states WHERE cluster_id = ? LIMIT 1 FOR UPDATE',
+        [clusterId],
       );
-      // Replays never change the existing state; no automatic re-opening.
-      void result;
+      if (existing.length === 0) {
+        await connection.execute(
+          `INSERT INTO cluster_maintenance_states
+           (cluster_id, state, generation, owner_id, reason, changed_by)
+           VALUES (?, 'OPEN', 1, ?, ?, ?)`,
+          [clusterId, actorId, reason, actorId],
+        );
+        // Same transaction: a failed audit must roll back the initializer.
+        await connection.execute(
+          `INSERT INTO audit_events
+           (operation_id, actor_id, cluster_id, service_id,
+            resource_type, resource_id, action, after_json)
+           VALUES (?, ?, ?, ?, 'cluster', ?, 'CLUSTER_MAINTENANCE_INITIALIZED', ?)`,
+          [randomUUID(), actorId, clusterId, clusterId, clusterId,
+            JSON.stringify({ state: 'OPEN', generation: '1', reason })],
+        );
+      }
+      // A duplicate request preserves CLOSED/CLOSING, generation and owner.
       await connection.commit();
     } catch (error) {
       await connection.rollback();
@@ -133,6 +149,272 @@ export class ClusterMaintenanceRepository {
       [targetState, actorId, reason, actorId, clusterId, expectedState, expectedGeneration.toString()],
     );
     return result.affectedRows === 1;
+  }
+
+  /**
+   * Atomic maintenance close request and audit. Only OPEN -> CLOSING is exposed:
+   * CLOSED requires in-flight dispatch accounting and all manager barriers.
+   * The single-row CAS is protected by InnoDB; audit failure rolls it back.
+   */
+  async requestClosing(
+    clusterId: string, generation: bigint, actorId: string, reason: string,
+  ): Promise<boolean> {
+    if (generation < 1n || !actorId.trim() || reason.trim().length === 0 ||
+        reason.length > 1024) {
+      throw new ConflictException('Invalid maintenance close request');
+    }
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [update] = await connection.execute<import('mysql2/promise').ResultSetHeader>(
+        `UPDATE cluster_maintenance_states
+         SET state = 'CLOSING', generation = generation + 1,
+             owner_id = ?, reason = ?, changed_by = ?,
+             changed_at = UTC_TIMESTAMP(6)
+         WHERE cluster_id = ? AND state = 'OPEN' AND generation = ?`,
+        [actorId, reason, actorId, clusterId, generation.toString()],
+      );
+      if (update.affectedRows !== 1) {
+        await connection.rollback();
+        return false;
+      }
+      await connection.execute(
+        `INSERT INTO audit_events
+         (operation_id, actor_id, cluster_id, service_id,
+          resource_type, resource_id, action, after_json)
+         VALUES (?, ?, ?, ?, 'cluster', ?, 'CLUSTER_MAINTENANCE_CLOSING', ?)`,
+        [randomUUID(), actorId, clusterId,
+         clusterId, clusterId,
+         JSON.stringify({ previousState: 'OPEN', state: 'CLOSING',
+           generation: (generation + 1n).toString(), reason })],
+      );
+      await connection.commit();
+      return true;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  /**
+   * Advisory readiness snapshot only. Nonterminal durable operations prevent
+   * CLOSED, but zero rows cannot prove that no Agent HTTP request is in flight.
+   * Do not use this alone to enable CLOSED or Swarm rejoin.
+   */
+  async countUnresolvedOperations(clusterId: string): Promise<bigint> {
+    try {
+      const [rows] = await this.db.query<(RowDataPacket & { count: string })[]>(
+        `SELECT CAST((
+           (SELECT COUNT(*) FROM operations
+            WHERE cluster_id = ? AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
+           +
+           (SELECT COUNT(*) FROM node_operations
+            WHERE cluster_id = ? AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
+         ) AS CHAR) AS count`,
+        [clusterId, clusterId],
+      );
+      if (!rows[0] || !/^[0-9]+$/.test(String(rows[0].count))) {
+        throw new Error('Invalid unresolved operation count');
+      }
+      return BigInt(rows[0].count);
+    } catch {
+      throw new ServiceUnavailableException('Unresolved operation state cannot be verified');
+    }
+  }
+
+  /**
+   * Persisted admission rows represent callbacks that may still send Docker
+   * updates. Unclean process termination leaves them present on purpose.
+   * A zero count is necessary but is not an Agent barrier acknowledgement.
+   */
+  /**
+   * Internal CLOSED primitive. Call ONLY after a fresh all-manager blockAll
+   * result using the fixed Swarm roster. One InnoDB transaction locks the
+   * maintenance generation and checks durable admission, service/node operation
+   * and HTTP dispatch evidence before writing the CLOSED audit event.
+   *
+   * Even a successful commit does not fence external Docker CLI writers or
+   * independently prove that the manager roster has not changed afterward.
+   * No public controller invokes this primitive until final acceptance.
+   */
+  async commitClosed(
+    clusterId: string, generation: bigint, actorId: string, reason: string,
+    expectedAgentIds: readonly string[], lease?: MaintenanceLease,
+  ): Promise<boolean> {
+    if (generation < 1n || !actorId.trim() || !reason.trim() ||
+        expectedAgentIds.length < 1 || new Set(expectedAgentIds).size !== expectedAgentIds.length ||
+        reason.length > 1024) throw new ConflictException('Invalid maintenance closure evidence');
+    if (!lease || lease.clusterId !== clusterId || !this.controlLease) {
+      throw new ConflictException('Maintenance closure requires current Control Plane lease');
+    }
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+      await this.controlLease.assertOwner(connection, lease);
+      const [state] = await connection.query<(RowDataPacket & {state:string; generation:string})[]>(
+        `SELECT state, CAST(generation AS CHAR) AS generation FROM cluster_maintenance_states
+         WHERE cluster_id = ? FOR UPDATE`, [clusterId]);
+      if (state[0]?.state !== 'CLOSING' || state[0]?.generation !== generation.toString()) {
+        await connection.rollback();
+        return false;
+      }
+      const [counts] = await connection.query<(RowDataPacket & {active:string; operations:string; dispatches:string})[]>(
+        `SELECT
+          (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_active_admissions a WHERE a.cluster_id = ? AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=a.cluster_id AND r.evidence_type='ADMISSION' AND r.evidence_id=a.id)) AS active,
+          (SELECT CAST(COUNT(*) AS CHAR) FROM operations
+           WHERE cluster_id = ? AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
+          + (SELECT COUNT(*) FROM node_operations
+             WHERE cluster_id = ? AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION')) AS operations,
+          (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_dispatches d
+           WHERE d.cluster_id = ? AND d.phase IN ('PREPARED','SENDING','UNCERTAIN') AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=d.cluster_id AND r.evidence_type='DISPATCH' AND r.evidence_id=d.id)) AS dispatches`,
+        [clusterId, clusterId, clusterId, clusterId],
+      );
+      const proof=counts[0];
+      if (!proof || String(proof.active)!=='0' || String(proof.operations)!=='0' || String(proof.dispatches)!=='0') {
+        throw new ConflictException('Maintenance has unresolved admission, operation or dispatch');
+      }
+      const [acks] = await connection.query<(RowDataPacket & {agent_id:string;generation:string;state:string})[]>(
+        `SELECT agent_id, CAST(generation AS CHAR) AS generation, state
+         FROM maintenance_agent_barriers WHERE cluster_id = ? ORDER BY agent_id`,
+        [clusterId]);
+      const expected=[...expectedAgentIds].sort();
+      if (acks.length !== expected.length || acks.some((ack,i)=>
+        ack.agent_id!==expected[i] || ack.generation!==generation.toString() ||
+        ack.state!=='ACKNOWLEDGED')) {
+        throw new ConflictException('Complete manager barrier acknowledgement is missing');
+      }
+      const [updated] = await connection.execute<import('mysql2/promise').ResultSetHeader>(
+        `UPDATE cluster_maintenance_states SET state='CLOSED', generation=generation+1,
+         changed_by=?, owner_id=?, reason=?, changed_at=UTC_TIMESTAMP(6)
+         WHERE cluster_id=? AND state='CLOSING' AND generation=?`,
+        [actorId,actorId,reason,clusterId,generation.toString()]);
+      if (updated.affectedRows!==1) throw new ConflictException('Maintenance generation changed');
+      await connection.execute(
+        `INSERT INTO audit_events
+         (operation_id, actor_id, cluster_id, service_id, resource_type,
+          resource_id, action, after_json)
+         VALUES (?,?,?,?, 'cluster', ?, 'CLUSTER_MAINTENANCE_CLOSED', ?)`,
+        [randomUUID(),actorId,clusterId,clusterId,clusterId,
+          JSON.stringify({generation:(generation+1n).toString(),reason,managerIds:expected})]);
+      await connection.commit();
+      return true;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  /**
+   * Recovery state transitions are always guarded by a live fencing lease,
+   * expected generation and atomic audit. An OPEN commit additionally requires
+   * zero unresolved work and complete BLOCKED acknowledgements for this
+   * reconciliation generation. Manager reopening happens only AFTER this
+   * transaction commits, so raw Agent mutation is never opened too early.
+   */
+  async commitRecoveryTransition(
+    clusterId: string,
+    generation: bigint,
+    actorId: string,
+    reason: string,
+    from: 'CLOSED' | 'RECONCILING',
+    lease: MaintenanceLease,
+    expectedAgentIds: readonly string[] = [],
+  ): Promise<boolean> {
+    if (!this.controlLease || lease.clusterId !== clusterId ||
+        generation < 1n || !actorId.trim() || !reason.trim() ||
+        reason.length > 1024) {
+      throw new ConflictException('Invalid maintenance recovery ownership');
+    }
+    const to = from === 'CLOSED' ? 'RECONCILING' : 'OPEN';
+    if (to === 'OPEN' &&
+        (expectedAgentIds.length < 1 || expectedAgentIds.length !== new Set(expectedAgentIds).size)) {
+      throw new ConflictException('Recovery requires all manager acknowledgements');
+    }
+    const connection = await this.db.getConnection();
+    try {
+      await connection.beginTransaction();
+      await this.controlLease.assertOwner(connection, lease);
+      const [rows] = await connection.query<(RowDataPacket & {state:string; generation:string})[]>(
+        `SELECT state, CAST(generation AS CHAR) AS generation
+         FROM cluster_maintenance_states WHERE cluster_id = ? FOR UPDATE`,
+        [clusterId]);
+      if (rows[0]?.state !== from || rows[0]?.generation !== generation.toString()) {
+        await connection.rollback();
+        return false;
+      }
+      if (to === 'OPEN') {
+        const [counts] = await connection.query<(RowDataPacket & {
+          active:string; operations:string; dispatches:string;
+        })[]>(
+          `SELECT
+             (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_active_admissions a WHERE a.cluster_id=? AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=a.cluster_id AND r.evidence_type='ADMISSION' AND r.evidence_id=a.id)) AS active,
+             (SELECT COUNT(*) FROM operations WHERE cluster_id=?
+                AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION'))
+              + (SELECT COUNT(*) FROM node_operations WHERE cluster_id=?
+                AND status IN ('PENDING','RUNNING','VERIFYING','NEEDS_ATTENTION')) AS operations,
+             (SELECT CAST(COUNT(*) AS CHAR) FROM maintenance_dispatches d WHERE d.cluster_id=?
+                AND d.phase IN ('PREPARED','SENDING','UNCERTAIN') AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=d.cluster_id AND r.evidence_type='DISPATCH' AND r.evidence_id=d.id)) AS dispatches`,
+          [clusterId,clusterId,clusterId,clusterId]);
+        const proof = counts[0];
+        if (!proof || String(proof.active)!=='0' ||
+            String(proof.operations)!=='0' || String(proof.dispatches)!=='0') {
+          throw new ConflictException('Reconciliation has unresolved mutation evidence');
+        }
+        const [acks] = await connection.query<(RowDataPacket & {
+          agent_id:string; generation:string; state:string;
+        })[]>(
+          `SELECT agent_id, CAST(generation AS CHAR) AS generation, state
+           FROM maintenance_agent_barriers WHERE cluster_id=? ORDER BY agent_id`,
+          [clusterId]);
+        const expected = [...expectedAgentIds].sort();
+        if (acks.length !== expected.length || acks.some((ack,i) =>
+          ack.agent_id !== expected[i] || ack.state !== 'ACKNOWLEDGED' ||
+          ack.generation !== generation.toString())) {
+          throw new ConflictException('Reconciliation manager barrier ACK mismatch');
+        }
+      }
+      const [updated] = await connection.execute<import('mysql2/promise').ResultSetHeader>(
+        `UPDATE cluster_maintenance_states
+         SET state=?, generation=generation+1, owner_id=?,
+             changed_by=?, reason=?, changed_at=UTC_TIMESTAMP(6)
+         WHERE cluster_id=? AND state=? AND generation=?`,
+        [to,actorId,actorId,reason,clusterId,from,generation.toString()]);
+      if (updated.affectedRows !== 1) throw new ConflictException('Maintenance recovery changed');
+      await connection.execute(
+        `INSERT INTO audit_events
+         (operation_id, actor_id, cluster_id, service_id, resource_type,
+          resource_id, action, after_json)
+         VALUES (?,?,?,?, 'cluster', ?, ?, ?)`,
+        [randomUUID(),actorId,clusterId,clusterId,clusterId,
+          to === 'OPEN' ? 'CLUSTER_MAINTENANCE_OPEN' : 'CLUSTER_MAINTENANCE_RECONCILING',
+          JSON.stringify({from,to,generation:(generation+1n).toString(),reason})]);
+      await connection.commit();
+      return true;
+    } catch(error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async countActiveAdmissions(clusterId: string): Promise<bigint> {
+    try {
+      const [rows] = await this.db.query<(RowDataPacket & { count: string })[]>(
+        `SELECT CAST(COUNT(*) AS CHAR) AS count FROM maintenance_active_admissions a WHERE a.cluster_id = ? AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r WHERE r.cluster_id=a.cluster_id AND r.evidence_type='ADMISSION' AND r.evidence_id=a.id)`,
+        [clusterId],
+      );
+      if (!rows[0] || !/^[0-9]+$/.test(String(rows[0].count))) {
+        throw new Error('Invalid admission count');
+      }
+      return BigInt(rows[0].count);
+    } catch {
+      throw new ServiceUnavailableException('In-flight admission evidence unavailable');
+    }
   }
 
   async requireOpen(clusterId: string): Promise<MaintenanceRecord> {
