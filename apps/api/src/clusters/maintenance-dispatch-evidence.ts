@@ -14,8 +14,10 @@ export class MaintenanceDispatchEvidence {
   async countUnresolved(clusterId: string): Promise<bigint> {
     try {
       const [rows] = await this.db.query<(RowDataPacket & { count: string })[]>(
-        `SELECT CAST(COUNT(*) AS CHAR) AS count FROM maintenance_dispatches
-         WHERE cluster_id = ? AND phase IN ('PREPARED','SENDING','UNCERTAIN')`,
+        `SELECT CAST(COUNT(*) AS CHAR) AS count FROM maintenance_dispatches d
+         WHERE d.cluster_id = ? AND d.phase IN ('PREPARED','SENDING','UNCERTAIN')
+         AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r
+           WHERE r.cluster_id=d.cluster_id AND r.evidence_type='DISPATCH' AND r.evidence_id=d.id)`,
         [clusterId],
       );
       if (!rows[0] || !/^[0-9]+$/.test(String(rows[0].count))) throw new Error('Invalid count');
