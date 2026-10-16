@@ -13,6 +13,7 @@ import { MaintenanceManagerBarrier } from '../clusters/maintenance-manager-barri
 import { MaintenanceCloseController } from '../clusters/maintenance-close.controller.js';
 import { MaintenanceRecoveryController } from '../clusters/maintenance-recovery.controller.js';
 import { MaintenanceEvidenceController } from '../clusters/maintenance-evidence.controller.js';
+import { MaintenanceInitializeController } from '../clusters/maintenance-initialize.controller.js';
 import { MaintenanceEvidenceRecovery } from '../clusters/maintenance-evidence-recovery.js';
 import { ClusterMaintenanceRepository } from '../clusters/cluster-maintenance.repository.js';
 import { MaintenanceControlLease } from '../clusters/maintenance-control-lease.js';
@@ -21,7 +22,7 @@ import { registeredAgentClient } from '../clusters/registered-agent-client.js';
 import type { AgentClient } from './agent-client.js';
 
 @Module({
-  controllers: [MaintenanceCloseController, MaintenanceRecoveryController, MaintenanceEvidenceController],
+  controllers: [MaintenanceCloseController, MaintenanceRecoveryController, MaintenanceEvidenceController, MaintenanceInitializeController],
   imports: [ClusterBindingModule, DbModule],
   providers: [
     {
