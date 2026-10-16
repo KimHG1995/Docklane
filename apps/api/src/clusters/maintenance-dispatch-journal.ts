@@ -3,6 +3,7 @@ import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common'
 import type { PoolConnection, ResultSetHeader } from 'mysql2/promise';
 import { Database } from '../db/database.js';
 import { MaintenancePreDispatchRejection } from '../agent/agent-client.js';
+import { currentActiveAdmission } from './maintenance-admission-context.js';
 
 /**
  * Another CP already persisted this operation lineage. The previous request
@@ -32,6 +33,19 @@ export class MaintenanceDispatchJournal {
   async prepare(clusterId: string, generation: bigint, agentId: string, operationId: string, connection?: PoolConnection): Promise<string> {
     const id = randomUUID();
     try {
+      const active = currentActiveAdmission();
+      if (active && active.clusterId === clusterId) {
+        // Bind the durable operation ID before any Agent HTTP mutation.
+        // Must use the existing lock connection to avoid pool exhaustion.
+        const [linked] = await active.connection.query<ResultSetHeader>(
+          `UPDATE maintenance_active_admissions SET operation_id=?
+           WHERE id=? AND cluster_id=? AND (operation_id IS NULL OR operation_id=?)`,
+          [operationId,active.id,clusterId,operationId],
+        );
+        if (linked.affectedRows !== 1) {
+          throw new ServiceUnavailableException('Active admission operation linkage failed');
+        }
+      }
       const executor = connection ?? this.db;
       await executor.query<ResultSetHeader>(
         `INSERT INTO maintenance_dispatches (id, cluster_id, generation, agent_id, operation_id, phase)
