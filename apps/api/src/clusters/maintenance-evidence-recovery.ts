@@ -32,7 +32,7 @@ export class MaintenanceEvidenceRecovery {
          ORDER BY d.created_at`, [clusterId]);
     const [admissions] = await this.db.query<RowDataPacket[]>(
       `SELECT a.id, a.owner_id AS ownerId, a.resource_type AS resourceType,
-          a.resource_id AS resourceId, CAST(a.generation AS CHAR) AS generation,
+          a.resource_id AS resourceId, a.operation_id AS operationId, CAST(a.generation AS CHAR) AS generation,
           a.created_at AS createdAt
          FROM maintenance_active_admissions a WHERE a.cluster_id=?
          AND NOT EXISTS (SELECT 1 FROM maintenance_evidence_resolutions r
