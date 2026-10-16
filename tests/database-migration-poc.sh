@@ -181,7 +181,7 @@ try {
   const [migrationRows] = await db.pool.query(
     'SELECT version, name, checksum FROM schema_migrations ORDER BY version',
   );
-  assert.equal(migrationRows.length, 10);
+  assert.equal(migrationRows.length, 11);
   assert.deepEqual(
     migrationRows.map((row) => [Number(row.version), row.name]),
     [
@@ -195,6 +195,7 @@ try {
       [8, 'maintenance-dispatch-uniqueness'],
       [9, 'maintenance-active-admissions'],
       [10, 'maintenance-control-lease'],
+      [11, 'maintenance-evidence-resolution'],
     ],
   );
   for (const row of migrationRows) {
@@ -211,6 +212,7 @@ try {
     'maintenance_agent_barriers',
     'maintenance_active_admissions',
     'maintenance_control_leases',
+    'maintenance_evidence_resolutions',
     'deployment_targets',
     'deployments',
     'node_operations',
