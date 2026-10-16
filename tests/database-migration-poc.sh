@@ -319,10 +319,30 @@ try {
   // Real InnoDB rollback acceptance: CLOSING and its audit MUST commit together.
   const leases = new MaintenanceControlLease(db);
   const maintenance = new ClusterMaintenanceRepository(db, leases);
+  await db.query(`CREATE TRIGGER reject_test_initialization_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_INITIALIZED' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'initialize audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() => maintenance.initializeOpen('default', '관리자', 'audit error'),
+      /initialize audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_initialization_audit');
+  }
+  const [preInitialState] = await db.query(
+    "SELECT COUNT(*) AS count FROM cluster_maintenance_states WHERE cluster_id='default'");
+  assert.equal(Number(preInitialState[0].count), 0, 'failed audit rolls back OPEN initialization');
   const initialized = await maintenance.initializeOpen('default', '관리자', 'disposable acceptance');
   assert.equal(initialized.state, 'OPEN');
   assert.equal(initialized.ownerId, '관리자');
   assert.equal(initialized.generation, 1n);
+  const [initAudits] = await db.query("SELECT COUNT(*) AS count FROM audit_events WHERE cluster_id='default' AND action='CLUSTER_MAINTENANCE_INITIALIZED'");
+  assert.equal(Number(initAudits[0].count), 1);
+  const repeatInit = await maintenance.initializeOpen('default', '관리자2', 'replay');
+  assert.equal(repeatInit.generation, 1n);
+  assert.equal(repeatInit.ownerId, '관리자');
   const concurrentClose = await Promise.all(Array.from({ length: 10 }, () =>
     maintenance.requestClosing('default', 1n, '관리자', 'maintenance acceptance')));
   assert.equal(concurrentClose.filter(Boolean).length, 1, 'only one close CAS may succeed');
