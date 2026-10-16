@@ -55,3 +55,13 @@ OPEN DB 커밋 이후 Agent 일부가 아직 BLOCKED일 수 있다. 안전을 �
 - 최종 변경 커밋 CI와 보안·동시성 리뷰 통과
 
 이 통합 인수 이전에는 PR #137을 Draft로 유지하고 운영에서 Maintenance enforcement를 활성화하지 않는다.
+
+## 2026-10-16 PR #137 review remediation
+
+Three confirmed P2 defects fixed before release:
+
+1. **Foreign Swarm OPEN replay:** Go Agent barrier lookup and the mutation guard compare the persisted Cluster ID, fresh Docker Manager Swarm ID and expected request Cluster ID. Stale/foreign or unavailable state fails closed; Go regression reproduces A→B restored-file mismatch.
+2. **Explicit audit-backed fault recovery:** New migration v11 records admission process UUID, resource and the operation ID when a durable dispatch is prepared. Original UNCERTAIN/SENDING/active admission rows are not deleted; scoped ADMIN can inspect and explicitly resolve one evidence UUID with a substantive observation and reason only after the full registered Manager roster confirms BLOCKED at the current generation. Terminal operation status is required before resolving a dispatch. Both resolution and audit INSERT share an InnoDB transaction and unique replay protection. MySQL 8.4 acceptance injects an audit failure and confirms rollback/retention, then succeeds and verifies original evidence remains.
+3. **Explicit bootstrap:** Scoped ADMIN initialization checks registration enforcement and fresh live Manager Swarm ID, then uses one transaction for initial OPEN generation 1 plus audit. Replays preserve an existing CLOSING/CLOSED state and ownership. MySQL 8.4 verifies audit failure rollback and idempotence.
+
+**CI is not live Docker acceptance.** Real 3-Manager Swarm plus 2 CP tests, crash/rejoin scenarios, seven Docker mutations, and explicit external Docker CLI/socket permission restrictions still block merge and enabling production enforcement. Keep Draft until independent security/concurrency review and full integration acceptance.
