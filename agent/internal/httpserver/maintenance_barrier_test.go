@@ -2,6 +2,9 @@ package httpserver
 
 import (
 	"encoding/json"
+ "context"
+
+ "github.com/KimHG1995/Docklane/agent/internal/model"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -89,4 +92,40 @@ func TestBarrierStateJSON(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil || !validBarrierState(decoded) {
 		t.Fatal(err)
 	}
+}
+
+func TestBarrierRejectsRestoredForeignSwarm(t *testing.T) {
+ path:=filepath.Join(t.TempDir(),"state.json")
+ b:=newMutationBarrier(path)
+ if err:=b.persist(barrierState{ClusterID:"swarm-A",Generation:"1",State:"OPEN"});err!=nil {t.Fatal(err)}
+ b=newMutationBarrier(path)
+ identity:=func(context.Context)(model.AgentIdentityResponse,error) {
+   return model.AgentIdentityResponse{ClusterID:"swarm-B",NodeID:"manager-b",Manager:true},nil
+ }
+ invoked:=false
+ handler:=b.guard(http.HandlerFunc(func(http.ResponseWriter,*http.Request){invoked=true}),identity)
+ req:=httptest.NewRequest(http.MethodPost,"/v2/services/svc/restart",strings.NewReader("{}"))
+ req.Header.Set(expectedClusterHeader,"swarm-B")
+ req.Header.Set(barrierGenerationHeader,"1")
+ resp:=httptest.NewRecorder()
+ handler.ServeHTTP(resp,req)
+ if resp.Code!=http.StatusPreconditionFailed || invoked {
+   t.Fatalf("new Swarm must not inherit old OPEN: status=%d invoked=%v",resp.Code,invoked)
+ }
+ req.Header.Set(expectedClusterHeader,"swarm-A")
+ resp=httptest.NewRecorder()
+ handler.ServeHTTP(resp,req)
+ if resp.Code!=http.StatusPreconditionFailed || invoked {
+   t.Fatalf("current Swarm mismatch must reject: status=%d invoked=%v",resp.Code,invoked)
+ }
+ server:=&Server{barrier:b,reader:foreignSwarmReader{fakeReader{}}}
+ get:=httptest.NewRecorder()
+ server.getMaintenanceBarrier(get,httptest.NewRequest(http.MethodGet,"/v1/maintenance/barrier",nil))
+ if get.Code!=http.StatusPreconditionFailed {
+   t.Fatalf("GET must not pair B identity with A OPEN: %d %s",get.Code,get.Body.String())
+ }
+}
+type foreignSwarmReader struct{ fakeReader }
+func(foreignSwarmReader) Identity(context.Context)(model.AgentIdentityResponse,error) {
+ return model.AgentIdentityResponse{ClusterID:"swarm-B",NodeID:"manager-b",Manager:true},nil
 }
