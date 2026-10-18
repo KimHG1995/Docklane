@@ -19,6 +19,8 @@ function fixture(failBlock=false) {
       release:async()=>{calls.push('release');}} as never,
     {resolve:async()=>{calls.push('resolve');},
       list:async()=>({admissions:[],dispatch:[]})} as never,
+    {inspectService:async()=>({service:{version:1,specHash:'before'}})} as never,
+    {query:async()=>[[]]} as never,
   );
   return {controller,calls};
 }
