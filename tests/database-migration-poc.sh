@@ -751,6 +751,24 @@ try {
     observation:'all managers blocked, resource unchanged; CP stopped',lease:resolveLease,
     observedUnchanged:{version:2,specHash:'before'},
   }),/verified unchanged resource fingerprint/);
+  await db.query(`CREATE TRIGGER reject_test_manual_recovery_audit BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'MUTATION_MANUALLY_RECONCILED' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'manual recovery audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(() => evidence.resolve({
+      clusterId:'default',generation:16n,type:'DISPATCH',
+      evidenceId:uncertainDispatchId,actorId:'관리자',reason:'verified not applied',
+      observation:'all managers blocked, resource unchanged; CP stopped',lease:resolveLease,
+      observedUnchanged:{version:1,specHash:'before'},
+    }), /manual recovery audit failure/);
+  } finally {
+    await db.query('DROP TRIGGER reject_test_manual_recovery_audit');
+  }
+  const [failedRecovery] = await db.query('SELECT status FROM operations WHERE id=?',[uncertainOpId]);
+  assert.equal(failedRecovery[0].status,'NEEDS_ATTENTION','audit failure rolls back terminalization');
   await evidence.resolve({
     clusterId:'default',generation:16n,type:'DISPATCH',
     evidenceId:uncertainDispatchId,actorId:'관리자',reason:'verified not applied',
