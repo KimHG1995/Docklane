@@ -45,6 +45,7 @@ export class MaintenanceEvidenceRecovery {
     clusterId: string; generation: bigint; type: EvidenceType;
     evidenceId: string; actorId: string; reason: string;
     observation: string; lease: MaintenanceLease;
+    observedUnchanged?: { version: number; specHash: string };
   }): Promise<void> {
     if (!['CLOSING','RECONCILING'].includes((await this.maintenance.requireRecord(input.clusterId)).state) ||
         !input.reason.trim() || !input.observation.trim() ||
@@ -69,13 +70,48 @@ export class MaintenanceEvidenceRecovery {
         [input.evidenceId,input.clusterId]);
       if (evidence.length !== 1) throw new ConflictException('Evidence not found');
       if (input.type === 'DISPATCH') {
-        const [records] = await connection.query<(RowDataPacket & {status:string})[]>(
-          `SELECT status FROM operations WHERE id=(SELECT operation_id FROM maintenance_dispatches WHERE id=?) AND cluster_id=?
-           UNION ALL SELECT status FROM node_operations
-           WHERE id=(SELECT operation_id FROM maintenance_dispatches WHERE id=?) AND cluster_id=?`,
+        const [records] = await connection.query<(RowDataPacket & {
+          id:string;status:string;error_code:string|null;expected_version:number;
+          before_spec_hash:string;resource_id:string;resource_type:string;
+        })[]>(
+          `SELECT id,status,error_code,expected_version,before_spec_hash,
+             service_id AS resource_id,'service' AS resource_type
+           FROM operations WHERE id=(SELECT operation_id FROM maintenance_dispatches WHERE id=?) AND cluster_id=?
+           UNION ALL SELECT id,status,error_code,expected_version,before_spec_hash,
+             node_id AS resource_id,'node' AS resource_type
+           FROM node_operations WHERE id=(SELECT operation_id FROM maintenance_dispatches WHERE id=?) AND cluster_id=?`,
           [input.evidenceId,input.clusterId,input.evidenceId,input.clusterId]);
-        if (records.length !== 1 || !['SUCCESS','FAILED'].includes(records[0]!.status)) {
-          throw new ConflictException('Dispatch operation requires terminal observed outcome');
+        if (records.length !== 1) throw new ConflictException('Dispatch operation missing');
+        const op=records[0]!;
+        if (op.status === 'NEEDS_ATTENTION') {
+          const unchanged=input.observedUnchanged;
+          if (!unchanged || !Number.isSafeInteger(unchanged.version) ||
+              unchanged.version !== Number(op.expected_version) ||
+              unchanged.specHash !== op.before_spec_hash ||
+              !['MUTATION_NOT_OBSERVED','NODE_MUTATION_NOT_OBSERVED'].includes(op.error_code ?? '')) {
+            throw new ConflictException('Manual resolution requires verified unchanged resource fingerprint');
+          }
+          // The caller must supply a fresh Agent observation obtained only
+          // after all Manager handlers were drained. Failure and resolution
+          // are one transaction so no remaining NEEDS_ATTENTION can deadlock
+          // CLOSED. Never infer that the original HTTP call was unsent.
+          const tableName=op.resource_type==='service'?'operations':'node_operations';
+          const [updated]=await connection.execute<ResultSetHeader>(
+            `UPDATE ${tableName} SET status='FAILED',
+             error_code='MANUAL_MUTATION_NOT_OBSERVED',
+             error_message=? WHERE id=? AND cluster_id=? AND status='NEEDS_ATTENTION'
+             AND error_code=? AND expected_version=? AND before_spec_hash=?`,
+            [input.reason,op.id,input.clusterId,op.error_code,unchanged.version,unchanged.specHash]);
+          if(updated.affectedRows!==1) throw new ConflictException('Operation changed while resolving');
+          await connection.execute(
+            `INSERT INTO audit_events
+             (operation_id,actor_id,cluster_id,service_id,resource_type,resource_id,action,after_json)
+             VALUES (?,?,?,?,?,?, 'MUTATION_MANUALLY_RECONCILED',?)`,
+            [op.id,input.actorId,input.clusterId,op.resource_id,op.resource_type,op.resource_id,
+             JSON.stringify({result:'NOT_OBSERVED',observation:input.observation,
+               version:unchanged.version,specHash:unchanged.specHash})]);
+        } else if (!['SUCCESS','FAILED'].includes(op.status)) {
+          throw new ConflictException('Dispatch operation requires terminal outcome');
         }
       }
       // Original evidence is immutable. Unique key prevents overwrite/replay.
