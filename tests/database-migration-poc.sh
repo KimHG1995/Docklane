@@ -729,6 +729,47 @@ try {
   }
   console.log('maintenance real MySQL service/node admission operation linkage: PASS');
 
+  // Isolated MySQL acceptance for the previously deadlocked
+  // NEEDS_ATTENTION / MUTATION_NOT_OBSERVED / UNCERTAIN case.
+  // Fingerprint evidence is fixture data; real endpoint fetches it from Agent
+  // after the complete manager barrier is confirmed.
+  assert.equal(await maintenance.requestClosing('default',15n,'관리자','recovery acceptance'),true);
+  const uncertainOpId='manual-unobserved-svc';
+  await db.query(`INSERT INTO operations
+    (id,cluster_id,service_id,type,status,actor_id,expected_version,
+     before_spec_hash,target_spec_hash,target_force_update,error_code,error_message)
+    VALUES (?,'default','svc-fixture','RESTART','NEEDS_ATTENTION','operator',1,
+      'before','after',1,'MUTATION_NOT_OBSERVED','response lost')`,[uncertainOpId]);
+  const uncertainDispatchId=await journal.prepare('default',16n,'agent-fixture',uncertainOpId);
+  await journal.transition(uncertainDispatchId,'PREPARED','SENDING');
+  await journal.transition(uncertainDispatchId,'SENDING','UNCERTAIN');
+  const resolveLease=await leases.acquire('default',30);
+  await assert.rejects(()=>evidence.resolve({
+    clusterId:'default',generation:16n,type:'DISPATCH',
+    evidenceId:uncertainDispatchId,actorId:'관리자',reason:'verified not applied',
+    observation:'all managers blocked, resource unchanged; CP stopped',lease:resolveLease,
+    observedUnchanged:{version:2,specHash:'before'},
+  }),/verified unchanged resource fingerprint/);
+  await evidence.resolve({
+    clusterId:'default',generation:16n,type:'DISPATCH',
+    evidenceId:uncertainDispatchId,actorId:'관리자',reason:'verified not applied',
+    observation:'all managers blocked, resource unchanged; CP stopped',lease:resolveLease,
+    observedUnchanged:{version:1,specHash:'before'},
+  });
+  const [terminalSvc]=await db.query('SELECT status,error_code FROM operations WHERE id=?',[uncertainOpId]);
+  assert.equal(terminalSvc[0].status,'FAILED');
+  assert.equal(terminalSvc[0].error_code,'MANUAL_MUTATION_NOT_OBSERVED');
+  const [originalDispatch]=await db.query('SELECT phase FROM maintenance_dispatches WHERE id=?',[uncertainDispatchId]);
+  assert.equal(originalDispatch[0].phase,'UNCERTAIN');
+  await assert.rejects(()=>evidence.resolve({
+    clusterId:'default',generation:16n,type:'DISPATCH',
+    evidenceId:uncertainDispatchId,actorId:'관리자',reason:'duplicate',
+    observation:'duplicate',lease:resolveLease,
+    observedUnchanged:{version:1,specHash:'before'},
+  }),/Duplicate entry/);
+  await leases.release(resolveLease);
+  console.log('maintenance actual MySQL unobserved service + uncertain dispatch manual recovery: PASS');
+
   console.log('database migration PoC: PASS');
 } finally {
   await db.onModuleDestroy();
