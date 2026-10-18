@@ -714,8 +714,8 @@ try {
       const callback = async (connection) => {
         const journalId = await journal.prepare('default', 15n, 'agent-disposable', operationId, connection);
         const [rows] = await connection.query(
-          'SELECT operation_id, resource_type FROM maintenance_active_admissions WHERE cluster_id=?',
-          ['default']);
+          'SELECT operation_id, resource_type FROM maintenance_active_admissions WHERE cluster_id=? AND resource_id=?',
+          ['default','test-'+type]);
         assert.equal(rows.length, 1);
         assert.equal(rows[0].operation_id, operationId);
         assert.equal(rows[0].resource_type, resourceType);
