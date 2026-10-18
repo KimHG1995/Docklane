@@ -704,6 +704,31 @@ try {
   await leases.release(evidenceLease);
   console.log('maintenance evidence MySQL audit rollback, immutable record, manual recovery: PASS');
 
+  // Node admission must link the same durable operation ID as service paths.
+  await db.query("UPDATE cluster_maintenance_states SET state='OPEN', generation=15 WHERE cluster_id='default'");
+  process.env.DOCKLANE_MAINTENANCE_ENFORCE='1';
+  try {
+    for (const type of ['service','node']) {
+      const operationId = 'admission-link-' + type;
+      const callback = async (connection) => {
+        const journalId = await journal.prepare('default', 15n, 'agent-disposable', operationId, connection);
+        const [rows] = await connection.query(
+          'SELECT operation_id, resource_type FROM maintenance_active_admissions WHERE cluster_id=?',
+          ['default']);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].operation_id, operationId);
+        assert.equal(rows[0].resource_type, type);
+        await journal.transition(journalId,'PREPARED','REJECTED',connection);
+      };
+      if(type==='service') await admissionLock.withServiceLock('default','test-'+type,callback);
+      else await admissionLock.withNodeAndServiceLocks('default','test-'+type,[],callback);
+    }
+  } finally {
+    if(savedEnforce===undefined) delete process.env.DOCKLANE_MAINTENANCE_ENFORCE;
+    else process.env.DOCKLANE_MAINTENANCE_ENFORCE=savedEnforce;
+  }
+  console.log('maintenance real MySQL service/node admission operation linkage: PASS');
+
   console.log('database migration PoC: PASS');
 } finally {
   await db.onModuleDestroy();
