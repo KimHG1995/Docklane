@@ -65,3 +65,13 @@ Three confirmed P2 defects fixed before release:
 3. **Explicit bootstrap:** Scoped ADMIN initialization checks registration enforcement and fresh live Manager Swarm ID, then uses one transaction for initial OPEN generation 1 plus audit. Replays preserve an existing CLOSING/CLOSED state and ownership. MySQL 8.4 verifies audit failure rollback and idempotence.
 
 **CI is not live Docker acceptance.** Real 3-Manager Swarm plus 2 CP tests, crash/rejoin scenarios, seven Docker mutations, and explicit external Docker CLI/socket permission restrictions still block merge and enabling production enforcement. Keep Draft until independent security/concurrency review and full integration acceptance.
+
+## 2026-10-19 post-review P2 fixes
+
+- Service AND node mutation resource locks propagate the same `withActiveAdmission` AsyncLocalStorage scope. Journal preparation binds the durable operation ID to the admission row for DRAIN / ACTIVATE / LABELS, just as for service scale/restart/deploy/rollback.
+- Unobserved mutation `NEEDS_ATTENTION / MUTATION_NOT_OBSERVED` and `NODE_MUTATION_NOT_OBSERVED` are not automatically terminal. A scoped administrator must first obtain all-manager BLOCKED confirmation; the recovery endpoint fetches a **fresh service/node version + fingerprint** from the Agent and supplies it to one atomic MySQL recovery transaction.
+- That transaction checks current lease and generation, locks the original dispatch and operation, requires the precise unchanged version and before-spec fingerprint, changes only the matching NEEDS_ATTENTION operation to `FAILED / MANUAL_MUTATION_NOT_OBSERVED`, inserts a dedicated operation-recovery audit, and inserts an immutable dispatch evidence resolution with its own audit. All changes roll back together on failure.
+- An earlier CP response loss is never described as definitively unsent. It is a manual administrative determination that the requested Docker mutation is not present at the verified observation boundary; external writers and later changes remain outside Docker atomicity guarantees.
+- The original dispatch is left `UNCERTAIN`; no automatic ACK rewrite, timer expiry or audit-free delete. Only the resolution ledger excludes it from the CLOSED gate.
+- Real MySQL acceptance includes version mismatch refusal, correctly matched service operation + UNCERTAIN resolution, replay refusal and original immutable phase retention, and both service/node admission-operation linkage.
+- Actual 3-manager Docker Swarm and two CP fault injection remains an independent merge blocker.
