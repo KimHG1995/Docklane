@@ -101,8 +101,15 @@ export class RegisteredOperationLock extends OperationLock {
       clusterId, canonicalNodeId, serviceIds,
       (connection) => this.binding.withLockedConnection(connection, async () => {
         const admission = await assertMaintenanceOpen(connection, clusterId, 'node', canonicalNodeId);
-        try { return await fn(connection); }
-        finally { await releaseAdmission(connection, admission); }
+        try {
+          // Node DRAIN, ACTIVATE and LABELS use the same durable admission
+          // context as service mutations. The journal links operation_id
+          // before any Agent mutation can be sent.
+          return await (admission === null ? fn(connection) :
+            withActiveAdmission({ id: admission, clusterId, connection }, () => fn(connection)));
+        } finally {
+          await releaseAdmission(connection, admission);
+        }
       }),
     );
   }
