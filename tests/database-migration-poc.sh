@@ -708,7 +708,8 @@ try {
   await db.query("UPDATE cluster_maintenance_states SET state='OPEN', generation=15 WHERE cluster_id='default'");
   process.env.DOCKLANE_MAINTENANCE_ENFORCE='1';
   try {
-    for (const type of ['service','node']) {
+    for (const type of ['service','drain','activate','labels']) {
+      const resourceType = type === 'service' ? 'service' : 'node';
       const operationId = 'admission-link-' + type;
       const callback = async (connection) => {
         const journalId = await journal.prepare('default', 15n, 'agent-disposable', operationId, connection);
@@ -717,7 +718,7 @@ try {
           ['default']);
         assert.equal(rows.length, 1);
         assert.equal(rows[0].operation_id, operationId);
-        assert.equal(rows[0].resource_type, type);
+        assert.equal(rows[0].resource_type, resourceType);
         await journal.transition(journalId,'PREPARED','REJECTED',connection);
       };
       if(type==='service') await admissionLock.withServiceLock('default','test-'+type,callback);
