@@ -768,8 +768,28 @@ try {
     observation:'duplicate',lease:resolveLease,
     observedUnchanged:{version:1,specHash:'before'},
   }),/Duplicate entry/);
+  // Node reconciliation uses the same audited terminalization contract.
+  const nodeUnobservedId='manual-unobserved-node';
+  await db.query(`INSERT INTO node_operations
+    (id,cluster_id,node_id,type,status,actor_id,expected_version,
+      before_spec_hash,target_spec_hash,target_availability,affected_service_ids,error_code,error_message)
+    VALUES (?,'default','node-fixture','DRAIN','NEEDS_ATTENTION','operator',1,
+      'node-before','node-after','drain','[]','NODE_MUTATION_NOT_OBSERVED','response lost')`,
+    [nodeUnobservedId]);
+  const nodeDispatchId=await journal.prepare('default',16n,'agent-fixture',nodeUnobservedId);
+  await journal.transition(nodeDispatchId,'PREPARED','SENDING');
+  await journal.transition(nodeDispatchId,'SENDING','UNCERTAIN');
+  await evidence.resolve({
+    clusterId:'default',generation:16n,type:'DISPATCH',evidenceId:nodeDispatchId,
+    actorId:'관리자',reason:'node unchanged after blocking all managers',
+    observation:'node version and spec remain unchanged; old CP stopped',
+    lease:resolveLease,observedUnchanged:{version:1,specHash:'node-before'},
+  });
+  const [terminalNode]=await db.query('SELECT status,error_code FROM node_operations WHERE id=?',[nodeUnobservedId]);
+  assert.equal(terminalNode[0].status,'FAILED');
+  assert.equal(terminalNode[0].error_code,'MANUAL_MUTATION_NOT_OBSERVED');
   await leases.release(resolveLease);
-  console.log('maintenance actual MySQL unobserved service + uncertain dispatch manual recovery: PASS');
+  console.log('maintenance actual MySQL unobserved service/node + uncertain dispatch manual recovery: PASS');
 
   console.log('database migration PoC: PASS');
 } finally {
