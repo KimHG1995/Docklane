@@ -1,5 +1,7 @@
 # Roadmap
 
+> **Maintenance PR #137 진행 기준 (2026-10-20)**: DB/Agent 보호, 관리자 상태 전이, 다중 CP Lease, 수동 recovery와 CI는 구현되어 있으나 실제 disposable 3-Manager Swarm + 2 CP의 전 과정 통합 인수는 미완료입니다. 따라서 본문 과거 체크포인트나 `[x]`는 해당 개별 기능·과거 실험을 뜻하며 **현재 PR 병합 또는 운영 준비 완료가 아닙니다.** 남은 검증은 [Maintenance 인수 명세](MAINTENANCE_FEATURE_ACCEPTANCE.md)를 따릅니다.
+
 Docklane은 기능 수보다 **안전하게 복구 가능한 하나의 deployment vertical slice**를 먼저 완성한다.
 
 버전 번호는 구현 단계이며, production readiness를 의미하지 않는다.
