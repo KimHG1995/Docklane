@@ -846,6 +846,111 @@ try {
   await leases.release(resolveLease);
   console.log('maintenance actual MySQL unobserved service/node + uncertain dispatch manual recovery: PASS');
 
+
+  // Regression: startup reconciliation holds the real MySQL resource lock.
+  // Manual resolution must not perform Agent observation until it acquires
+  // the same lock. Retrying after release must succeed without re-sending.
+  const raceServiceId = 'maintenance-race-svc';
+  const raceOperationId = 'maintenance-race-operation';
+  await db.query(\`INSERT INTO operations
+    (id,cluster_id,service_id,type,status,actor_id,expected_version,
+      before_spec_hash,target_spec_hash,target_force_update,error_code,error_message)
+    VALUES (?,'default',?,'RESTART','NEEDS_ATTENTION','operator',1,
+      'race-before','race-after',1,'MUTATION_NOT_OBSERVED','response lost')\`,
+    [raceOperationId,raceServiceId]);
+  const raceDispatchId = await journal.prepare('default',16n,'agent-fixture',raceOperationId);
+  await journal.transition(raceDispatchId,'PREPARED','SENDING');
+  await journal.transition(raceDispatchId,'SENDING','UNCERTAIN');
+  const raceLease = await leases.acquire('default',30);
+  let releaseServiceLock;
+  let enteredServiceLock;
+  const serviceEntered = new Promise(resolve => { enteredServiceLock=resolve; });
+  const holdService = new Promise(resolve => { releaseServiceLock=resolve; });
+  const holder = admissionLock.withServiceRecoveryLock('default',raceServiceId,async()=>{
+    enteredServiceLock();
+    await holdService;
+  });
+  await serviceEntered;
+  let serviceObservations = 0;
+  const raceResolve = {
+    clusterId:'default',generation:16n,type:'DISPATCH',evidenceId:raceDispatchId,
+    actorId:'관리자',reason:'observed unchanged after CP termination',
+    observation:'all managers BLOCKED and service fingerprint unchanged',
+    lease:raceLease,
+    observeResource:async()=>{
+      serviceObservations++;
+      return {version:1,specHash:'race-before'};
+    },
+  };
+  try {
+    await assert.rejects(()=>evidence.resolve(raceResolve),/Another mutation is in progress/);
+    assert.equal(serviceObservations,0,'manual recovery cannot observe before resource lock');
+    const [heldState]=await db.query('SELECT status FROM operations WHERE id=?',[raceOperationId]);
+    assert.equal(heldState[0].status,'NEEDS_ATTENTION');
+  } finally {
+    releaseServiceLock();
+    await holder;
+  }
+  await evidence.resolve(raceResolve);
+  assert.equal(serviceObservations,1);
+  const [raceTerminal]=await db.query('SELECT status,error_code FROM operations WHERE id=?',[raceOperationId]);
+  assert.equal(raceTerminal[0].status,'FAILED');
+  assert.equal(raceTerminal[0].error_code,'MANUAL_MUTATION_NOT_OBSERVED');
+  const lateConn=await db.getConnection();
+  try {
+    await new OperationRepository(db).markSuccess(lateConn,raceOperationId,2);
+    const [protectedState]=await lateConn.query('SELECT status,error_code FROM operations WHERE id=?',[raceOperationId]);
+    assert.equal(protectedState[0].status,'FAILED');
+    assert.equal(protectedState[0].error_code,'MANUAL_MUTATION_NOT_OBSERVED');
+  } finally { lateConn.release(); }
+
+  // Node recovery also locks every affected service. A simultaneous service
+  // recovery must prevent node manual terminalization before observation.
+  const raceNodeId='maintenance-race-node';
+  const raceNodeOp='maintenance-race-node-operation';
+  const affectedService='maintenance-shared-service';
+  await db.query(\`INSERT INTO node_operations
+    (id,cluster_id,node_id,type,status,actor_id,expected_version,
+      before_spec_hash,target_spec_hash,target_availability,affected_service_ids,
+      error_code,error_message)
+    VALUES (?,'default',?,'DRAIN','NEEDS_ATTENTION','operator',1,
+      'node-race-before','node-race-after','drain',?,
+      'NODE_MUTATION_NOT_OBSERVED','response lost')\`,
+    [raceNodeOp,raceNodeId,JSON.stringify([affectedService])]);
+  const nodeRaceDispatchId=await journal.prepare('default',16n,'agent-fixture',raceNodeOp);
+  await journal.transition(nodeRaceDispatchId,'PREPARED','SENDING');
+  await journal.transition(nodeRaceDispatchId,'SENDING','UNCERTAIN');
+  let releaseSharedLock;
+  let enteredSharedLock;
+  const sharedEntered=new Promise(resolve=>{enteredSharedLock=resolve;});
+  const holdShared=new Promise(resolve=>{releaseSharedLock=resolve;});
+  const sharedHolder=admissionLock.withServiceRecoveryLock('default',affectedService,async()=>{
+    enteredSharedLock();await holdShared;
+  });
+  await sharedEntered;
+  let nodeObservations=0;
+  const nodeRaceResolve={
+    clusterId:'default',generation:16n,type:'DISPATCH',
+    evidenceId:nodeRaceDispatchId,actorId:'관리자',
+    reason:'node unchanged after confirmed CP termination',
+    observation:'all manager barriers BLOCKED, node and affected service checked',
+    lease:raceLease,
+    observeResource:async()=>{
+      nodeObservations++;return {version:1,specHash:'node-race-before'};
+    },
+  };
+  try {
+    await assert.rejects(()=>evidence.resolve(nodeRaceResolve),/Another mutation is in progress/);
+    assert.equal(nodeObservations,0,'node recovery must wait for affected service lock');
+  } finally { releaseSharedLock();await sharedHolder; }
+  await evidence.resolve(nodeRaceResolve);
+  assert.equal(nodeObservations,1);
+  const [nodeRaceTerminal]=await db.query('SELECT status,error_code FROM node_operations WHERE id=?',[raceNodeOp]);
+  assert.equal(nodeRaceTerminal[0].status,'FAILED');
+  assert.equal(nodeRaceTerminal[0].error_code,'MANUAL_MUTATION_NOT_OBSERVED');
+  await leases.release(raceLease);
+  console.log('maintenance real MySQL service/node recovery lock contention, observation ordering, terminal CAS: PASS');
+
   console.log('database migration PoC: PASS');
 } finally {
   await db.onModuleDestroy();
