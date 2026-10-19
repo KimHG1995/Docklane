@@ -1,29 +1,29 @@
-# Maintenance 상태 전이 구현 단계
+# Maintenance 상태 전이 — 구현과 인수 상태
 
-이 문서는 PR #135의 영속 조회 경계 이후 단계의 **DB primitive** 계약이다. 아직 HTTP 관리 API나 Docklane 서비스/노드 mutation 경로에 연결되지 않았다.
-
-## 초기화
-- 등록된 논리 cluster에만 operator가 명시적으로 OPEN row를 생성한다.
-- row 부재는 OPEN이 아니며 읽기/시작/마이그레이션 중 자동 초기화하지 않는다.
-- 중복 초기화는 기존 CLOSING/CLOSED/RECONCILING 상태를 절대 OPEN으로 돌리지 않는다.
-- 현재 repository primitive에는 ADMIN authorization 경계가 없다. 향후 서비스/컨트롤러가 scoped ADMIN, 등록된 실제 Swarm identity 및 감사 기록을 강제하기 전 운영용 엔드포인트에 노출하지 않는다.
+> PR #137 / 최신 코드 기준. **제품 로직 및 MySQL 회귀 구현**, 실제 3-Manager Swarm·2 CP 인수 **미완료**. 운영 enforcement 활성화 및 병합 금지.
 
 ## 상태 전이
-`OPEN → CLOSING → CLOSED → RECONCILING → OPEN`만 허용한다.
-세대 번호를 비교하는 CAS로 오래된 실행자의 상태 변경을 거절한다. 이것만으로 Docker API 호출을 fence할 수 없으며, DB 체크 직후 외부 writer/다중 Agent 재가입 경쟁은 남는다.
 
-- OPEN → CLOSING: 신규 mutation admission 및 대기 중 dispatch가 **모든 CP에서 차단됨을 증명**해야 한다.
-- CLOSING → CLOSED: in-flight 전송 상태가 모두 확인되고 모든 manager Agent barrier를 확인해야 한다.
-- CLOSED → RECONCILING: 유지보수 후 운영자 동의, 클러스터 identity 재등록과 소유권 검증이 필요하다.
-- RECONCILING → OPEN: 미확정 작업 재조정, 전체 manager 확인, 관리자의 명시적 재개 승인 필요.
+`OPEN → CLOSING → CLOSED → RECONCILING → OPEN`
 
-**현 PR은 위 선행조건을 검사하지 않는다.** 단순 CAS를 운영용으로 직접 사용하면 위험하다. 다음 PR에서 domain service, authorization, 감사 및 dispatch gate가 선행조건을 강제해야 한다.
+- **초기화**: Scoped ADMIN `POST /v1/clusters/:clusterId/maintenance/initialize`; 등록 enforce, 실제 Swarm Identity 및 감사 INSERT를 검증. 재요청으로 기존 상태를 OPEN으로 변경하지 않음.
+- **CLOSING**: Scoped ADMIN close-request. 새로운 admission과 최종 Agent dispatch를 차단하고 CP 재시작 후에도 복구 경로(관측만)를 유지.
+- **CLOSED**: 모든 Manager의 generation 기반 BLOCKED ACK를 확보하고, 미해결 operation/dispatch/admission 0건 및 현재 CP Lease를 하나의 MySQL 트랜잭션에서 검사한 뒤 감사와 함께 확정.
+- **RECONCILING**: 관리자가 명시적으로 진입. Manager 차단, 원본 증거 보존, UNCERTAIN·NEEDS_ATTENTION에 대한 수동 관측·감사 경로를 유지.
+- **OPEN 재개**: 전체 Manager가 BLOCKED인 것을 다시 확인하고 미정리 작업이 없을 때 감사와 DB OPEN을 커밋. 그 이후에만 각 Agent OPEN으로 전환. 부분 ACK 유실 시 `resume-managers`로 동일 세대를 재확인.
 
-## 인수 기준
-- 기존 등록이 없는 cluster는 초기화 실패.
-- 중복 초기화가 상태/세대/소유자를 바꾸지 않음.
-- 잘못된 상태 전이, 0 generation, stale generation 거절.
-- DB outage/missing row에서도 mutation 허용으로 fallback하지 않음.
-- 다중 CP, Agent barrier, in-flight 확인은 별도 제품 구현과 real MySQL 통합 검증 필요.
+## 복구 계약
 
-참조: [Swarm 상호배제 정책](SWARM_MUTATION_EXCLUSION.md), [ROADMAP](ROADMAP.md).
+- 서비스/노드/DEPLOY/ROLLBACK은 기존 operation과 배포의 연결 관계를 보존한다.
+- 미관측 변경은 관리자와 Agent 실시간 관측이 확인된 범위에서만 수동 FAILED로 종료. 원본 UNCERTAIN dispatch와 rollback 이력은 수정·삭제하지 않음.
+- 자원 Lock 경합 중 관리자 복구 관측을 시작하지 않는다. 관리자 처리 중 경합이 나면 409, Lock 해제 후 재시도.
+- 이미 확정된 수동 종료 결과는 기존 비동기 상태 writer가 덮어쓰지 못한다.
+- MySQL Lease token은 재획득할 때마다 증가하며 오래된 실행자의 DB 확정을 거절한다. Docker Engine의 원자적 cluster fencing과는 별개.
+
+## 검증 경계
+
+- CI: API/Go/MySQL PoC/mTLS/validation gate와 11개 상태 writer 보호가 통과한 범위만 인정한다.
+- 추가 회귀: 서비스/노드 복구 Lock 경합, 복구 관측 순서, DEPLOY/ROLLBACK 해결 및 감사 rollback을 저장소 테스트로 유지.
+- **미실행**: 실제 3 Manager/독립 Agent + 2 CP 동시 구동, Docker mutation 전송 유실, Manager 재시작, 실제 leave/rejoin, 외부 Docker 소켓 권한 통제.
+
+[실제 인수 기준](MAINTENANCE_FEATURE_ACCEPTANCE.md) · [상호배제 위협 모델](SWARM_MUTATION_EXCLUSION.md) · [Roadmap](ROADMAP.md)
