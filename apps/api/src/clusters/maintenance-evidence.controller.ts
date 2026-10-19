@@ -82,30 +82,37 @@ export class MaintenanceEvidenceController {
       // finish; incomplete Manager coverage MUST prevent evidence recovery.
       await this.barrier.blockAll(
         clusterId, this.binding.settings.expectedSwarmClusterId!, generation);
-      // Read the recorded operation target, then obtain a fresh Docker
-      // fingerprint only AFTER all manager mutation handlers are blocked.
-      let observedUnchanged: {version:number;specHash:string} | undefined;
-      if (input.type === 'DISPATCH') {
-        const [rows] = await this.db.query<import('mysql2/promise').RowDataPacket[]>(
-          `SELECT o.service_id AS resourceId,'service' AS kind FROM maintenance_dispatches d
-           JOIN operations o ON o.id=d.operation_id AND o.cluster_id=d.cluster_id
-           WHERE d.id=? AND d.cluster_id=?
-           UNION ALL SELECT n.node_id AS resourceId,'node' AS kind
-           FROM maintenance_dispatches d JOIN node_operations n
-             ON n.id=d.operation_id AND n.cluster_id=d.cluster_id
-           WHERE d.id=? AND d.cluster_id=?`,
-          [input.evidenceId,clusterId,input.evidenceId,clusterId]);
-        if (rows.length !== 1) throw new ConflictException('Dispatch operation identity is ambiguous');
-        const item=rows[0]!;
-        const actual=item.kind==='service'
-          ? (await this.agent.inspectService(item.resourceId as string)).service
-          : (await this.agent.inspectNode(item.resourceId as string)).node;
-        observedUnchanged={version:actual.version,specHash:actual.specHash};
-      }
+      // The resolver acquires the identical resource recovery lock used by
+      // bootstrap reconciliation. Inspect only INSIDE that lock so neither a
+      // stale observation nor a concurrently resolving CP can authorize a
+      // different operation outcome.
+      const observeResource = input.type === 'DISPATCH'
+        ? async () => {
+            const [rows] = await this.db.query<import('mysql2/promise').RowDataPacket[]>(
+              `SELECT o.service_id AS resourceId, 'service' AS kind
+               FROM maintenance_dispatches d JOIN operations o
+                 ON o.id = d.operation_id AND o.cluster_id = d.cluster_id
+               WHERE d.id = ? AND d.cluster_id = ?
+               UNION ALL SELECT n.node_id AS resourceId, 'node' AS kind
+               FROM maintenance_dispatches d JOIN node_operations n
+                 ON n.id = d.operation_id AND n.cluster_id = d.cluster_id
+               WHERE d.id = ? AND d.cluster_id = ?`,
+              [input.evidenceId, clusterId, input.evidenceId, clusterId],
+            );
+            if (rows.length !== 1) {
+              throw new ConflictException('Dispatch operation identity is ambiguous');
+            }
+            const item = rows[0]!;
+            const actual = item.kind === 'service'
+              ? (await this.agent.inspectService(item.resourceId as string)).service
+              : (await this.agent.inspectNode(item.resourceId as string)).node;
+            return { version: actual.version, specHash: actual.specHash };
+          }
+        : undefined;
       await this.recovery.resolve({
         clusterId, generation, type: input.type as EvidenceType,
         evidenceId: input.evidenceId, actorId, reason: input.reason,
-        observation: input.observation, lease, observedUnchanged,
+        observation: input.observation, lease, observeResource,
       });
       return { resolved: true, evidenceId: input.evidenceId };
     } finally {
