@@ -852,11 +852,11 @@ try {
   // the same lock. Retrying after release must succeed without re-sending.
   const raceServiceId = 'maintenance-race-svc';
   const raceOperationId = 'maintenance-race-operation';
-  await db.query(\`INSERT INTO operations
+  await db.query(`INSERT INTO operations
     (id,cluster_id,service_id,type,status,actor_id,expected_version,
       before_spec_hash,target_spec_hash,target_force_update,error_code,error_message)
     VALUES (?,'default',?,'RESTART','NEEDS_ATTENTION','operator',1,
-      'race-before','race-after',1,'MUTATION_NOT_OBSERVED','response lost')\`,
+      'race-before','race-after',1,'MUTATION_NOT_OBSERVED','response lost')`,
     [raceOperationId,raceServiceId]);
   const raceDispatchId = await journal.prepare('default',16n,'agent-fixture',raceOperationId);
   await journal.transition(raceDispatchId,'PREPARED','SENDING');
@@ -909,13 +909,13 @@ try {
   const raceNodeId='maintenance-race-node';
   const raceNodeOp='maintenance-race-node-operation';
   const affectedService='maintenance-shared-service';
-  await db.query(\`INSERT INTO node_operations
+  await db.query(`INSERT INTO node_operations
     (id,cluster_id,node_id,type,status,actor_id,expected_version,
       before_spec_hash,target_spec_hash,target_availability,affected_service_ids,
       error_code,error_message)
     VALUES (?,'default',?,'DRAIN','NEEDS_ATTENTION','operator',1,
       'node-race-before','node-race-after','drain',?,
-      'NODE_MUTATION_NOT_OBSERVED','response lost')\`,
+      'NODE_MUTATION_NOT_OBSERVED','response lost')`,
     [raceNodeOp,raceNodeId,JSON.stringify([affectedService])]);
   const nodeRaceDispatchId=await journal.prepare('default',16n,'agent-fixture',raceNodeOp);
   await journal.transition(nodeRaceDispatchId,'PREPARED','SENDING');
