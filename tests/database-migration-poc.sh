@@ -59,6 +59,8 @@ import { ClusterMaintenanceRepository } from './apps/api/dist/clusters/cluster-m
 import { MaintenanceDispatchJournal } from './apps/api/dist/clusters/maintenance-dispatch-journal.js';
 import { MaintenanceControlLease } from './apps/api/dist/clusters/maintenance-control-lease.js';
 import { MaintenanceEvidenceRecovery } from './apps/api/dist/clusters/maintenance-evidence-recovery.js';
+import { OperationRepository } from './apps/api/dist/operations/operation.repository.js';
+import { NodeOperationRepository } from './apps/api/dist/operations/node-operation.repository.js';
 
 const db = new Database();
 
@@ -806,6 +808,41 @@ try {
   const [terminalNode]=await db.query('SELECT status,error_code FROM node_operations WHERE id=?',[nodeUnobservedId]);
   assert.equal(terminalNode[0].status,'FAILED');
   assert.equal(terminalNode[0].error_code,'MANUAL_MUTATION_NOT_OBSERVED');
+  // Simulate late persistence from a second CP using the actual repository
+  // state writers. A committed manual FAILED outcome must be terminal even if
+  // an observation made before the resolution arrives afterward.
+  const serviceOperations = new OperationRepository(db);
+  const nodeOperations = new NodeOperationRepository(db);
+  const staleWrites = [
+    () => serviceOperations.markRunning(staleConnection, uncertainOpId),
+    () => serviceOperations.markVerifying(staleConnection, uncertainOpId, 2),
+    () => serviceOperations.markVerificationPending(staleConnection, uncertainOpId, 'STALE', 'stale observation'),
+    () => serviceOperations.markSuccess(staleConnection, uncertainOpId, 2),
+    () => serviceOperations.markNeedsAttention(staleConnection, uncertainOpId, 'MUTATION_NOT_OBSERVED', 'stale observation'),
+    () => serviceOperations.markFailed(staleConnection, uncertainOpId, 'STALE', 'stale observation'),
+    () => nodeOperations.markRunning(staleConnection, nodeUnobservedId),
+    () => nodeOperations.markVerifying(staleConnection, nodeUnobservedId, 2),
+    () => nodeOperations.markSuccess(staleConnection, nodeUnobservedId, 2),
+    () => nodeOperations.markNeedsAttention(staleConnection, nodeUnobservedId, 'NODE_MUTATION_NOT_OBSERVED', 'stale observation'),
+    () => nodeOperations.markFailed(staleConnection, nodeUnobservedId, 'STALE', 'stale observation'),
+  ];
+  const staleConnection = await db.getConnection();
+  try {
+    for (const write of staleWrites) {
+      await write();
+      const [service] = await staleConnection.query(
+        'SELECT status,error_code FROM operations WHERE id=?',[uncertainOpId]);
+      const [node] = await staleConnection.query(
+        'SELECT status,error_code FROM node_operations WHERE id=?',[nodeUnobservedId]);
+      assert.equal(service[0].status,'FAILED');
+      assert.equal(service[0].error_code,'MANUAL_MUTATION_NOT_OBSERVED');
+      assert.equal(node[0].status,'FAILED');
+      assert.equal(node[0].error_code,'MANUAL_MUTATION_NOT_OBSERVED');
+    }
+  } finally {
+    staleConnection.release();
+  }
+  console.log('maintenance real MySQL 11 stale service/node state updates retain terminal FAILED: PASS');
   await leases.release(resolveLease);
   console.log('maintenance actual MySQL unobserved service/node + uncertain dispatch manual recovery: PASS');
 
