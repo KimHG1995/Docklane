@@ -8,6 +8,8 @@ import { HttpAgentClient } from './http-agent.client.js';
 import { ClusterBindingModule } from '../clusters/cluster-binding.module.js';
 import { ClusterBindingPolicy } from '../clusters/cluster-binding.policy.js';
 import { Database } from '../db/database.js';
+import { OperationLock } from '../operations/operation-lock.js';
+import { RegisteredOperationLock } from '../clusters/registered-operation-lock.js';
 import { MaintenanceDispatchJournal } from '../clusters/maintenance-dispatch-journal.js';
 import { MaintenanceManagerBarrier } from '../clusters/maintenance-manager-barrier.js';
 import { MaintenanceCloseController } from '../clusters/maintenance-close.controller.js';
@@ -34,6 +36,7 @@ import type { AgentClient } from './agent-client.js';
     ClusterMaintenanceRepository,
     MaintenanceManagerBarrier,
     MaintenanceEvidenceRecovery,
+    { provide: OperationLock, useFactory: (db: Database, policy: ClusterBindingPolicy) => new RegisteredOperationLock(db, policy), inject: [Database, ClusterBindingPolicy] },
     HttpAgentClient,
     { provide: AGENT_CLIENT,
       useFactory: (raw: HttpAgentClient, policy: ClusterBindingPolicy, db: Database): AgentClient => registeredAgentClient(raw, policy, db),
