@@ -18,6 +18,7 @@ interface ResolveEvidenceInput {
   observation: string;
   lease: MaintenanceLease;
   observedUnchanged?: { version: number; specHash: string };
+  observeResource?: () => Promise<{ version: number; specHash: string }>;
 }
 
 type LockedResource =
@@ -110,7 +111,12 @@ export class MaintenanceEvidenceRecovery {
         const resource: LockedResource = { type: 'service', id: row.resourceId };
         return this.operationLock.withServiceRecoveryLock(
           input.clusterId, resource.id,
-          (connection) => this.resolveWithinTransaction(connection, input, resource),
+          async (connection) => this.resolveWithinTransaction(connection, {
+            ...input,
+            observedUnchanged: input.observeResource
+              ? await input.observeResource()
+              : input.observedUnchanged,
+          }, resource),
         );
       }
       if (row.resourceType === 'node') {
@@ -120,7 +126,12 @@ export class MaintenanceEvidenceRecovery {
         };
         return this.operationLock.withNodeRecoveryLocks(
           input.clusterId, resource.id, resource.affectedServiceIds,
-          (connection) => this.resolveWithinTransaction(connection, input, resource),
+          async (connection) => this.resolveWithinTransaction(connection, {
+            ...input,
+            observedUnchanged: input.observeResource
+              ? await input.observeResource()
+              : input.observedUnchanged,
+          }, resource),
         );
       }
       throw new ConflictException('Unsupported dispatch resource');
