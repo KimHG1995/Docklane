@@ -677,7 +677,7 @@ try {
     (id,cluster_id,generation,owner_id,resource_type,resource_id)
     VALUES (?, 'default', 11, '99999999-9999-4999-9999-999999999999','service','orphan-test')`,
     [recoveryEvidenceId]);
-  const evidence = new MaintenanceEvidenceRecovery(db, maintenance, leases);
+  const evidence = new MaintenanceEvidenceRecovery(db, maintenance, leases, admissionLock);
   assert.equal(await maintenance.countActiveAdmissions('default'), 1n);
   const evidenceLease = await leases.acquire('default',30);
   const resolveInput = {clusterId:'default',generation:12n,type:'ADMISSION',
