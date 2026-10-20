@@ -951,6 +951,84 @@ try {
   await leases.release(raceLease);
   console.log('maintenance real MySQL service/node recovery lock contention, observation ordering, terminal CAS: PASS');
 
+
+  // Real MySQL deployment + rollback linkage recovery. The service adapter
+  // observation is controlled fixture data, not a claimed Docker deployment.
+  await db.query("INSERT INTO applications (id,name) VALUES ('maint-app','maintenance-fixture')");
+  await db.query(`INSERT INTO deployment_targets
+    (id,application_id,cluster_id,environment,docker_service_id,service_name,routing_mode)
+    VALUES ('maint-target','maint-app','default','test','maint-deploy-service','fixture','INGRESS')`);
+  await db.query(`INSERT INTO releases
+    (id,application_id,version,image_repository,image_digest,created_by)
+    VALUES ('maint-release','maint-app','v1','fixture/image',?,'operator')`,
+    ['sha256:'+'a'.repeat(64)]);
+  await db.query(`INSERT INTO operations
+    (id,cluster_id,service_id,type,status,actor_id,expected_version,
+      before_spec_hash,target_spec_hash,target_force_update,error_code,error_message)
+    VALUES ('maint-deploy-op','default','maint-deploy-service','DEPLOY','NEEDS_ATTENTION',
+      'operator',1,'deploy-before','deploy-after',0,
+      'DEPLOYMENT_MUTATION_NOT_OBSERVED','response lost')`);
+  await db.query(`INSERT INTO deployments
+    (id,release_id,deployment_target_id,operation_id,status,
+      before_spec,target_spec,health_json,expected_service_version,created_by)
+    VALUES ('maint-deployment','maint-release','maint-target','maint-deploy-op',
+      'NEEDS_ATTENTION','{}','{}','{}',1,'operator')`);
+  const deployDispatch=await journal.prepare('default',16n,'agent-fixture','maint-deploy-op');
+  await journal.transition(deployDispatch,'PREPARED','SENDING');
+  await journal.transition(deployDispatch,'SENDING','UNCERTAIN');
+  const deploymentLease=await leases.acquire('default',30);
+  const deploymentResolve={clusterId:'default',generation:16n,type:'DISPATCH',
+    evidenceId:deployDispatch,actorId:'관리자',reason:'deployment unobserved',
+    observation:'all managers blocked and original service fingerprint observed',
+    lease:deploymentLease,observedUnchanged:{version:1,specHash:'deploy-before'}};
+  await db.query(`CREATE TRIGGER reject_maintenance_deploy_recovery BEFORE INSERT ON audit_events
+    FOR EACH ROW BEGIN
+      IF NEW.action = 'CLUSTER_MAINTENANCE_EVIDENCE_RESOLVED' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'deployment recovery audit failure';
+      END IF;
+    END`);
+  try {
+    await assert.rejects(()=>evidence.resolve(deploymentResolve),/deployment recovery audit failure/);
+  } finally { await db.query('DROP TRIGGER reject_maintenance_deploy_recovery'); }
+  const [deployBefore]=await db.query("SELECT status FROM deployments WHERE id='maint-deployment'");
+  assert.equal(deployBefore[0].status,'NEEDS_ATTENTION');
+  await evidence.resolve(deploymentResolve);
+  const [deployAfter]=await db.query("SELECT status FROM deployments WHERE id='maint-deployment'");
+  const [deployOpAfter]=await db.query("SELECT status FROM operations WHERE id='maint-deploy-op'");
+  assert.equal(deployAfter[0].status,'FAILED');
+  assert.equal(deployOpAfter[0].status,'FAILED');
+
+  await db.query(`INSERT INTO operations
+    (id,cluster_id,service_id,type,status,actor_id,expected_version,
+      before_spec_hash,target_spec_hash,target_force_update,error_code,error_message)
+    VALUES ('maint-rollback-op','default','maint-deploy-service','ROLLBACK','VERIFYING',
+      'operator',1,'rollback-before','rollback-after',0,
+      'ROLLBACK_STILL_IN_PROGRESS','response lost')`);
+  await db.query(`UPDATE deployments SET status='ROLLBACK_VERIFYING',
+    rollback_operation_id='maint-rollback-op' WHERE id='maint-deployment'`);
+  await db.query(`INSERT INTO rollback_attempts (operation_id,deployment_id)
+    VALUES ('maint-rollback-op','maint-deployment')`);
+  const rollbackDispatch=await journal.prepare('default',16n,'agent-fixture','maint-rollback-op');
+  await journal.transition(rollbackDispatch,'PREPARED','SENDING');
+  await journal.transition(rollbackDispatch,'SENDING','UNCERTAIN');
+  await evidence.resolve({clusterId:'default',generation:16n,type:'DISPATCH',
+    evidenceId:rollbackDispatch,actorId:'관리자',reason:'rollback not observed',
+    observation:'all manager agents blocked; before fingerprint still present',
+    lease:deploymentLease,observedUnchanged:{version:1,specHash:'rollback-before'}});
+  const [rollbackRows]=await db.query("SELECT status FROM operations WHERE id='maint-rollback-op'");
+  const [rollbackDeployment]=await db.query("SELECT status,rollback_operation_id FROM deployments WHERE id='maint-deployment'");
+  const [history]=await db.query("SELECT operation_id FROM rollback_attempts WHERE operation_id='maint-rollback-op'");
+  const [phases]=await db.query("SELECT operation_id,phase FROM maintenance_dispatches WHERE id IN (?,?)",
+    [deployDispatch,rollbackDispatch]);
+  assert.equal(rollbackRows[0].status,'FAILED');
+  assert.equal(rollbackDeployment[0].status,'FAILED');
+  assert.equal(rollbackDeployment[0].rollback_operation_id,'maint-rollback-op');
+  assert.equal(history.length,1);
+  assert.equal(phases.length,2);
+  assert.ok(phases.every(r=>r.phase==='UNCERTAIN'));
+  await leases.release(deploymentLease);
+  console.log('maintenance real MySQL DEPLOY/ROLLBACK recovery links, rollback history and audit rollback: PASS');
+
   console.log('database migration PoC: PASS');
 } finally {
   await db.onModuleDestroy();
