@@ -25,6 +25,7 @@ type mutationBarrier struct {
 	enabled bool
 	invalid bool
 	state   barrierState
+	syncDirectory func(string) error
 }
 
 type barrierState struct {
@@ -43,6 +44,11 @@ const barrierGenerationHeader = "X-Docklane-Maintenance-Generation"
 func newMutationBarrier(path string) *mutationBarrier {
 	b := &mutationBarrier{path: path, enabled: path != "", state: barrierState{State: "BLOCKED", Generation: "0"}}
 	if !b.enabled {
+		return b
+	}
+	// A prior write that could not confirm durability must never restore OPEN.
+	if _, err := os.Stat(path + ".pending"); err == nil || !os.IsNotExist(err) {
+		b.invalid = true
 		return b
 	}
 	raw, err := os.ReadFile(path)
@@ -225,6 +231,7 @@ func (s *Server) setMaintenanceBarrier(w http.ResponseWriter, r *http.Request) {
 		// A failed persist keeps this process blocked, not opportunistically OPEN.
 		if err := b.persist(next); err != nil {
 			b.state.State = "BLOCKED"
+			b.invalid = true
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"code": "MAINTENANCE_BARRIER_PERSIST_FAILED", "error": "barrier state could not be persisted",
 			})
@@ -238,8 +245,31 @@ func (s *Server) setMaintenanceBarrier(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// A durable pending marker is written and synced before the replacement.
+// Any interrupted/uncertain write then fails closed across process restarts.
+// The marker is removed only after the state file and directory are synced.
 func (b *mutationBarrier) persist(state barrierState) error {
 	directory := filepath.Dir(b.path)
+	marker := b.path + ".pending"
+	syncDir := b.syncDirectory
+	if syncDir == nil {
+		syncDir = syncBarrierDirectory
+	}
+	pending, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return fmt.Errorf("create maintenance pending marker: %w", err)
+	}
+	if err := pending.Sync(); err != nil {
+		pending.Close()
+		return err
+	}
+	if err := pending.Close(); err != nil {
+		return err
+	}
+	if err := syncDir(directory); err != nil {
+		return err
+	}
+
 	file, err := os.CreateTemp(directory, ".docklane-barrier-*")
 	if err != nil {
 		return err
@@ -269,13 +299,22 @@ func (b *mutationBarrier) persist(state barrierState) error {
 	if err := os.Rename(name, b.path); err != nil {
 		return err
 	}
+	if err := syncDir(directory); err != nil {
+		return fmt.Errorf("sync maintenance state directory: %w", err)
+	}
+	// If removal is interrupted, the marker can remain after reboot.
+	// That is conservative: an operator must reconcile and clear it.
+	if err := os.Remove(marker); err != nil {
+		return fmt.Errorf("remove maintenance pending marker: %w", err)
+	}
+	return nil
+}
+
+func syncBarrierDirectory(directory string) error {
 	dir, err := os.Open(directory)
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("sync maintenance state directory: %w", err)
-	}
-	return nil
+	return dir.Sync()
 }
