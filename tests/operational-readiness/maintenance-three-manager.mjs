@@ -153,15 +153,15 @@ try {
     const deadline=setTimeout(()=>reject(new Error('CP never acquired its lease')),15000);
     killedCp.stdout.on('data',chunk=>{
       buffer+=chunk.toString();
-      if(buffer.includes('\\n')){
+      if(buffer.includes('\n')){
         clearTimeout(deadline);
-        try {resolve(JSON.parse(buffer.split('\\n')[0]));}
+        try {resolve(JSON.parse(buffer.split('\n')[0]));}
         catch(error){reject(error);}
       }
     });
     killedCp.once('error',reject);
     killedCp.once('exit',(code,signal)=>{
-      if(!buffer.includes('\\n'))reject(new Error(`CP exited before lease: ${code}/${signal}`));
+      if(!buffer.includes('\n'))reject(new Error(`CP exited before lease: ${code}/${signal}`));
     });
   });
   assert.equal(ownedLease.holding,true);
