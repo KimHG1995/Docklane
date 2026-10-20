@@ -40,6 +40,7 @@ const evidence = {
   close:'not-run', recovery:'not-run',
   partialReopen:'not-run', responseLostAfterApply:'not-run', rejoin:'not-run',
   scaleSuccess:'not-run',nodeDrainSuccess:'not-run',nodeActivateSuccess:'not-run',
+  imageSuccess:'not-run',rollbackSuccess:'not-run',
 };
 const db = new Database();
 const docker = (...args) => execFileSync('docker', args, {encoding:'utf8',timeout:120000}).trim();
@@ -282,6 +283,41 @@ try {
       before:snapshot.node.version,after:after.node.version,
     };
   }
+  // Real image update and rollback, on a zero-replica disposable service.
+  // This exercises Docker ServiceUpdate without requiring an image pull.
+  const imageBefore=await raw.inspectService(serviceId);
+  const imageTarget='alpine:3.19';
+  const imagePlan=await raw.planUpdateServiceImage(serviceId,imageBefore.service.version,imageTarget);
+  const imageUpdated=await operationLock.withServiceLock('default',serviceId,
+    ()=>withMutationOperation('maint-real-image-'+randomUUID(),
+      ()=>guarded.updateServiceImage(serviceId,{
+        expectedVersion:imagePlan.version,
+        expectedSpecHash:imagePlan.beforeSpecHash,
+        targetSpecHash:imagePlan.targetSpecHash,
+        image:imageTarget,
+      })));
+  assert.equal(imageUpdated.serviceId,serviceId);
+  const imageAfter=await raw.inspectService(serviceId);
+  assert.ok(imageAfter.service.version>imageBefore.service.version,
+    'image update must increment real Docker service version');
+  evidence.imageSuccess={before:imageBefore.service.version,after:imageAfter.service.version};
+
+  const rollbackPlan=await raw.planRollbackService(serviceId,imageAfter.service.version);
+  const rolledBack=await operationLock.withServiceLock('default',serviceId,
+    ()=>withMutationOperation('maint-real-rollback-'+randomUUID(),
+      ()=>guarded.rollbackService(serviceId,{
+        expectedVersion:rollbackPlan.version,
+        expectedSpecHash:rollbackPlan.beforeSpecHash,
+        targetSpecHash:rollbackPlan.targetSpecHash,
+      })));
+  assert.equal(rolledBack.serviceId,serviceId);
+  const rollbackAfter=await raw.inspectService(serviceId);
+  assert.ok(rollbackAfter.service.version>imageAfter.service.version,
+    'rollback must increment real Docker service version');
+  assert.equal(rollbackAfter.service.specHash,rollbackPlan.targetSpecHash,
+    'rollback must restore the planned service specification');
+  evidence.rollbackSuccess={before:imageAfter.service.version,after:rollbackAfter.service.version};
+
   // Baselines for the later BLOCKED/stale probes must match the *last*
   // successful Docker update, not the earlier restart/label update.
   const postSuccessService=await raw.inspectService(serviceId);
