@@ -35,7 +35,7 @@ const containers = {
 const evidence = {
   topology: 'not-run', lease: 'not-run',
   serviceUpdate: 'not-run', nodeUpdate:'not-run',
-  blockAll:'not-run', blockedRoutes:'not-run',
+  blockAll:'not-run', blockedRoutes:'not-run', staleRoutes:'not-run',
   close:'not-run', recovery:'not-run',
   partialReopen:'not-run', rejoin:'not-run',
 };
@@ -163,6 +163,7 @@ try {
   const newVersion=Number(docker('exec',containers['manager-01'],'docker',
     'service','inspect',serviceId,'--format','{{.Version.Index}}'));
   assert.ok(newVersion>oldVersion,'real ServiceUpdate must reach Docker');
+  const blockedServiceFingerprint=(await raw.inspectService(serviceId)).service.specHash;
   evidence.serviceUpdate={serviceId,oldVersion,newVersion};
 
   // Real NodeUpdate on an owned disposable manager, with replicas=0 service.
@@ -208,14 +209,30 @@ try {
     ];
     const results=[];
     for(const manager of selected)for(const path of paths){
-      const result=await postMutationTo(manager.agentId,path,expected,1n);
+      // P2 regression: use the CURRENT (BLOCKED) generation, not a stale one.
+      // A stale-generation-only guard returning 409 must NOT pass this test.
+      const result=await postMutationTo(manager.agentId,path,expected,2n);
       assert.equal(result.status,409,`${manager.agentId} ${path}: ${result.body}`);
-      results.push({manager:manager.agentId,path,status:result.status});
+      const response=JSON.parse(result.body);
+      assert.equal(response.code,'MAINTENANCE_AGENT_BLOCKED',
+        `expected BLOCKED rejection at current generation: ${manager.agentId} ${path}`);
+      results.push({manager:manager.agentId,path,status:result.status,
+        requestGeneration:'2',code:response.code});
     }
     assert.equal(results.length,21);
-    assert.equal(Number(docker('exec',containers['manager-01'],'docker',
-      'service','inspect',serviceId,'--format','{{.Version.Index}}')),newVersion);
-    evidence.blockedRoutes=results;
+    const blockedService=await raw.inspectService(serviceId);
+    const blockedNode=await raw.inspectNode(targetNode.nodeId);
+    assert.equal(blockedService.service.version,newVersion,
+      'BLOCKED must not invoke Docker ServiceUpdate');
+    assert.equal(blockedService.service.specHash,blockedServiceFingerprint,
+      'BLOCKED must preserve service spec fingerprint');
+    assert.equal(blockedNode.node.version,afterNode.node.version,
+      'BLOCKED must not invoke Docker NodeUpdate');
+    assert.equal(blockedNode.node.specHash,afterNode.node.specHash,
+      'BLOCKED must preserve node spec fingerprint');
+    evidence.blockedRoutes={cases:results,
+      unchangedService:{version:blockedService.service.version,specHash:blockedService.service.specHash},
+      unchangedNode:{version:blockedNode.node.version,specHash:blockedNode.node.specHash}};
     assert.equal(await maintenance.commitClosed('default',2n,'acceptance-admin',
       'all handlers drained and evidence reconciled',blocked.blockedManagerIds,closedLease),true);
     assert.equal((await maintenance.requireRecord('default')).state,'CLOSED');
@@ -245,6 +262,36 @@ try {
   const resumed=await barrier.openAll('default',expected,5n);
   assert.equal(resumed.openManagerIds.length,3);
   evidence.partialReopen=resumed;
+
+  // Independent stale-generation assertion while every manager is OPEN.
+  // It must be MAINTENANCE_GENERATION_STALE rather than AGENT_BLOCKED.
+  const stalePaths=[
+    '/v2/services/'+serviceId+'/scale',
+    '/v2/services/'+serviceId+'/restart',
+    '/v2/services/'+serviceId+'/image',
+    '/v2/services/'+serviceId+'/rollback',
+    '/v2/nodes/'+targetNode.nodeId+'/drain',
+    '/v2/nodes/'+targetNode.nodeId+'/activate',
+    '/v2/nodes/'+targetNode.nodeId+'/labels',
+  ];
+  const staleResults=[];
+  for(const manager of selected)for(const path of stalePaths){
+    const result=await postMutationTo(manager.agentId,path,expected,4n);
+    assert.equal(result.status,409,`expected stale generation rejection: ${manager.agentId} ${path}`);
+    const response=JSON.parse(result.body);
+    assert.equal(response.code,'MAINTENANCE_GENERATION_STALE',
+      `wrong 409 rejection reason: ${manager.agentId} ${path}`);
+    staleResults.push({manager:manager.agentId,path,status:result.status,
+      requestGeneration:'4',currentGeneration:'5',code:response.code});
+  }
+  assert.equal(staleResults.length,21);
+  const staleService=await raw.inspectService(serviceId);
+  const staleNode=await raw.inspectNode(targetNode.nodeId);
+  assert.equal(staleService.service.version,newVersion);
+  assert.equal(staleService.service.specHash,blockedServiceFingerprint);
+  assert.equal(staleNode.node.version,afterNode.node.version);
+  assert.equal(staleNode.node.specHash,afterNode.node.specHash);
+  evidence.staleRoutes=staleResults;
 
   // Rejoin is tested LAST: it deliberately changes one owned manager's
   // cluster ID and must not be mistaken for a successful barrier read.
