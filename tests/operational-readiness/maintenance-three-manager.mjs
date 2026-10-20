@@ -1,3 +1,4 @@
+import { createPostApplyResponseLossProxy } from './maintenance-response-loss-proxy.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -37,7 +38,7 @@ const evidence = {
   serviceUpdate: 'not-run', nodeUpdate:'not-run',
   blockAll:'not-run', blockedRoutes:'not-run', staleRoutes:'not-run',
   close:'not-run', recovery:'not-run',
-  partialReopen:'not-run', rejoin:'not-run',
+  partialReopen:'not-run', responseLostAfterApply:'not-run', rejoin:'not-run',
 };
 const db = new Database();
 const docker = (...args) => execFileSync('docker', args, {encoding:'utf8',timeout:120000}).trim();
@@ -292,6 +293,51 @@ try {
   assert.equal(staleNode.node.version,afterNode.node.version);
   assert.equal(staleNode.node.specHash,afterNode.node.specHash);
   evidence.staleRoutes=staleResults;
+
+  // Apply a *real* Docker update and lose only its HTTP response.
+  // The relay forwards identity, barrier and plan reads to the real mTLS Agent.
+  // It destroys the CP-facing response only after Agent confirms a 200 update.
+  const proxy=await createPostApplyResponseLossProxy({
+    targetUrl:registry.agents[0].baseUrl,cert,key,ca,
+  });
+  try {
+    const relayClient=new HttpAgentClient({
+      primaryId:'relay',expectedClusterId:expected,
+      agents:[{id:'relay',baseUrl:proxy.baseUrl,insecureDev:true}],
+    },journal);
+    const relayGuard=registeredAgentClient(relayClient,policy,db);
+    const snapshot=await relayClient.inspectService(serviceId);
+    const plan=await relayClient.planRestartService(serviceId,snapshot.service.version);
+    const uncertainId='maint-real-response-loss-'+randomUUID();
+    const beforeLostVersion=snapshot.service.version;
+    const send=()=>operationLock.withServiceLock('default',serviceId,
+      ()=>withMutationOperation(uncertainId,()=>relayGuard.restartService(serviceId,{
+        expectedVersion:plan.version,
+        expectedSpecHash:plan.beforeSpecHash,
+        targetSpecHash:plan.targetSpecHash,
+      })));
+    await assert.rejects(send(),/transport|response|closed|aborted|socket|ECONNRESET/i);
+    const afterLost=await raw.inspectService(serviceId);
+    assert.ok(afterLost.service.version>beforeLostVersion,
+      'Docker mutation MUST have been applied even though CP lost the response');
+    const [record]=await db.query(
+      "SELECT phase,operation_id FROM maintenance_dispatches WHERE operation_id=?",
+      [uncertainId]);
+    assert.equal(record.length,1);
+    assert.equal(record[0].phase,'UNCERTAIN');
+    assert.equal(record[0].operation_id,uncertainId);
+    await assert.rejects(send(),/Existing mutation dispatch evidence/);
+    const duplicateCheck=await raw.inspectService(serviceId);
+    assert.equal(duplicateCheck.service.version,afterLost.service.version,
+      'retry after uncertain result MUST NOT send another Docker update');
+    assert.equal(proxy.events.filter(e=>e.acknowledgedByAgent).length,1,
+      'proxy must prove one successful real Agent response before dropping it');
+    evidence.responseLostAfterApply={
+      operationId:uncertainId,versionBefore:beforeLostVersion,
+      versionAfter:afterLost.service.version,phase:record[0].phase,
+      events:proxy.events,
+    };
+  } finally {await proxy.close();}
 
   // Rejoin is tested LAST: it deliberately changes one owned manager's
   // cluster ID and must not be mistaken for a successful barrier read.
