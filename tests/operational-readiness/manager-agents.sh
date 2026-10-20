@@ -160,10 +160,13 @@ start_agent() {
   docker exec "$container" test -s /etc/docklane/agent-ca.crt
   docker exec "$container" test -s /etc/docklane/agent.crt
   docker exec "$container" test -s /etc/docklane/agent.key
-  docker exec "$container" sh -c '
+  local -a maintenance_flags=()
+  if [[ "${DOCKLANE_OR_MAINTENANCE_ACCEPTANCE:-0}" == "1" ]]; then
+    maintenance_flags=(-e DOCKLANE_AGENT_MAINTENANCE_STATE_FILE=/etc/docklane/maintenance-state.json)
+  fi
+  docker exec "${maintenance_flags[@]}" "$container" sh -c '
     DOCKER_HOST=unix:///var/run/docker.sock \
     DOCKLANE_AGENT_ADDR=0.0.0.0:9443 \
-    ${DOCKLANE_OR_MAINTENANCE_AGENT_ENV:-} \
     DOCKLANE_AGENT_TLS_CERT_FILE=/etc/docklane/agent.crt \
     DOCKLANE_AGENT_TLS_KEY_FILE=/etc/docklane/agent.key \
     DOCKLANE_AGENT_TLS_CA_FILE=/etc/docklane/agent-ca.crt \
