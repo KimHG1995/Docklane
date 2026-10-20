@@ -75,3 +75,11 @@ Three confirmed P2 defects fixed before release:
 - The original dispatch is left `UNCERTAIN`; no automatic ACK rewrite, timer expiry or audit-free delete. Only the resolution ledger excludes it from the CLOSED gate.
 - Real MySQL acceptance includes version mismatch refusal, correctly matched service operation + UNCERTAIN resolution, replay refusal and original immutable phase retention, and both service/node admission-operation linkage.
 - Actual 3-manager Docker Swarm and two CP fault injection remains an independent merge blocker.
+
+## 2026-10-20 실제 3-Manager 통합 인수 1차 실행
+
+[GitHub Actions #39347891686](https://github.com/KimHG1995/Docklane/actions/runs/39347891686) — **PASS**, artifact `docklane-maintenance-three-manager-39347891686` (ID `12231962020`), 27개 증거 파일 업로드 및 소유권 기반 cleanup PASS.
+
+전용 workflow `maintenance-three-manager-acceptance.yml`은 소유한 Docker-in-Docker Manager 3대, 각자의 mTLS Go Agent/영속 barrier 파일과 MySQL 8.4를 생성한다. 별도 OS 프로세스 CP의 Lease 획득 경쟁 및 소유권 교체/구 token 거절, 실제 ServiceUpdate(재시작), 실제 NodeUpdate(라벨), 전 Manager BLOCKED ACK, 7종 경로×3 Manager = 21건의 차단 요청, audit-backed CLOSED 및 RECONCILING→OPEN, Manager 한 대 Agent 응답 유실 후 재시작/재개방, 마지막에 강제 Swarm leave/init 후 이전 cluster barrier 조회/변경 412 거절을 검증했다.
+
+**검증 범위 제한**: 이 1차 실행은 정상 Control Plane 클래스와 DB 경로/독립 Lease 프로세스를 사용하는 실환경 시험이다. 별도 CP 두 대가 동일한 전체 API 서버로 동시에 트래픽을 처리하면서 SIGKILL되는 경우, Docker API 응답을 주입해 전송 중/후에 유실시키는 경우, 7종 **실제 변경 성공 경로**(21건의 차단 시험과 구별), DEPLOY/ROLLBACK 애플리케이션 전체 흐름의 실제 장애 주입 및 제한된 Docker 소켓 운영 권한은 아직 입증되지 않았다. 따라서 PR Draft 및 생산 enforcement 금지는 유지한다.
