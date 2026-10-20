@@ -9,6 +9,7 @@ on:
       - '.github/workflows/maintenance-three-manager-acceptance.yml'
       - 'tests/operational-readiness/maintenance-three-manager.mjs'
       - 'tests/operational-readiness/maintenance-cp-worker.mjs'
+      - 'tests/operational-readiness/maintenance-response-loss-proxy.mjs'
       - 'tests/operational-readiness/manager-agents.sh'
   workflow_dispatch:
 
@@ -39,6 +40,7 @@ jobs:
         run: |
           node --check tests/operational-readiness/maintenance-three-manager.mjs
           node --check tests/operational-readiness/maintenance-cp-worker.mjs
+          node --check tests/operational-readiness/maintenance-response-loss-proxy.mjs
           bash -n tests/operational-readiness/manager-agents.sh
           docker info
           test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = inactive
