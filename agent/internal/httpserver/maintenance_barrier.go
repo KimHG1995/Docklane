@@ -20,11 +20,11 @@ import (
 // every earlier mutation handler returned. This does not block direct Docker
 // CLI/socket writers outside Docklane.
 type mutationBarrier struct {
-	mu      sync.RWMutex
-	path    string
-	enabled bool
-	invalid bool
-	state   barrierState
+	mu            sync.RWMutex
+	path          string
+	enabled       bool
+	invalid       bool
+	state         barrierState
 	syncDirectory func(string) error
 }
 
