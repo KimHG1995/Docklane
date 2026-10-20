@@ -168,3 +168,30 @@ func TestBarrierPostRenameSyncFailureRemainsBlockedAfterRestart(t *testing.T) {
 		t.Fatalf("pending marker must survive failure: %v", err)
 	}
 }
+
+func TestBarrierPendingMarkerPreventsRestartAfterInitialSyncFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	b := newMutationBarrier(path)
+	b.syncDirectory = func(string) error {
+		return errors.New("injected initial pending-marker directory sync failure")
+	}
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	s.barrier = b
+	req := httptest.NewRequest(http.MethodPut, "/v1/maintenance/barrier",
+		strings.NewReader(`{"clusterId":"cluster-1","generation":"1","state":"OPEN"}`))
+	resp := httptest.NewRecorder()
+	s.setMaintenanceBarrier(resp, req)
+	if resp.Code != http.StatusServiceUnavailable || !b.invalid {
+		t.Fatalf("initial sync error must fail closed: status=%d invalid=%v", resp.Code, b.invalid)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("state file should not be replaced after initial marker sync failure: %v", err)
+	}
+	if _, err := os.Stat(path + ".pending"); err != nil {
+		t.Fatalf("pending marker must remain: %v", err)
+	}
+	restarted := newMutationBarrier(path)
+	if !restarted.invalid || restarted.state.State == "OPEN" {
+		t.Fatal("restarted barrier must not become OPEN after failed initial sync")
+	}
+}
