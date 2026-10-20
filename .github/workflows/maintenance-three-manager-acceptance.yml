@@ -1,0 +1,68 @@
+name: maintenance-three-manager-acceptance
+
+# Deliberately separate from fast PR validation. This workflow owns three
+# privileged DinD containers and may change only their Swarm topology.
+on:
+  push:
+    branches: [feat/maintenance-enforcement]
+    paths:
+      - '.github/workflows/maintenance-three-manager-acceptance.yml'
+      - 'tests/operational-readiness/maintenance-three-manager.mjs'
+      - 'tests/operational-readiness/maintenance-cp-worker.mjs'
+      - 'tests/operational-readiness/manager-agents.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docklane-maintenance-three-manager
+  cancel-in-progress: false
+
+jobs:
+  real-maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - run: corepack enable
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @docklane/api build
+      - name: Verify acceptance helper syntax and disposable host
+        run: |
+          node --check tests/operational-readiness/maintenance-three-manager.mjs
+          node --check tests/operational-readiness/maintenance-cp-worker.mjs
+          bash -n tests/operational-readiness/manager-agents.sh
+          docker info
+          test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = inactive
+      - name: Build Go Manager Agent
+        working-directory: agent
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o "${RUNNER_TEMP}/docklane-agent" ./cmd/docklane-agent
+      - name: Real three-manager maintenance acceptance
+        env:
+          DOCKLANE_OR_MAINTENANCE_ACCEPTANCE: '1'
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-maintenance-acceptance
+          DOCKLANE_MANAGER_AGENT_BINARY: ${{ runner.temp }}/docklane-agent
+        run: bash tests/operational-readiness/manager-agents.sh
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docklane-maintenance-three-manager-${{ github.run_id }}
+          path: ${{ runner.temp }}/docklane-maintenance-acceptance
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Destroy only owned DinD and MySQL fixtures
+        if: always()
+        env:
+          DOCKLANE_OR_LOG_DIR: ${{ runner.temp }}/docklane-maintenance-acceptance
+        run: bash tests/operational-readiness/cleanup.sh
