@@ -92,3 +92,13 @@ Three confirmed P2 defects fixed before release:
 - After all Managers explicitly reopen at generation 5, 7 paths × 3 Managers (21 **separate** probes) with obsolete generation 4 must return 409 with `code=MAINTENANCE_GENERATION_STALE`; service/node Version/SpecHash must stay unchanged.
 - These tests detect an accidentally removed Agent BLOCKED guard even if stale-generation checking survives. Actual Docker update success was already covered for service restart/node labels in the same disposable scenario, not all seven mutation success cases.
 - Scope still outstanding: simultaneous two resident CP API servers and SIGKILL while active, Docker mutation response loss **after** daemon application, full seven successful mutations, DEPLOY/ROLLBACK end-to-end faults, CLOSED-time rejoin before reopen, and operational Docker socket permissions. Do not mark these as passed based on a 409 assertion.
+
+## 2026-10-20 최신 재검증 (823e268)
+
+- [실제 3-Manager 인수 #39374137080](https://github.com/KimHG1995/Docklane/actions/runs/39374137080) — PASS. 독립 CP SIGKILL, DB 기준 Lease 만료 후 재획득, 더 높은 fencing token 및 이전 owner 거절을 포함한 기존 통합 하네스 전체 성공.
+- [일반 검증 #39374140609](https://github.com/KimHG1995/Docklane/actions/runs/39374140609) — 실행된 검증 Job 모두 PASS (조건부 skipped Job 제외).
+- `maintenance-three-manager.mjs`의 Worker stdout 구분자를 리터럴 `\\n` 검색에서 실제 줄바꿈 검색으로 수정한 커밋 [823e268](https://github.com/KimHG1995/Docklane/commit/823e26860a57957650058cebabcb87751e0e29f2)에서 재검증.
+
+**검증되지 않은 범위 (병합 차단):** 7종 모두의 정상 Docker 변경 성공 경로, 전체 DEPLOY/ROLLBACK 장애 주입, 실서비스 2개 CP 동시 API 수신 및 강제 종료, CLOSED 도중 Manager 재가입, 외부 Docker socket/CLI 제한의 운영 입증, 독립 보안·동시성 리뷰. 성공한 기존 하네스를 이 항목들의 PASS로 확대 해석하지 않는다.
+
+**추가 리뷰 필요:** Go Agent barrier의 `persist()`가 rename 이후 디렉터리 fsync에서 실패하는 경우, setter는 현재 프로세스 상태만 BLOCKED로 내린다. OPEN 전환 중 이러한 실패가 발생하면 재시작에서 파일에 남은 OPEN을 재수용할 위험이 있는지 장애 주입으로 확인하고, 복구 시 안전성을 증명할 때까지 완료로 분류하지 않는다.
