@@ -1,6 +1,6 @@
 import { createPostApplyResponseLossProxy } from './maintenance-response-loss-proxy.mjs';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
@@ -141,6 +141,52 @@ try {
     await assert.rejects(()=>leases.assertOwner(staleConnection,own),/fenced/);
   } finally {staleConnection.release();}
   evidence.lease={original:own.token.toString(),replacement:adopted.token,staleRefused:true};
+  // Kill an independently running CP while it owns a live DB lease.
+  // A second CP must not take over until the DB-clock expiry, after which
+  // the new fencing token must prevent the killed owner from writing.
+  const killedCp=spawn(process.execPath,
+    ['tests/operational-readiness/maintenance-cp-worker.mjs','--hold-for-sigkill'],{
+      cwd:process.cwd(),env:process.env,stdio:['ignore','pipe','pipe'],
+    });
+  const ownedLease=await new Promise((resolve,reject)=>{
+    let buffer='';
+    const deadline=setTimeout(()=>reject(new Error('CP never acquired its lease')),15000);
+    killedCp.stdout.on('data',chunk=>{
+      buffer+=chunk.toString();
+      if(buffer.includes('\\n')){
+        clearTimeout(deadline);
+        try {resolve(JSON.parse(buffer.split('\\n')[0]));}
+        catch(error){reject(error);}
+      }
+    });
+    killedCp.once('error',reject);
+    killedCp.once('exit',(code,signal)=>{
+      if(!buffer.includes('\\n'))reject(new Error(`CP exited before lease: ${code}/${signal}`));
+    });
+  });
+  assert.equal(ownedLease.holding,true);
+  await assert.rejects(()=>leases.acquire('default',5),/Another Control Plane/);
+  killedCp.kill('SIGKILL');
+  await new Promise(resolve=>killedCp.once('exit',resolve));
+  await assert.rejects(()=>leases.acquire('default',5),/Another Control Plane/,
+    'SIGKILL cannot release an unexpired lease prematurely');
+  let afterCrash;
+  const start=Date.now();
+  while(Date.now()-start<12000){
+    try {afterCrash=await leases.acquire('default',5);break;}
+    catch(error){
+      if(!/Another Control Plane/.test(String(error)))throw error;
+      await sleep(300);
+    }
+  }
+  assert.ok(afterCrash,'Expired CP lease must eventually be claimable');
+  assert.ok(afterCrash.token>BigInt(ownedLease.token));
+  await leases.release(afterCrash);
+  evidence.lease.crashRecovery={
+    killedToken:ownedLease.token,successorToken:afterCrash.token.toString(),
+    killedSignal:'SIGKILL',prematureTakeoverDenied:true,
+  };
+
 
   // Real ServiceUpdate through the journalled CP -> mTLS Agent -> Docker path.
   serviceId=docker('exec',containers['manager-01'],'docker','service','create',
