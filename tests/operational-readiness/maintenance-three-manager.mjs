@@ -286,7 +286,12 @@ try {
   // Real image update and rollback, on a zero-replica disposable service.
   // This exercises Docker ServiceUpdate without requiring an image pull.
   const imageBefore=await raw.inspectService(serviceId);
-  const imageTarget='alpine:3.19';
+  // Agent intentionally rejects mutable tags; resolve on the owned DinD daemon.
+  docker('exec',containers['manager-01'],'docker','pull','alpine:3.19');
+  const imageTarget=docker('exec',containers['manager-01'],'docker','image','inspect',
+    'alpine:3.19','--format','{{index .RepoDigests 0}}');
+  assert.match(imageTarget,/^alpine@sha256:[a-f0-9]{64}$/,
+    'image mutation must use an immutable digest reference');
   const imagePlan=await raw.planUpdateServiceImage(serviceId,imageBefore.service.version,imageTarget);
   const imageUpdated=await operationLock.withServiceLock('default',serviceId,
     ()=>withMutationOperation('maint-real-image-'+randomUUID(),
