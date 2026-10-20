@@ -84,17 +84,6 @@ function restartOwnedAgent(manager) {
   ].join(' ');
   docker('exec',container,'sh','-c',command);
 }
-async function identityEventually(raw, manager) {
-  for (let i=0;i<30;i++) {
-    try {
-      // Explicit non-failover endpoint probing via manager barrier read.
-      const config=registry.agents.find(a=>a.id===manager);
-      const response=await fetch(config.baseUrl+'/v1/health');
-      if(response.ok)return;
-    } catch { /* mTLS is required; see direct identity below */ }
-    await new Promise(r=>setTimeout(r,100));
-  }
-}
 const sleep = ms=>new Promise(r=>setTimeout(r,ms));
 async function waitAgentBarrier(raw, agentId, nodeId, clusterId, generation,state) {
   let last;
@@ -111,8 +100,15 @@ try {
   await db.onModuleInit();
   process.env.DOCKLANE_MAINTENANCE_ENFORCE='1';
   const reg=new ClusterRegistrationRepository(db);
-  const record=await reg.find('default');
-  assert.equal(record?.swarmClusterId,expected);
+  const initialManager = new HttpAgentClient(registry);
+  const liveIdentity = await initialManager.identity();
+  assert.equal(liveIdentity.clusterId,expected);
+  const record=await reg.register({
+    clusterId:'default',swarmClusterId:expected,
+    displayName:'disposable-maintenance-acceptance',
+    registeredBy:'acceptance-admin',verifiedNodeId:liveIdentity.nodeId,
+  });
+  assert.equal(record.swarmClusterId,expected);
   const policy=new ClusterBindingPolicy(reg,{
     mode:'enforce',logicalClusterId:'default',expectedSwarmClusterId:expected,
   });
@@ -252,7 +248,8 @@ try {
 
   // Rejoin is tested LAST: it deliberately changes one owned manager's
   // cluster ID and must not be mistaken for a successful barrier read.
-  const manager03Ip=process.env.DOCKLANE_MANAGER_03_IP;
+  const manager03Ip=docker('inspect','--format',
+    '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',containers['manager-03']);
   docker('exec',containers['manager-03'],'docker','swarm','leave','--force');
   docker('exec',containers['manager-03'],'docker','swarm','init','--advertise-addr',manager03Ip);
   const foreign=docker('exec',containers['manager-03'],'docker','info',
