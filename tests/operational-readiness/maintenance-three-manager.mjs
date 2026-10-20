@@ -126,6 +126,9 @@ try {
   for(const manager of selected) {
     await raw.openConfiguredManager(manager.agentId,manager.nodeId,expected,1n);
     await raw.inspectManagerBarrier(manager.agentId,manager.nodeId,expected,1n,'OPEN');
+    // Healthy OPEN persistence must clear its crash-safety pending marker.
+    docker('exec',containers[manager.agentId],'sh','-c',
+      'test ! -e /etc/docklane/maintenance-state.json.pending');
   }
   // Two independent CP processes compete on exactly the same persisted lease.
   const own=await leases.acquire('default',30);
@@ -243,6 +246,10 @@ try {
     const blocked=await barrier.blockAll('default',expected,2n);
     assert.deepEqual(blocked.blockedManagerIds,registry.agents.map(a=>a.id).sort());
     evidence.blockAll=blocked;
+    for (const manager of selected) {
+      docker('exec',containers[manager.agentId],'sh','-c',
+        'test ! -e /etc/docklane/maintenance-state.json.pending');
+    }
 
     // All seven actual mutation HTTP routes must reject before Docker dispatch.
     const paths=[
