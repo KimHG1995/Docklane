@@ -39,6 +39,7 @@ const evidence = {
   blockAll:'not-run', blockedRoutes:'not-run', staleRoutes:'not-run',
   close:'not-run', recovery:'not-run',
   partialReopen:'not-run', responseLostAfterApply:'not-run', rejoin:'not-run',
+  scaleSuccess:'not-run',nodeDrainSuccess:'not-run',nodeActivateSuccess:'not-run',
 };
 const db = new Database();
 const docker = (...args) => execFileSync('docker', args, {encoding:'utf8',timeout:120000}).trim();
@@ -239,6 +240,57 @@ try {
   evidence.nodeUpdate={nodeId:targetNode.nodeId,
     beforeVersion:beforeNode.node.version,afterVersion:afterNode.node.version};
 
+  // Additional successful mutation paths through the journaled CP/Agent boundary.
+  // The disposable service has zero replicas, so scale-to-1 is deliberately
+  // avoided until capacity and workload convergence acceptance is separate.
+  const liveScaleBefore=await raw.inspectService(serviceId);
+  const scalePlan=await raw.planScaleService(serviceId,liveScaleBefore.service.version,0);
+  const scaled=await operationLock.withServiceLock('default',serviceId,
+    ()=>withMutationOperation('maint-real-scale-'+randomUUID(),
+      ()=>guarded.scaleService(serviceId,{
+        expectedVersion:scalePlan.version,
+        expectedSpecHash:scalePlan.beforeSpecHash,
+        targetSpecHash:scalePlan.targetSpecHash,
+        replicas:0,
+      })));
+  assert.equal(scaled.serviceId,serviceId);
+  const liveScaleAfter=await raw.inspectService(serviceId);
+  assert.ok(liveScaleAfter.service.version>liveScaleBefore.service.version,
+    'scale success path must cause actual Docker ServiceUpdate');
+  evidence.scaleSuccess={before:liveScaleBefore.service.version,after:liveScaleAfter.service.version};
+
+  for(const [action,planner,mutation] of [
+    ['drain','planDrainNode','drainNode'],
+    ['activate','planActivateNode','activateNode'],
+  ]) {
+    const snapshot=await raw.inspectNode(targetNode.nodeId);
+    const plan=await raw[planner](targetNode.nodeId,snapshot.node.version);
+    const response=await operationLock.withNodeAndServiceLocks('default',
+      targetNode.nodeId,plan.affectedServiceIds,
+      ()=>withMutationOperation('maint-real-node-'+action+'-'+randomUUID(),
+        ()=>guarded[mutation](targetNode.nodeId,{
+          expectedVersion:plan.version,
+          expectedSpecHash:plan.beforeSpecHash,
+          targetSpecHash:plan.targetSpecHash,
+          expectedServiceIds:plan.affectedServiceIds,
+        })));
+    assert.equal(response.nodeId,targetNode.nodeId);
+    const after=await raw.inspectNode(targetNode.nodeId);
+    assert.ok(after.node.version>snapshot.node.version,
+      action+' must cause actual Docker NodeUpdate');
+    evidence['node'+action[0].toUpperCase()+action.slice(1)+'Success']={
+      before:snapshot.node.version,after:after.node.version,
+    };
+  }
+  // Baselines for the later BLOCKED/stale probes must match the *last*
+  // successful Docker update, not the earlier restart/label update.
+  const postSuccessService=await raw.inspectService(serviceId);
+  const postSuccessNode=await raw.inspectNode(targetNode.nodeId);
+  const lastServiceVersion=postSuccessService.service.version;
+  const lastNodeVersion=postSuccessNode.node.version;
+  const lastServiceFingerprint=postSuccessService.service.specHash;
+  const lastNodeFingerprint=postSuccessNode.node.specHash;
+
   assert.equal(await maintenance.requestClosing('default',1n,'acceptance-admin','drain all managers'),true);
   const closedLease=await leases.acquire('default',30);
   try {
@@ -276,13 +328,13 @@ try {
     assert.equal(results.length,21);
     const blockedService=await raw.inspectService(serviceId);
     const blockedNode=await raw.inspectNode(targetNode.nodeId);
-    assert.equal(blockedService.service.version,newVersion,
+    assert.equal(blockedService.service.version,lastServiceVersion,
       'BLOCKED must not invoke Docker ServiceUpdate');
-    assert.equal(blockedService.service.specHash,blockedServiceFingerprint,
+    assert.equal(blockedService.service.specHash,lastServiceFingerprint,
       'BLOCKED must preserve service spec fingerprint');
-    assert.equal(blockedNode.node.version,afterNode.node.version,
+    assert.equal(blockedNode.node.version,lastNodeVersion,
       'BLOCKED must not invoke Docker NodeUpdate');
-    assert.equal(blockedNode.node.specHash,afterNode.node.specHash,
+    assert.equal(blockedNode.node.specHash,lastNodeFingerprint,
       'BLOCKED must preserve node spec fingerprint');
     evidence.blockedRoutes={cases:results,
       unchangedService:{version:blockedService.service.version,specHash:blockedService.service.specHash},
@@ -341,10 +393,10 @@ try {
   assert.equal(staleResults.length,21);
   const staleService=await raw.inspectService(serviceId);
   const staleNode=await raw.inspectNode(targetNode.nodeId);
-  assert.equal(staleService.service.version,newVersion);
-  assert.equal(staleService.service.specHash,blockedServiceFingerprint);
-  assert.equal(staleNode.node.version,afterNode.node.version);
-  assert.equal(staleNode.node.specHash,afterNode.node.specHash);
+  assert.equal(staleService.service.version,lastServiceVersion);
+  assert.equal(staleService.service.specHash,lastServiceFingerprint);
+  assert.equal(staleNode.node.version,lastNodeVersion);
+  assert.equal(staleNode.node.specHash,lastNodeFingerprint);
   evidence.staleRoutes=staleResults;
 
   // Apply a *real* Docker update and lose only its HTTP response.
