@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -133,4 +134,37 @@ type foreignSwarmReader struct{ fakeReader }
 
 func (foreignSwarmReader) Identity(context.Context) (model.AgentIdentityResponse, error) {
 	return model.AgentIdentityResponse{ClusterID: "swarm-B", NodeID: "manager-b", Manager: true}, nil
+}
+
+func TestBarrierPostRenameSyncFailureRemainsBlockedAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	b := newMutationBarrier(path)
+	calls := 0
+	b.syncDirectory = func(dir string) error {
+		calls++
+		if calls == 2 {
+			return errors.New("injected directory fsync failure after rename")
+		}
+		return syncBarrierDirectory(dir)
+	}
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	s.barrier = b
+	req := httptest.NewRequest(http.MethodPut, "/v1/maintenance/barrier",
+		strings.NewReader(`{"clusterId":"cluster-1","generation":"1","state":"OPEN"}`))
+	resp := httptest.NewRecorder()
+	s.setMaintenanceBarrier(resp, req)
+	if resp.Code != http.StatusServiceUnavailable || !b.invalid || b.state.State != "BLOCKED" {
+		t.Fatalf("failed persistence must block in process: status=%d invalid=%v state=%s",
+			resp.Code, b.invalid, b.state.State)
+	}
+	if calls != 2 {
+		t.Fatalf("expected failure after rename, got %d syncs", calls)
+	}
+	restarted := newMutationBarrier(path)
+	if !restarted.invalid || restarted.state.State == "OPEN" {
+		t.Fatal("pending marker must prevent reopening after uncertain write")
+	}
+	if _, err := os.Stat(path + ".pending"); err != nil {
+		t.Fatalf("pending marker must survive failure: %v", err)
+	}
 }
