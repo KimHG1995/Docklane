@@ -41,6 +41,7 @@ const evidence = {
   partialReopen:'not-run', responseLostAfterApply:'not-run', rejoin:'not-run',
   scaleSuccess:'not-run',nodeDrainSuccess:'not-run',nodeActivateSuccess:'not-run',
   imageSuccess:'not-run',rollbackSuccess:'not-run',
+  imageResponseLostAfterApply:'not-run',
 };
 const db = new Database();
 const docker = (...args) => execFileSync('docker', args, {encoding:'utf8',timeout:120000}).trim();
@@ -484,6 +485,48 @@ try {
       events:proxy.events,
     };
   } finally {await proxy.close();}
+
+  // Fault-inject the image-update route separately. A successful Docker
+  // update followed by response loss must remain UNCERTAIN without replay.
+  const imageLossProxy=await createPostApplyResponseLossProxy({
+    targetUrl:registry.agents[0].baseUrl,cert,key,ca,
+  });
+  try {
+    const relayClient=new HttpAgentClient({
+      primaryId:'image-relay',expectedClusterId:expected,
+      agents:[{id:'image-relay',baseUrl:imageLossProxy.baseUrl,insecureDev:true}],
+    },journal);
+    const relayGuard=registeredAgentClient(relayClient,policy,db);
+    const before=await relayClient.inspectService(serviceId);
+    const target=docker('exec',containers['manager-01'],'docker','image','inspect',
+      'alpine:3.20','--format','{{index .RepoDigests 0}}');
+    assert.match(target,/^alpine@sha256:[a-f0-9]{64}$/);
+    const plan=await relayClient.planUpdateServiceImage(serviceId,before.service.version,target);
+    const operationId='maint-image-response-loss-'+randomUUID();
+    const send=()=>operationLock.withServiceLock('default',serviceId,
+      ()=>withMutationOperation(operationId,()=>relayGuard.updateServiceImage(serviceId,{
+        expectedVersion:plan.version,expectedSpecHash:plan.beforeSpecHash,
+        targetSpecHash:plan.targetSpecHash,image:target,
+      })));
+    await assert.rejects(send(),/transport|response|closed|aborted|socket|ECONNRESET/i);
+    const after=await raw.inspectService(serviceId);
+    assert.ok(after.service.version>before.service.version,
+      'image update must reach Docker before response loss');
+    assert.equal(after.service.specHash,plan.targetSpecHash);
+    const [rows]=await db.query(
+      "SELECT phase FROM maintenance_dispatches WHERE operation_id=?", [operationId]);
+    assert.equal(rows.length,1);
+    assert.equal(rows[0].phase,'UNCERTAIN');
+    await assert.rejects(send(),/Existing mutation dispatch evidence/);
+    const duplicate=await raw.inspectService(serviceId);
+    assert.equal(duplicate.service.version,after.service.version,
+      'UNCERTAIN image update must never be retransmitted');
+    assert.equal(imageLossProxy.events.filter(e=>e.acknowledgedByAgent).length,1);
+    evidence.imageResponseLostAfterApply={
+      operationId,phase:rows[0].phase,versionBefore:before.service.version,
+      versionAfter:after.service.version,events:imageLossProxy.events,
+    };
+  } finally {await imageLossProxy.close();}
 
   // Rejoin is tested LAST: it deliberately changes one owned manager's
   // cluster ID and must not be mistaken for a successful barrier read.
