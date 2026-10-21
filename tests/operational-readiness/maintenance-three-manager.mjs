@@ -498,6 +498,7 @@ try {
     },journal);
     const relayGuard=registeredAgentClient(relayClient,policy,db);
     const before=await relayClient.inspectService(serviceId);
+    docker('exec',containers['manager-01'],'docker','pull','alpine:3.20');
     const target=docker('exec',containers['manager-01'],'docker','image','inspect',
       'alpine:3.20','--format','{{index .RepoDigests 0}}');
     assert.match(target,/^alpine@sha256:[a-f0-9]{64}$/);
