@@ -72,7 +72,14 @@ export class DeploymentService
   async onApplicationBootstrap(): Promise<void> {
     await this.reconcilePendingDeployments();
     this.reconciliationTimer = setInterval(() => {
-      void this.reconcilePendingDeployments();
+      void this.reconcilePendingDeployments().catch((error: unknown) => {
+        // Database read failures must not become unhandled timer rejections.
+        // Keep the operation nonterminal so the next observation can retry.
+        this.logger.error(
+          'Failed to enumerate pending deployment operations',
+          error instanceof Error ? error.stack : String(error),
+        );
+      });
     }, RECONCILE_INTERVAL_MS);
     this.reconciliationTimer.unref?.();
   }
