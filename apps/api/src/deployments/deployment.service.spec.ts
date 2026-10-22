@@ -629,6 +629,13 @@ test('deployment bootstrap reconciles target state without replaying mutation', 
   assert.equal(successCalls, 1);
   assert.equal(auditCalls, 1);
   assert.equal(deployment.status, 'SUCCESS');
+  // Repeated bootstrap on the same persisted operation is observation-only.
+  service.onApplicationShutdown();
+  await service.onApplicationBootstrap();
+  service.onApplicationShutdown();
+  assert.equal(mutationCalls, 0);
+  assert.equal(successCalls, 1);
+  assert.equal(auditCalls, 1);
 });
 
 
