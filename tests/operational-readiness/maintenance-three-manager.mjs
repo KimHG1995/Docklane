@@ -543,7 +543,7 @@ try {
     const relayGuard=registeredAgentClient(relayClient,policy,db);
     const before=await relayClient.inspectService(serviceId);
     const plan=await relayClient.planRollbackService(serviceId,before.service.version);
-    const operationId='maint-rollback-response-loss-'+randomUUID();
+    const operationId='maint-rollback-loss-'+randomUUID();
     const send=()=>operationLock.withServiceLock('default',serviceId,
       ()=>withMutationOperation(operationId,()=>relayGuard.rollbackService(serviceId,{
         expectedVersion:plan.version,expectedSpecHash:plan.beforeSpecHash,
