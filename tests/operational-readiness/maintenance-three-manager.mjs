@@ -42,6 +42,7 @@ const evidence = {
   scaleSuccess:'not-run',nodeDrainSuccess:'not-run',nodeActivateSuccess:'not-run',
   imageSuccess:'not-run',rollbackSuccess:'not-run',
   imageResponseLostAfterApply:'not-run',
+  rollbackResponseLostAfterApply:'not-run',
 };
 const db = new Database();
 const docker = (...args) => execFileSync('docker', args, {encoding:'utf8',timeout:120000}).trim();
@@ -528,6 +529,45 @@ try {
       versionAfter:after.service.version,events:imageLossProxy.events,
     };
   } finally {await imageLossProxy.close();}
+
+  // A rollback applied by Docker but acknowledged only to the Agent must
+  // remain UNCERTAIN to the CP, and a retry must not issue another rollback.
+  const rollbackLossProxy=await createPostApplyResponseLossProxy({
+    targetUrl:registry.agents[0].baseUrl,cert,key,ca,
+  });
+  try {
+    const relayClient=new HttpAgentClient({
+      primaryId:'rollback-relay',expectedClusterId:expected,
+      agents:[{id:'rollback-relay',baseUrl:rollbackLossProxy.baseUrl,insecureDev:true}],
+    },journal);
+    const relayGuard=registeredAgentClient(relayClient,policy,db);
+    const before=await relayClient.inspectService(serviceId);
+    const plan=await relayClient.planRollbackService(serviceId,before.service.version);
+    const operationId='maint-rollback-response-loss-'+randomUUID();
+    const send=()=>operationLock.withServiceLock('default',serviceId,
+      ()=>withMutationOperation(operationId,()=>relayGuard.rollbackService(serviceId,{
+        expectedVersion:plan.version,expectedSpecHash:plan.beforeSpecHash,
+        targetSpecHash:plan.targetSpecHash,
+      })));
+    await assert.rejects(send(),/transport|response|closed|aborted|socket|ECONNRESET/i);
+    const after=await raw.inspectService(serviceId);
+    assert.ok(after.service.version>before.service.version,
+      'rollback must reach Docker before CP response is lost');
+    assert.equal(after.service.specHash,plan.targetSpecHash,
+      'rollback must apply the planned target');
+    const [rows]=await db.query(
+      "SELECT phase FROM maintenance_dispatches WHERE operation_id=?", [operationId]);
+    assert.equal(rows.length,1);
+    assert.equal(rows[0].phase,'UNCERTAIN');
+    await assert.rejects(send(),/Existing mutation dispatch evidence/);
+    const duplicate=await raw.inspectService(serviceId);
+    assert.equal(duplicate.service.version,after.service.version,
+      'retry must not reapply an uncertain rollback');
+    assert.equal(rollbackLossProxy.events.filter(e=>e.acknowledgedByAgent).length,1);
+    evidence.rollbackResponseLostAfterApply={operationId,phase:rows[0].phase,
+      versionBefore:before.service.version,versionAfter:after.service.version,
+      events:rollbackLossProxy.events};
+  } finally {await rollbackLossProxy.close();}
 
   // Rejoin is tested LAST: it deliberately changes one owned manager's
   // cluster ID and must not be mistaken for a successful barrier read.
