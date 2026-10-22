@@ -896,6 +896,7 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
 
   const operations = {
     find: async () => null,
+    listNonTerminal: async () => operation && operation.status !== 'SUCCESS' && operation.status !== 'FAILED' ? [operation] : [],
     findWithConnection: async () => operation,
     findNonTerminalForServiceWithConnection: async () => null,
     create: async (_connection: unknown, input: {
@@ -961,6 +962,11 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
     rollback: async () => undefined,
   };
   const lock = {
+    withServiceRecoveryLock: async (
+      _clusterId: string,
+      _serviceId: string,
+      fn: (value: unknown) => Promise<unknown>,
+    ) => fn(connection),
     withServiceLock: async (
       _clusterId: string,
       _serviceId: string,
@@ -1004,6 +1010,12 @@ test('manual rollback observes an existing Swarm rollback without replaying it',
   assert.equal(planRollbackCalls, 0);
   assert.equal(rollbackMutationCalls, 0);
   assert.equal(result.status, 'ROLLED_BACK');
+  assert.equal(persistedOperationStatus, 'SUCCESS');
+  // A restarted CP must never dispatch the same completed rollback again.
+  await service.onApplicationBootstrap();
+  service.onApplicationShutdown();
+  assert.equal(planRollbackCalls, 0);
+  assert.equal(rollbackMutationCalls, 0);
   assert.equal(persistedOperationStatus, 'SUCCESS');
 });
 
