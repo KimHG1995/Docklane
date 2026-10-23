@@ -48,6 +48,12 @@ export class MaintenanceManagerBarrier {
       await this.agent.inspectManagerBarrier(
         target.agentId, target.nodeId, swarmClusterId, generation, 'OPEN');
     }
+    // The membership may change while individual Agent readbacks are in
+    // progress. Re-enumerate after the last readback before reporting ready.
+    const readyRoster = await this.agent.inspectConfiguredManagers(swarmClusterId);
+    if (JSON.stringify(readyRoster) !== JSON.stringify(targets)) {
+      throw new ConflictException('Manager roster changed during final resume verification');
+    }
     const latest = await this.maintenance.requireRecord(clusterId);
     if (latest.state !== 'OPEN' || latest.generation !== generation) {
       throw new ConflictException('Recovery generation changed while reopening managers');
@@ -90,6 +96,12 @@ export class MaintenanceManagerBarrier {
       await this.agent.inspectManagerBarrier(
         target.agentId, target.nodeId, swarmClusterId, generation, 'BLOCKED',
       );
+    }
+    // A leave/rejoin between the first roster check and the last readback
+    // invalidates the collected evidence, even if every old Agent replied.
+    const verifiedRoster = await this.agent.inspectConfiguredManagers(swarmClusterId);
+    if (JSON.stringify(verifiedRoster) !== JSON.stringify(targets)) {
+      throw new ConflictException('Manager roster changed during final block verification');
     }
     const latest = await this.maintenance.requireRecord(clusterId);
     if (latest.state !== state.state || latest.generation !== generation) {
