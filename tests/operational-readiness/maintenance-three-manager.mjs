@@ -582,7 +582,7 @@ try {
   evidence.deploymentLifecycle={};
   await runDeploymentFaultAcceptance({db,registry,containers,docker,cert,key,ca,
     evidence:evidence.deploymentLifecycle});
-  evidence.residentCp=await runResidentCpAcceptance({db,raw,registry,serviceId,
+  evidence.residentCp=await runResidentCpAcceptance({db,raw,registry,containers,docker,
     evidenceDir:process.env.DOCKLANE_OR_LOG_DIR});
 
   // Rejoin is tested LAST: it deliberately changes one owned manager's
@@ -599,6 +599,7 @@ try {
   const blockedRejoin=await postMutationTo('manager-03',
     '/v2/services/'+serviceId+'/restart',foreign,5n);
   assert.equal(blockedRejoin.status,412);
+  assert.equal(JSON.parse(blockedRejoin.body).code,'CLUSTER_PRECONDITION_FAILED');
   evidence.rejoin={oldSwarmId:expected,newSwarmId:foreign,
     mutationRejected:blockedRejoin.status};
 } finally {

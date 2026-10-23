@@ -50,3 +50,39 @@ test('relay holds only a successful mutation after upstream apply and keeps read
     rmSync(dir, {recursive:true, force:true});
   }
 });
+
+const pinnedImage = `alpine@sha256:${'a'.repeat(64)}`;
+const workload = () => ({
+  service:{id:'resident-service', desiredReplicas:1, runningReplicas:1,
+    image:pinnedImage, forceUpdate:1, updateState:'completed'},
+  tasks:[{id:'task-new', slot:1, state:'running', desiredState:'running', image:pinnedImage, forceUpdate:1}],
+});
+
+test('resident restart proof rejects zero replicas rather than accepting an empty task set', async () => {
+  const {assertResidentWorkload} = await import('./maintenance-resident-cp.mjs');
+  const snapshot = workload();
+  snapshot.service.desiredReplicas = 0;
+  snapshot.service.runningReplicas = 0;
+  snapshot.tasks = [];
+  assert.throws(() => assertResidentWorkload(snapshot, pinnedImage, 1, true), /positive|nonempty|replica/);
+});
+
+test('resident restart proof requires completed update and replacement tasks at the target force update', async () => {
+  const {assertResidentWorkload} = await import('./maintenance-resident-cp.mjs');
+  const snapshot = workload();
+  assertResidentWorkload(snapshot, pinnedImage, 1, true);
+  snapshot.service.updateState = undefined;
+  assert.throws(() => assertResidentWorkload(snapshot, pinnedImage, 1, true), /completed/);
+  snapshot.service.updateState = 'completed';
+  snapshot.tasks[0].forceUpdate = 0;
+  assert.throws(() => assertResidentWorkload(snapshot, pinnedImage, 1, true), /forceUpdate|force update/);
+});
+
+test('resident initial fixture allows no update status but still requires a real running task', async () => {
+  const {assertResidentWorkload} = await import('./maintenance-resident-cp.mjs');
+  const snapshot = workload();
+  snapshot.service.updateState = undefined;
+  assertResidentWorkload(snapshot, pinnedImage, 1, false);
+  snapshot.tasks = [];
+  assert.throws(() => assertResidentWorkload(snapshot, pinnedImage, 1, false), /running task/);
+});

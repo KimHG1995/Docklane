@@ -201,23 +201,74 @@ async function api(cp, token, path, body, timeout = 40_000) {
   return {status:response.status, body:json};
 }
 
+// A zero-replica service cannot prove RESTART convergence: Swarm may never
+// create UpdateStatus for an empty task set. Require an actual replacement task.
+export function assertResidentWorkload(snapshot, image, forceUpdate, requireCompleted = false) {
+  assert.equal(snapshot.service.desiredReplicas, 1, 'resident fixture requires one positive replica');
+  assert.equal(snapshot.service.runningReplicas, 1, 'resident fixture must have one running replica');
+  assert.equal(snapshot.service.image, image);
+  assert.equal(snapshot.service.forceUpdate, forceUpdate, 'service forceUpdate must match the restart target');
+  if (requireCompleted) assert.equal(snapshot.service.updateState, 'completed', 'restart update must be completed');
+  const running = snapshot.tasks.filter(task => task.state === 'running' && task.desiredState === 'running');
+  assert.equal(running.length, 1, 'resident fixture must expose one actual running task');
+  assert.ok(running[0].id);
+  assert.equal(running[0].slot, 1);
+  assert.equal(running[0].image, image);
+  assert.equal(running[0].forceUpdate, forceUpdate, 'running task forceUpdate must match the restart target');
+  return running[0].id;
+}
+
+async function waitResidentWorkload(raw, serviceId, image, forceUpdate, requireCompleted = false) {
+  const deadline = Date.now() + 90_000;
+  let last;
+  while (Date.now() < deadline) {
+    try {
+      const snapshot = await raw.inspectService(serviceId);
+      assertResidentWorkload(snapshot, image, forceUpdate, requireCompleted);
+      assert.equal((await raw.checkServicePlacement(serviceId)).status, 'CONVERGED');
+      return snapshot;
+    } catch (error) {last = error;}
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw new Error(`Resident CP owned workload did not converge: ${String(last)}`);
+}
+
 /**
  * Run after OPEN is restored and before topology destruction. This purposely
  * retains the killed owner's admission and SENDING dispatch as immutable
  * evidence; a later maintenance close must resolve them through the admin
  * recovery protocol rather than deleting them in this harness.
  */
-export async function runResidentCpAcceptance({db, raw, registry, serviceId, evidenceDir}) {
+export async function runResidentCpAcceptance({db, raw, registry, containers, docker, evidenceDir}) {
   assert.equal(process.env.DOCKLANE_OR_MAINTENANCE_ACCEPTANCE, '1', 'resident CP test requires the disposable acceptance harness');
-  assert.ok(serviceId && registry.expectedClusterId);
+  assert.ok(registry.expectedClusterId);
+  const manager = containers['manager-01'];
+  assert.ok(manager && typeof docker === 'function');
+  const fixtureOwner = randomUUID();
+  const serviceName = `docklane-resident-${fixtureOwner}`;
+  let serviceId;
+  let primaryFailure;
   const operationId = randomUUID();
   const token = `disposable-resident-${randomUUID()}`;
   const actorId = 'resident-cp-acceptance';
-  const route = `/v1/clusters/default/services/${serviceId}/restart`;
   const relays = [];
   const processes = [];
   let pending;
   try {
+    docker('exec', manager, 'docker', 'pull', 'alpine:3.20');
+    const image = docker('exec', manager, 'docker', 'image', 'inspect', 'alpine:3.20',
+      '--format', '{{index .RepoDigests 0}}');
+    assert.match(image, /^alpine@sha256:[a-f0-9]{64}$/);
+    for (const container of Object.values(containers)) docker('exec', container, 'docker', 'pull', image);
+    serviceId = docker('exec', manager, 'docker', 'service', 'create', '--detach=true', '--no-resolve-image',
+      '--name', serviceName, '--label', `docklane.acceptance.owner=${fixtureOwner}`,
+      '--replicas', '1', '--reserve-memory', '16M', '--reserve-cpu', '0.01',
+      '--update-order', 'start-first', '--update-parallelism', '1', '--update-monitor', '1s',
+      image, 'sleep', '3600').split('\n').at(-1);
+    assert.match(serviceId, /^[0-9a-z]{12,}$/);
+    const initial = await waitResidentWorkload(raw, serviceId, image, 0);
+    const initialTaskId = assertResidentWorkload(initial, image, 0);
+    const route = `/v1/clusters/default/services/${serviceId}/restart`;
     for (const agent of registry.agents) {
       const relay = await createHeldMutationRelay({
         ...agent, targetUrl:agent.baseUrl,
@@ -280,6 +331,12 @@ export async function runResidentCpAcceptance({db, raw, registry, serviceId, evi
     assert.ok(disconnected.error, 'killed CP must not return an acknowledged operation');
     const afterApply = await raw.inspectService(serviceId);
     assert.ok(afterApply.service.version > before.service.version);
+    assert.equal(afterApply.service.forceUpdate, before.service.forceUpdate + 1);
+    // Observe the real replacement task before asking the survivor to reconcile.
+    // No state is forced and the production verifier still runs unchanged.
+    const converged = await waitResidentWorkload(raw, serviceId, image, afterApply.service.forceUpdate, true);
+    const replacementTaskId = assertResidentWorkload(converged, image, afterApply.service.forceUpdate, true);
+    assert.notEqual(replacementTaskId, initialTaskId, 'restart must replace the original running task');
     const recovered = await api(survivor, token, route, body);
     assert.equal(recovered.status, 200, JSON.stringify(recovered));
     assert.equal(recovered.body.id, operationId);
@@ -290,6 +347,7 @@ export async function runResidentCpAcceptance({db, raw, registry, serviceId, evi
     const afterRetry = await raw.inspectService(serviceId);
     assert.equal(afterRetry.service.specHash, afterApply.service.specHash);
     assert.equal(afterRetry.service.forceUpdate, afterApply.service.forceUpdate);
+    assertResidentWorkload(afterRetry, image, afterApply.service.forceUpdate, true);
     const mutationEvents = relays.flatMap(x => x.events).filter(x => MUTATION_PATH.test(x.path));
     assert.equal(mutationEvents.length, 1, 'survivor recovery and replay must not redispatch any mutation');
     const [dispatchAfter] = await db.query(
@@ -303,7 +361,8 @@ export async function runResidentCpAcceptance({db, raw, registry, serviceId, evi
     );
     assert.deepEqual(admissionAfter, admissionBefore, 'killed owner admission must not silently expire');
     return {
-      operationId, twoResidentApiProcesses:true, concurrentResourceConflict:rival.status,
+      operationId, serviceId, image, initialTaskId, replacementTaskId, desiredReplicas:1, runningReplicas:1,
+      updateState:afterRetry.service.updateState, twoResidentApiProcesses:true, concurrentResourceConflict:rival.status,
       killedSignal:killed.signal, statusBeforeKill:inFlight.body.status, survivorStatus:recovered.body.status,
       beforeVersion:before.service.version, afterApplyVersion:afterApply.service.version,
       afterRecoveryVersion:afterRetry.service.version, mutationRequests:mutationEvents.length,
@@ -311,6 +370,9 @@ export async function runResidentCpAcceptance({db, raw, registry, serviceId, evi
       retainedAdmissionId:admissionAfter[0].id,
       requiresExplicitEvidenceResolution:true,
     };
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
   } finally {
     // Attempt every cleanup even if one child refuses to stop. Never strand
     // other CPs or relay sockets because an earlier cleanup failed.
@@ -319,7 +381,18 @@ export async function runResidentCpAcceptance({db, raw, registry, serviceId, evi
     const drained = pending
       ? await Promise.allSettled([bounded(pending, 5000, 'resident CP pending request cleanup timed out')])
       : [];
-    const failures = [...stopped, ...closed, ...drained].filter(x => x.status === 'rejected');
-    if (failures.length) throw new AggregateError(failures.map(x => x.reason), 'resident CP cleanup failed');
+    const removed = await Promise.allSettled([Promise.resolve().then(() => {
+      if (!serviceId) return; // owning DinD teardown remains the creation-failure fallback.
+      const ownership = docker('exec', manager, 'docker', 'service', 'inspect', serviceId,
+        '--format', '{{.Spec.Name}}|{{index .Spec.Labels "docklane.acceptance.owner"}}');
+      assert.equal(ownership, `${serviceName}|${fixtureOwner}`, 'refuse cleanup of an unowned resident fixture');
+      docker('exec', manager, 'docker', 'service', 'rm', serviceId);
+    })]);
+    const failures = [...stopped, ...closed, ...drained, ...removed].filter(x => x.status === 'rejected');
+    if (failures.length) {
+      const errors = failures.map(x => String(x.reason));
+      if (evidenceDir) writeFileSync(join(evidenceDir, 'maintenance-resident-cleanup-errors.json'), JSON.stringify(errors, null, 2));
+      if (!primaryFailure) throw new AggregateError(failures.map(x => x.reason), 'resident CP cleanup failed');
+    }
   }
 }
