@@ -83,6 +83,14 @@ export class MaintenanceManagerBarrier {
     if (JSON.stringify(fresh) !== JSON.stringify(targets)) {
       throw new ConflictException('Manager membership changed during barrier');
     }
+    // A PUT acknowledgement is not sufficient after a manager restart or
+    // a lost response. Re-read every live Agent at the pinned generation
+    // before treating persisted ACK rows as proof for CLOSED.
+    for (const target of fresh) {
+      await this.agent.inspectManagerBarrier(
+        target.agentId, target.nodeId, swarmClusterId, generation, 'BLOCKED',
+      );
+    }
     const latest = await this.maintenance.requireRecord(clusterId);
     if (latest.state !== state.state || latest.generation !== generation) {
       throw new ConflictException('Maintenance generation changed during barrier');
