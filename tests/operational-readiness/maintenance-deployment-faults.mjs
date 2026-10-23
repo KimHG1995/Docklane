@@ -42,6 +42,30 @@ export async function settleCleanup(actions, timeoutMs = 5000) {
   return results.filter(result => result.status === 'rejected').map(result => result.reason);
 }
 
+// Retrying the SAME request enters the production coordinator's reconciliation
+// path; a fresh operation ID would dispatch a new mutation and invalidate proof.
+export async function reconcileUntilTerminal(invoke, input, expectedStatus, {
+  timeoutMs = 180000, intervalMs = 500, now = Date.now, sleep = pause,
+} = {}) {
+  const operationId = input.operationId;
+  const pending = expectedStatus === 'ROLLED_BACK'
+    ? ['ROLLING_BACK', 'ROLLBACK_VERIFYING'] : ['DEPLOYING', 'VERIFYING'];
+  const deadline = now() + timeoutMs;
+  let deploymentId;
+  let lastStatus = 'not started';
+  while (now() < deadline) {
+    assert.equal(input.operationId, operationId, 'reconciliation must reuse the original operation ID');
+    const result = await invoke(input);
+    if (deploymentId !== undefined) assert.equal(result.id, deploymentId, 'reconciliation must preserve deployment ID');
+    deploymentId = result.id;
+    lastStatus = result.status;
+    if (result.status === expectedStatus) return result;
+    assert.ok(pending.includes(result.status), `unexpected deployment status ${result.status}; expected ${expectedStatus}`);
+    await sleep(Math.min(intervalMs, Math.max(0, deadline - now())));
+  }
+  throw new Error(`Deployment reconciliation timed out for ${operationId}: ${lastStatus}; expected ${expectedStatus}`);
+}
+
 async function waitWorkload(raw, serviceId, replicas, image) {
   const deadline = Date.now() + 90000;
   let lastError;
@@ -171,7 +195,7 @@ export async function runDeploymentFaultAcceptance({ db, registry, containers, d
     const releaseA = await releases.createRelease(application.id, { version: `a-${suffix}`, imageRepository: 'alpine', imageDigest: images[0].split('@')[1] }, actorId);
     const releaseB = await releases.createRelease(application.id, { version: `b-${suffix}`, imageRepository: 'alpine', imageDigest: images[1].split('@')[1] }, actorId);
     const baselineInput = { operationId: `deploy-base-${randomUUID()}`, releaseId: releaseA.id, health };
-    const baseline = await normal.deploy('default', target.id, baselineInput, principal);
+    const baseline = await reconcileUntilTerminal(input => normal.deploy('default', target.id, input, principal), baselineInput, 'SUCCESS');
     assert.equal(baseline.status, 'SUCCESS');
     assert.equal((await operations.find(baselineInput.operationId)).status, 'SUCCESS');
     evidence.baseline = { applicationId: application.id, targetId: target.id, releaseId: releaseA.id, deploymentId: baseline.id, status: baseline.status };
@@ -197,7 +221,7 @@ export async function runDeploymentFaultAcceptance({ db, registry, containers, d
 
     const deployLoss = await lossCoordinator('deployment-loss');
     const deployInput = { operationId: `deploy-loss-${randomUUID()}`, releaseId: releaseB.id, health };
-    const deployed = await deployLoss.service.deploy('default', target.id, deployInput, principal);
+    const deployed = await reconcileUntilTerminal(input => deployLoss.service.deploy('default', target.id, input, principal), deployInput, 'SUCCESS');
     assert.equal(deployed.status, 'SUCCESS', 'observed real convergence must complete the lost-response deployment');
     assert.equal(deployed.previousReleaseId, releaseA.id);
     assert.equal((await operations.find(deployInput.operationId)).status, 'SUCCESS');
@@ -220,7 +244,7 @@ export async function runDeploymentFaultAcceptance({ db, registry, containers, d
     // Do not fabricate FAILED rows just to make the rollback endpoint eligible.
     healthy = false;
     const failedInput = { operationId: `deploy-fail-${randomUUID()}`, releaseId: releaseA.id, health };
-    const failed = await normal.deploy('default', target.id, failedInput, principal);
+    const failed = await reconcileUntilTerminal(input => normal.deploy('default', target.id, input, principal), failedInput, 'FAILED');
     assert.equal(failed.status, 'FAILED');
     assert.equal(failed.previousReleaseId, releaseB.id);
     const failedOperation = await operations.find(failedInput.operationId);
@@ -231,7 +255,7 @@ export async function runDeploymentFaultAcceptance({ db, registry, containers, d
     healthy = true;
     const rollbackLoss = await lossCoordinator('rollback-deployment-loss');
     const rollbackInput = { operationId: `rollback-loss-${randomUUID()}` };
-    const rolledBack = await rollbackLoss.service.rollback('default', failed.id, rollbackInput, principal);
+    const rolledBack = await reconcileUntilTerminal(input => rollbackLoss.service.rollback('default', failed.id, input, principal), rollbackInput, 'ROLLED_BACK');
     assert.equal(rolledBack.status, 'ROLLED_BACK');
     assert.equal(rolledBack.rollbackOperationId, rollbackInput.operationId);
     assert.equal((await operations.find(rollbackInput.operationId)).status, 'SUCCESS');

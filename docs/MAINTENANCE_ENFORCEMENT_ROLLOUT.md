@@ -1,6 +1,25 @@
 # Maintenance enforcement rollout
 
-## Current implementation
+## Current release gate (2026-10-23)
+
+The dated sections below are implementation history, not the current list of missing features. Scoped initialization, all-manager barriers, CLOSED/reconciliation/resume APIs, durable dispatch/admission evidence and CP lease fencing are implemented. The authoritative remaining acceptance status is [Maintenance acceptance](MAINTENANCE_FEATURE_ACCEPTANCE.md).
+
+Product HEAD `76caa65` passed [CI #39880932534](https://github.com/KimHG1995/Docklane/actions/runs/39880932534). The separate final acceptance harness is in PR #138; implementation/static checks do not mean its live Docker/MySQL run has passed. Do not enable enforcement until that run, its cleanup evidence, final review and the operational controls below are accepted.
+
+### Deployment and enablement checklist
+
+1. Back up the database and record the current API/Agent versions, registered Swarm ID and complete expected Manager endpoint/Node ID roster. Validate the additive migrations before changing live traffic.
+2. Deploy the compatible API and Agent versions without silently enabling maintenance. Every Manager Agent needs the same protocol version, its own persistent private writable state-file directory, and the configured mTLS trust. An absent/invalid state file or a pending write marker must fail closed; never delete the marker merely to restore availability.
+3. Keep external Docker writers controlled: verify which operating-system accounts/groups, CI credentials and local/remote sockets can perform Docker mutations. The Agent barrier cannot fence direct Docker CLI/socket users. Restricting those permissions is an operator action requiring the appropriate authorization; a disposable test does not establish production permissions.
+4. In an approved maintenance window, verify fixed real Swarm registration and explicitly initialize through the scoped ADMIN endpoint. Initialization creates only the DB OPEN generation; it does not prove the Agents are OPEN. Enable the paired CP enforcement only with all Agents configured, then use the exact current generation with `resume-managers` and require fresh full-roster OPEN readbacks before admitting traffic.
+5. Exercise the controlled close/recovery procedure and inspect immutable dispatch/admission evidence. Do not infer CLOSED from an empty operation table or previously stored ACK rows. Do not treat generic HTTP 409/503 or a lost response as proof the mutation was not applied. Before manually resolving an orphan admission, corroborate that its original CP process has ended; an elapsed lease/timeout alone is not that proof.
+6. If a transition fails, retain the last known state, logs and pending marker/evidence. Resolve uncertainty through scoped, audited recovery. Do not disable enforcement, downgrade to an incompatible CP, hand-edit generations, or remove evidence as an automatic rollback strategy.
+
+Operational permission verification and production rollout are not performed by PR validation. Keep both PRs Draft until the stated release gates have evidence and the owner approves integration/deployment.
+
+## Historical implementation notes
+
+### Initial admission implementation
 The registered service/node operation lock checks the persisted maintenance row using the **same MySQL connection already holding resource locks** when `DOCKLANE_MAINTENANCE_ENFORCE=1`. A missing row, DB read failure, invalid generation, or non-OPEN state denies the lock callback. The default is disabled to preserve existing installations until initialization and management authorization exist.
 
 This check is an admission control, **not** an atomic Docker compare-and-update primitive. A mutation already executing past the lock check may still dispatch. Another CP, another manager Agent, external Docker CLI, and a concurrent OPEN→CLOSING transition can race with an in-flight Docker Update.
