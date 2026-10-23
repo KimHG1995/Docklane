@@ -1,3 +1,6 @@
+import { runResidentCpAcceptance } from './maintenance-resident-cp.mjs';
+import { runDeploymentFaultAcceptance } from './maintenance-deployment-faults.mjs';
+import { runClosedRejoinAcceptance } from './maintenance-closed-rejoin.mjs';
 import { createPostApplyResponseLossProxy } from './maintenance-response-loss-proxy.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
@@ -43,6 +46,7 @@ const evidence = {
   imageSuccess:'not-run',rollbackSuccess:'not-run',
   imageResponseLostAfterApply:'not-run',
   rollbackResponseLostAfterApply:'not-run',
+  closedRejoin:'not-run',residentCp:'not-run',deploymentLifecycle:'not-run',
 };
 const db = new Database();
 const docker = (...args) => execFileSync('docker', args, {encoding:'utf8',timeout:120000}).trim();
@@ -330,9 +334,9 @@ try {
   const postSuccessService=await raw.inspectService(serviceId);
   const postSuccessNode=await raw.inspectNode(targetNode.nodeId);
   const lastServiceVersion=postSuccessService.service.version;
-  const lastNodeVersion=postSuccessNode.node.version;
+  let lastNodeVersion=postSuccessNode.node.version;
   const lastServiceFingerprint=postSuccessService.service.specHash;
-  const lastNodeFingerprint=postSuccessNode.node.specHash;
+  let lastNodeFingerprint=postSuccessNode.node.specHash;
 
   assert.equal(await maintenance.requestClosing('default',1n,'acceptance-admin','drain all managers'),true);
   const closedLease=await leases.acquire('default',30);
@@ -387,6 +391,12 @@ try {
     assert.equal((await maintenance.requireRecord('default')).state,'CLOSED');
   } finally {await leases.release(closedLease);}
   evidence.close='CLOSED generation 3';
+  evidence.closedRejoin=await runClosedRejoinAcceptance({
+    docker,containers,raw,maintenance,expected,targetNode,postMutationTo,serviceId,
+  });
+  const rejoinedNode=await raw.inspectNode(targetNode.nodeId);
+  lastNodeVersion=rejoinedNode.node.version;
+  lastNodeFingerprint=rejoinedNode.node.specHash;
 
   const recoverLease=await leases.acquire('default',30);
   const barrier=new MaintenanceManagerBarrier(raw,maintenance,db,registry);
@@ -568,6 +578,12 @@ try {
       versionBefore:before.service.version,versionAfter:after.service.version,
       events:rollbackLossProxy.events};
   } finally {await rollbackLossProxy.close();}
+
+  evidence.deploymentLifecycle={};
+  await runDeploymentFaultAcceptance({db,registry,containers,docker,cert,key,ca,
+    evidence:evidence.deploymentLifecycle});
+  evidence.residentCp=await runResidentCpAcceptance({db,raw,registry,serviceId,
+    evidenceDir:process.env.DOCKLANE_OR_LOG_DIR});
 
   // Rejoin is tested LAST: it deliberately changes one owned manager's
   // cluster ID and must not be mistaken for a successful barrier read.
