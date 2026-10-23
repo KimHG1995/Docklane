@@ -160,7 +160,11 @@ start_agent() {
   docker exec "$container" test -s /etc/docklane/agent-ca.crt
   docker exec "$container" test -s /etc/docklane/agent.crt
   docker exec "$container" test -s /etc/docklane/agent.key
-  docker exec "$container" sh -c '
+  local -a maintenance_flags=()
+  if [[ "${DOCKLANE_OR_MAINTENANCE_ACCEPTANCE:-0}" == "1" ]]; then
+    maintenance_flags=(-e DOCKLANE_AGENT_MAINTENANCE_STATE_FILE=/etc/docklane/maintenance-state.json)
+  fi
+  docker exec "${maintenance_flags[@]}" "$container" sh -c '
     DOCKER_HOST=unix:///var/run/docker.sock \
     DOCKLANE_AGENT_ADDR=0.0.0.0:9443 \
     DOCKLANE_AGENT_TLS_CERT_FILE=/etc/docklane/agent.crt \
@@ -357,6 +361,25 @@ for _ in {1..90}; do
   sleep 1
 done
 [[ "$registration_db_ready" == "true" ]] || fail "registration DB TCP on host loopback did not become ready"
+
+if [[ "${DOCKLANE_OR_MAINTENANCE_ACCEPTANCE:-0}" == "1" ]]; then
+  export DOCKLANE_AGENT_MAINTENANCE_STATE_FILE=/etc/docklane/maintenance-state.json
+  DOCKLANE_EXPECTED_CLUSTER_ID="$cluster_id" \
+  DOCKLANE_CLUSTER_ID=default \
+  DOCKLANE_CLUSTER_REGISTRATION_MODE=enforce \
+  DOCKLANE_DATABASE_URL="mysql://docklane:docklane-test@127.0.0.1:${REGISTRATION_DB_PORT}/docklane" \
+  DOCKLANE_MANAGER_AGENT_URLS="$(printf '[{"id":"manager-01","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-02","baseUrl":"https://127.0.0.1:%s"},{"id":"manager-03","baseUrl":"https://127.0.0.1:%s"}]' "$MANAGER_01_AGENT_PORT" "$MANAGER_02_AGENT_PORT" "$MANAGER_03_AGENT_PORT")" \
+  DOCKLANE_AGENT_CA_FILE="$CA_CERT" \
+  DOCKLANE_AGENT_CERT_FILE="$CLIENT_CERT" \
+  DOCKLANE_AGENT_KEY_FILE="$CLIENT_KEY" \
+  DOCKLANE_MANAGER_01_CONTAINER="$MANAGER_01_CONTAINER" \
+  DOCKLANE_MANAGER_02_CONTAINER="$MANAGER_02_CONTAINER" \
+  DOCKLANE_MANAGER_03_CONTAINER="$MANAGER_03_CONTAINER" \
+  DOCKLANE_MAINTENANCE_ACCEPT_EVIDENCE="$LOG_DIR/maintenance-acceptance.json" \
+  node "$ROOT_DIR/tests/operational-readiness/maintenance-three-manager.mjs"
+  log "real three-manager maintenance acceptance passed"
+  exit 0
+fi
 
 log "verifying Control Plane Agent failover after primary Agent loss"
 # This disposable fixture already checked the ID against all three Docker managers.

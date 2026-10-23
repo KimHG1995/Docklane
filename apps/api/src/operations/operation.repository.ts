@@ -139,7 +139,7 @@ export class OperationRepository {
 
   async markRunning(connection: PoolConnection, id: string): Promise<void> {
     await connection.execute(
-      "UPDATE operations SET status = 'RUNNING' WHERE id = ?",
+      "UPDATE operations SET status = 'RUNNING' WHERE id = ? AND status NOT IN ('SUCCESS', 'FAILED')",
       [id],
     );
   }
@@ -153,7 +153,7 @@ export class OperationRepository {
       `UPDATE operations
        SET status = 'VERIFYING', result_version = ?,
            error_code = NULL, error_message = NULL
-       WHERE id = ?`,
+       WHERE id = ? AND status NOT IN ('SUCCESS', 'FAILED')`,
       [resultVersion, id],
     );
   }
@@ -167,7 +167,7 @@ export class OperationRepository {
     await connection.execute(
       `UPDATE operations
        SET status = 'VERIFYING', error_code = ?, error_message = ?
-       WHERE id = ?`,
+       WHERE id = ? AND status NOT IN ('SUCCESS', 'FAILED')`,
       [code, message, id],
     );
   }
@@ -181,7 +181,7 @@ export class OperationRepository {
       `UPDATE operations
        SET status = 'SUCCESS', result_version = ?,
            error_code = NULL, error_message = NULL
-       WHERE id = ?`,
+       WHERE id = ? AND status NOT IN ('SUCCESS', 'FAILED')`,
       [resultVersion, id],
     );
   }
@@ -195,7 +195,7 @@ export class OperationRepository {
     await connection.execute(
       `UPDATE operations
        SET status = 'NEEDS_ATTENTION', error_code = ?, error_message = ?
-       WHERE id = ?`,
+       WHERE id = ? AND status NOT IN ('SUCCESS', 'FAILED')`,
       [code, message, id],
     );
   }
@@ -209,7 +209,7 @@ export class OperationRepository {
     await connection.execute(
       `UPDATE operations
        SET status = 'FAILED', error_code = ?, error_message = ?
-       WHERE id = ?`,
+       WHERE id = ? AND status NOT IN ('SUCCESS', 'FAILED')`,
       [code, message, id],
     );
   }

@@ -299,6 +299,20 @@ jobs:
             go build -o "${RUNNER_TEMP}/$(basename "${helper%.go}")" "$helper"
           done
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify Node operational helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' helper; do
+            node --check "$helper"
+          done < <(find tests/operational-readiness -maxdepth 1 -type f -name '*.mjs' -print0)
+          while IFS= read -r -d '' regression; do
+            node --test "$regression"
+          done < <(find tests/operational-readiness -maxdepth 1 -type f -name '*-test.mjs' -print0)
+
       - name: Run operational readiness harness regressions
         shell: bash
         run: |

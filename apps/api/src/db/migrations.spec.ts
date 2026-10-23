@@ -16,6 +16,7 @@ type Applied = {
 function fakeConnection(options?: {
   lock?: boolean;
   applied?: Applied[];
+  dispatchIndex?: 'valid' | 'invalid';
 }) {
   const applied = [...(options?.applied ?? [])];
   const queries: string[] = [];
@@ -38,6 +39,20 @@ function fakeConnection(options?: {
         return [[{ count: 1 }], []];
       }
       if (sql.includes('information_schema.statistics')) {
+        // The v8 uniqueness migration reads index metadata, unlike the
+        // baseline migrations that only SELECT COUNT(*) for existing indexes.
+        if (sql.includes("index_name = 'uq_maintenance_dispatch_operation'")) {
+          if (options?.dispatchIndex === 'valid') {
+            return [[
+              { column_name: 'cluster_id', non_unique: 0, seq_in_index: 1 },
+              { column_name: 'operation_id', non_unique: 0, seq_in_index: 2 },
+            ], []];
+          }
+          if (options?.dispatchIndex === 'invalid') {
+            return [[{ column_name: 'cluster_id', non_unique: 1, seq_in_index: 1 }], []];
+          }
+          return [[], []]; // Fresh database: the unique index is not present.
+        }
         return [[{ count: 1 }], []];
       }
 
@@ -66,20 +81,20 @@ test('database migrations apply all known migrations once and skip them on repla
   await runDatabaseMigrations(state.connection as never);
   assert.deepEqual(
     state.applied.map((row) => row.version),
-    [1, 2, 3, 4, 5],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
   );
 
   const insertsAfterFirst = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterFirst, 5);
+  assert.equal(insertsAfterFirst, 11);
 
   await runDatabaseMigrations(state.connection as never);
 
   const insertsAfterReplay = state.executes.filter((sql) =>
     sql.includes('INSERT INTO schema_migrations'),
   ).length;
-  assert.equal(insertsAfterReplay, 5);
+  assert.equal(insertsAfterReplay, 11);
 });
 
 test('database migrations reject metadata drift for an applied migration', async () => {
@@ -142,6 +157,12 @@ test('migration checksums are deterministic and catalog metadata is stable', () 
       [3, 'cluster-registration'],
       [4, 'rollback-attempt-history'],
       [5, 'cluster-maintenance-state'],
+      [6, 'maintenance-owner-unicode'],
+      [7, 'maintenance-dispatch-evidence'],
+      [8, 'maintenance-dispatch-uniqueness'],
+      [9, 'maintenance-active-admissions'],
+      [10, 'maintenance-control-lease'],
+      [11, 'maintenance-evidence-resolution'],
     ],
   );
 });
@@ -195,7 +216,7 @@ test('cluster registration migration is additive, unique and case-sensitive', as
   assert.match(query, /COLLATE ascii_bin/);
   assert.match(query, /UNIQUE KEY uq_cluster_registration_swarm \(swarm_cluster_id\)/);
   assert.equal(state.queries.some((sql) => sql.includes('UPDATE bootstrap_tokens')), false);
-  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 3);
+  assert.equal(state.executes.filter((sql) => sql.includes('INSERT INTO schema_migrations')).length, 9);
 });
 
 test('rollback history migration persists each attempt mapping and backfills only matching operations', async () => {
@@ -223,4 +244,65 @@ test('maintenance migration adds persistent fail-closed state without auto-openi
   assert.match(query, /ENUM\('OPEN', 'CLOSING', 'CLOSED', 'RECONCILING'\)/);
   assert.match(query, /generation BIGINT UNSIGNED NOT NULL/);
   assert.equal(state.queries.some(sql => sql.includes('INSERT INTO cluster_maintenance_states')), false);
+});
+
+
+test('maintenance Unicode owner migration does not change immutable v5', async () => {
+  const state = fakeConnection({ applied: DATABASE_MIGRATIONS.slice(0, 5).map(m => ({ version:m.version, name:m.name, checksum:migrationChecksum(m) })) });
+  await runDatabaseMigrations(state.connection as never);
+  const ddl = state.queries.find(sql => sql.includes('ALTER TABLE cluster_maintenance_states'));
+  assert.ok(ddl);
+  assert.ok(ddl.includes('owner_id VARCHAR(128)'));
+  assert.match(ddl, /CHARACTER SET utf8mb4 COLLATE utf8mb4_bin/);
+  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 6);
+});
+
+test('maintenance dispatch evidence migration records uncertainty and barriers without auto-acknowledgement', async () => {
+  const state = fakeConnection({
+    applied: DATABASE_MIGRATIONS.slice(0, 6).map(m => ({
+      version: m.version, name: m.name, checksum: migrationChecksum(m),
+    })),
+  });
+  await runDatabaseMigrations(state.connection as never);
+  const dispatch = state.queries.find(sql => sql.includes('CREATE TABLE IF NOT EXISTS maintenance_dispatches'));
+  const barrier = state.queries.find(sql => sql.includes('CREATE TABLE IF NOT EXISTS maintenance_agent_barriers'));
+  assert.ok(dispatch);
+  assert.ok(barrier);
+  assert.match(dispatch, /'PREPARED','SENDING','ACKNOWLEDGED','REJECTED','UNCERTAIN'/);
+  assert.match(barrier, /PRIMARY KEY \(cluster_id, agent_id\)/);
+  assert.equal(state.queries.some(sql => sql.includes('INSERT INTO maintenance_agent_barriers')), false);
+});
+
+
+test('dispatch unique-index migration skips an already-created valid index', async () => {
+  const state = fakeConnection({
+    dispatchIndex: 'valid',
+    applied: DATABASE_MIGRATIONS.slice(0, 7).map(m => ({
+      version: m.version, name: m.name, checksum: migrationChecksum(m),
+    })),
+  });
+  await runDatabaseMigrations(state.connection as never);
+  assert.equal(state.queries.some(sql => sql.includes('ADD UNIQUE KEY uq_maintenance_dispatch_operation')), false);
+  assert.equal(state.executes.filter(sql => sql.includes('INSERT INTO schema_migrations')).length, 4);
+});
+
+test('dispatch unique-index migration rejects a partial or nonunique existing index', async () => {
+  const state = fakeConnection({
+    dispatchIndex: 'invalid',
+    applied: DATABASE_MIGRATIONS.slice(0, 7).map(m => ({
+      version: m.version, name: m.name, checksum: migrationChecksum(m),
+    })),
+  });
+  await assert.rejects(() => runDatabaseMigrations(state.connection as never),
+    /uniqueness index metadata mismatch/);
+});
+
+
+test('maintenance active admissions schema is additive and has no automatic OPEN lease', async () => {
+  const state = fakeConnection({applied: DATABASE_MIGRATIONS.slice(0,8).map(m=>({version:m.version,name:m.name,checksum:migrationChecksum(m)}))});
+  await runDatabaseMigrations(state.connection as never);
+  const ddl=state.queries.find(sql=>sql.includes('CREATE TABLE IF NOT EXISTS maintenance_active_admissions'));
+  assert.ok(ddl);
+  assert.match(ddl,/FOREIGN KEY \(cluster_id\)/);
+  assert.equal(state.queries.some(sql=>sql.includes('INSERT INTO maintenance_active_admissions')),false);
 });

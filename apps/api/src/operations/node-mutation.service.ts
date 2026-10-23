@@ -1,3 +1,4 @@
+import { withMutationOperation } from '../agent/mutation-dispatch-context.js';
 import {
   BadGatewayException,
   ConflictException,
@@ -11,6 +12,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import {
   AGENT_CLIENT,
   AgentRequestError,
+  MaintenancePreDispatchRejection,
   isDeterministicAgentRejection,
   type AgentClient,
 } from '../agent/agent-client.js';
@@ -54,7 +56,7 @@ export class NodeMutationService implements OnApplicationBootstrap {
     const pending = await this.nodeOperations.listNonTerminal();
     for (const operation of pending) {
       try {
-        await this.lock.withNodeAndServiceLocks(
+        await this.lock.withNodeRecoveryLocks(
           operation.clusterId,
           operation.nodeId,
           operation.affectedServiceIds,
@@ -312,7 +314,7 @@ export class NodeMutationService implements OnApplicationBootstrap {
         }
 
         try {
-          const accepted = await this.execute(type, canonicalNodeId, plan);
+          const accepted = await withMutationOperation(input.operationId, () => this.execute(type, canonicalNodeId, plan));
           this.assertAcceptedMatchesPlan(accepted, plan);
           await this.nodeOperations.markVerifying(
             connection,
@@ -613,7 +615,9 @@ export class NodeMutationService implements OnApplicationBootstrap {
       await this.nodeOperations.markFailed(
         connection,
         operationId,
-        error.statusCode === 409
+        error instanceof MaintenancePreDispatchRejection
+          ? 'MAINTENANCE_DISPATCH_REJECTED'
+          : error.statusCode === 409
           ? 'NODE_VERSION_CONFLICT'
           : 'NODE_MUTATION_REJECTED',
         error.responseBody,

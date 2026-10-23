@@ -1,6 +1,6 @@
 # Swarm 재가입과 Docker mutation 상호배제 정책 (설계)
 
-상태: **설계 확정 전 제안 / 코드 미적용**. 기준 main: `6201fb624423334e75ad3dec8708cf018c0843ed`.
+상태: **PR #137에서 admission/dispatch/Manager barrier/관리자 recovery 구현됨, 실제 3-Manager + 2 CP 인수 미완료**. 과거 설계 시점의 baseline은 기록 목적으로만 남긴다.
 
 ## 목적과 현재 증거
 
@@ -26,7 +26,7 @@ PR #129 이후 disposable single-node Functional PoC #38345202621은 **서비스
 
 이 정책은 외부 socket writer 권한을 기술적으로 제거하거나 운영 절차를 강제하지 않는 한 **운영 계약**이지 Docker API 수준 원자적 보장이 아니다. Agent 자체가 Docker Engine에 원자적 cluster compare-and-update를 요구하는 API는 현재 사용하지 않는다.
 
-## 필요한 제품 구현 (후속 PR, 미구현)
+## 구현된 제품 경계와 미완료 운영 인수
 
 | 구성 | 기대 불변식 |
 | --- | --- |
@@ -66,9 +66,9 @@ PR #129 이후 disposable single-node Functional PoC #38345202621은 **서비스
 - Docker Engine의 compare-cluster-and-service-update 원자 트랜잭션 구현
 - 통제 불가능한 외부 Docker socket writer의 안전한 자동 차단
 - Stack/multi-cluster 확장, UI 및 metrics
-- 이번 **문서 PR**에서 신규 DB schema, HTTP endpoint 또는 Agent mutation 동작 변경
+- 외부 Docker 소켓 직접 쓰기 및 Engine compare-cluster-and-update 원자화
 
-## 후속 작업 분할
+## 초기 계획 이력 (현재는 PR #137에서 통합 구현)
 
 1. **실험 PR**: 마지막 `SwarmInspect` 이후의 실제 Docker update 경쟁 구간을 소유권이 확인된 disposable 환경에서 재현하고 관찰한다. 제품 정책과 구분한다.
 2. **maintenance admission PR**: DB 영속 state 및 service/node/rollback 공통 admission과 CP 재시작 fail closed, 테스트.

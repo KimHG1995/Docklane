@@ -1,4 +1,7 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import { currentMutationAdmission, currentMutationOperation } from './mutation-dispatch-context.js';
+import { MaintenanceDispatchJournal } from '../clusters/maintenance-dispatch-journal.js';
+import { isDeterministicAgentRejection, MaintenancePreDispatchRejection } from './agent-client.js';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import { z } from 'zod';
@@ -84,6 +87,7 @@ export class HttpAgentClient implements AgentClient {
   constructor(
     @Inject(MANAGER_AGENT_CONFIG)
     registry: ManagerAgentConfig = loadManagerAgentConfig(),
+    @Optional() @Inject(MaintenanceDispatchJournal) private readonly dispatchJournal?: MaintenanceDispatchJournal,
   ) {
     const primary = registry.agents.find(
       (agent) => agent.id === registry.primaryId,
@@ -402,7 +406,7 @@ export class HttpAgentClient implements AgentClient {
   }
 
   private async safeRequest<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     path: string,
     schema: z.ZodType<T>,
     body?: unknown,
@@ -446,6 +450,44 @@ export class HttpAgentClient implements AgentClient {
     // Only v2 mutations: an older Agent must fail closed, not ignore the header.
     // Never downgrade or resend after this request, even on a precondition error.
     try {
+      const admission = currentMutationAdmission();
+      const operationId = currentMutationOperation();
+      if (admission && this.dispatchJournal) {
+        if (!operationId) throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+        // Check the actual selected manager, not a cached healthy manager or
+        // another failover target. The Agent checks the same generation again
+        // under its local barrier read-lock when the mutation arrives.
+        let barrier;
+        try {
+          barrier = await this.requestTo(config, 'GET', '/v1/maintenance/barrier',
+            z.object({
+              clusterId: z.string(),
+              nodeId: z.string(),
+              generation: z.string(),
+              state: z.enum(['OPEN', 'BLOCKED']),
+            }));
+        } catch {
+          throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+        }
+        if (barrier.clusterId !== expectedClusterId ||
+            barrier.state !== 'OPEN' ||
+            barrier.generation !== admission.generation.toString()) {
+          throw new MaintenancePreDispatchRejection('MAINTENANCE_CLOSED');
+        }
+        const value = await this.dispatchJournal.execute(
+          admission.clusterId, admission.generation, config.id, operationId,
+          () => this.requestTo(config, method, path, schema, body, expectedClusterId),
+          isDeterministicAgentRejection, admission.connection ?? undefined,
+        );
+        this.markActive(config);
+        return value;
+      }
+      if (admission) throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+      // A direct raw HttpAgentClient call must never bypass journaling when
+      // enforcement is enabled; the registered wrapper supplies this scope.
+      if (process.env.DOCKLANE_MAINTENANCE_ENFORCE === '1') {
+        throw new MaintenancePreDispatchRejection('MAINTENANCE_UNAVAILABLE');
+      }
       const value = await this.requestTo(
         config, method, path, schema, body, expectedClusterId,
       );
@@ -477,6 +519,127 @@ export class HttpAgentClient implements AgentClient {
     }
 
     throw normalizeError(lastError);
+  }
+
+  /**
+   * Get an exact, fresh manager membership snapshot from every configured
+   * manager Agent. Never mistake configured endpoint count for real Swarm
+   * manager coverage; the roster and quorum must agree across all endpoints.
+   *
+   * This operation does not fail over: one unreachable/foreign manager is a
+   * failed maintenance barrier, not a reason to skip that member.
+   */
+  async inspectConfiguredManagers(
+    clusterId: string,
+  ): Promise<Array<{ agentId: string; nodeId: string }>> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(clusterId)) {
+      throw new Error('A fixed Swarm cluster ID is required for manager barriers');
+    }
+    const expected = this.registry.agents.length;
+    const targets: Array<{ agentId: string; nodeId: string }> = [];
+    let roster: string | null = null;
+    for (const config of this.registry.agents) {
+      const identity = await this.requestTo(
+        config, 'GET', '/v1/identity', AgentIdentityResponseSchema,
+      );
+      const cluster = await this.requestTo(
+        config, 'GET', '/v1/cluster', ClusterResponseSchema,
+      );
+      const nodes = cluster.nodes
+        .filter((node) => node.manager)
+        .map((node) => node.id)
+        .sort();
+      if (identity.clusterId !== clusterId || !identity.manager ||
+          cluster.cluster.id !== clusterId ||
+          !cluster.cluster.managers.available ||
+          cluster.cluster.managers.total !== expected ||
+          nodes.length !== expected ||
+          new Set(nodes).size !== expected ||
+          !nodes.includes(identity.nodeId)) {
+        throw new Error('Manager Agent identity or Swarm manager membership mismatch');
+      }
+      const current = JSON.stringify(nodes);
+      if (roster !== null && roster !== current) {
+        throw new Error('Swarm manager roster changed between Agent observations');
+      }
+      roster = current;
+      targets.push({ agentId: config.id, nodeId: identity.nodeId });
+    }
+    if (new Set(targets.map((target) => target.nodeId)).size !== expected) {
+      throw new Error('Duplicate manager Agent node identities');
+    }
+    return targets;
+  }
+
+  /**
+   * Persist a BLOCKED barrier on one specific manager, never via failover.
+   * A lost acknowledgement is not a success; the next attempt can retry the
+   * idempotent PUT with the same generation and validate a fresh response.
+   */
+  async blockConfiguredManager(
+    agentId: string,
+    nodeId: string,
+    clusterId: string,
+    generation: bigint,
+  ): Promise<void> {
+    const config = this.registry.agents.find((agent) => agent.id === agentId);
+    if (!config) throw new Error('Manager Agent is absent from configured membership');
+    const expected = generation.toString();
+    const schema = z.object({
+      clusterId: z.string(), nodeId: z.string(), generation: z.string(),
+      state: z.enum(['OPEN', 'BLOCKED']),
+    });
+    const response = await this.requestTo(
+      config, 'PUT', '/v1/maintenance/barrier', schema,
+      { clusterId, generation: expected, state: 'BLOCKED' },
+    );
+    if (response.clusterId !== clusterId || response.nodeId !== nodeId ||
+        response.generation !== expected || response.state !== 'BLOCKED') {
+      throw new Error('Manager barrier acknowledgement does not match target');
+    }
+  }
+
+  /**
+   * Resume an explicitly chosen manager only after Control Plane has committed
+   * the matching OPEN generation. A failed acknowledgement remains unsafe for
+   * traffic and can be retried with the same desired generation.
+   */
+  async openConfiguredManager(
+    agentId: string, nodeId: string, clusterId: string, generation: bigint,
+  ): Promise<void> {
+    const config = this.registry.agents.find(agent => agent.id === agentId);
+    if (!config) throw new Error('Unknown manager Agent during recovery');
+    const schema = z.object({
+      clusterId: z.string(), nodeId: z.string(), generation: z.string(),
+      state: z.enum(['OPEN','BLOCKED']),
+    });
+    const actual = await this.requestTo(
+      config, 'PUT', '/v1/maintenance/barrier', schema,
+      { clusterId, generation: generation.toString(), state: 'OPEN' },
+    );
+    if (actual.clusterId !== clusterId || actual.nodeId !== nodeId ||
+        actual.generation !== generation.toString() || actual.state !== 'OPEN') {
+      throw new Error('Manager reopen acknowledgement mismatch');
+    }
+  }
+
+  async inspectManagerBarrier(
+    agentId: string, nodeId: string, clusterId: string, generation: bigint,
+    desiredState: 'OPEN' | 'BLOCKED',
+  ): Promise<void> {
+    const config = this.registry.agents.find(agent => agent.id === agentId);
+    if (!config) throw new Error('Unknown manager Agent');
+    const schema = z.object({
+      clusterId: z.string(), nodeId: z.string(), generation: z.string(),
+      state: z.enum(['OPEN','BLOCKED']),
+    });
+    const actual = await this.requestTo(
+      config, 'GET', '/v1/maintenance/barrier', schema,
+    );
+    if (actual.clusterId !== clusterId || actual.nodeId !== nodeId ||
+        actual.generation !== generation.toString() || actual.state !== desiredState) {
+      throw new Error('Manager barrier state mismatches expected recovery generation');
+    }
   }
 
   private async selectMutationAgent(): Promise<AgentConfig> {
@@ -571,7 +734,7 @@ export class HttpAgentClient implements AgentClient {
 
   private async requestTo<T>(
     config: AgentConfig,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     path: string,
     schema: z.ZodType<T>,
     body?: unknown,
@@ -683,6 +846,12 @@ export class HttpAgentClient implements AgentClient {
 
       if (expectedClusterId !== undefined) {
         req.setHeader('X-Docklane-Expected-Cluster-ID', expectedClusterId);
+        // Propagate the exact admitted maintenance generation to the Agent
+        // mutation barrier. Reads and planning requests never carry it.
+        const admission = currentMutationAdmission();
+        if (admission) {
+          req.setHeader('X-Docklane-Maintenance-Generation', admission.generation.toString());
+        }
       }
       if (body !== undefined) {
         req.setHeader('Content-Type', 'application/json');

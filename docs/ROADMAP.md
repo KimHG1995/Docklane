@@ -1,5 +1,7 @@
 # Roadmap
 
+> **Maintenance PR #137 진행 기준 (2026-10-23)**: 제품 보호 및 관리자 복구 경로는 구현되어 있으며 barrier 저장 실패 중 대기 요청의 잘못된 ACK를 추가로 차단했다. 실제 3-Manager 인수 #39708410250은 7종 호출 및 restart/image/rollback 응답 유실까지 성공했지만 두 상주 API CP, CLOSED 중 재가입, 전체 DeploymentCoordinator 장애 복구, workload 수렴과 운영 socket 권한은 미완료다. **현재 PR 병합 또는 운영 준비 완료가 아니다.** 별도 하네스 첫 실환경 실행은 CLOSED 재가입/workload/DEPLOY 응답 유실까지 진행했으나 정상 ROLLBACK_VERIFYING을 즉시 완료로 요구한 assertion에서 중단했다. 동일 operation ID의 bounded 복구 관측으로 보완하며 두 상주 CP 등 전체 재실행 성공 전 완료 체크하지 않는다. 최신 범위와 증거는 [Maintenance 인수 명세](MAINTENANCE_FEATURE_ACCEPTANCE.md)의 2026-10-23 판정을 따른다.
+
 Docklane은 기능 수보다 **안전하게 복구 가능한 하나의 deployment vertical slice**를 먼저 완성한다.
 
 버전 번호는 구현 단계이며, production readiness를 의미하지 않는다.

@@ -1,3 +1,4 @@
+import { withMutationOperation } from '../agent/mutation-dispatch-context.js';
 import {
   BadGatewayException,
   ConflictException,
@@ -71,7 +72,14 @@ export class DeploymentService
   async onApplicationBootstrap(): Promise<void> {
     await this.reconcilePendingDeployments();
     this.reconciliationTimer = setInterval(() => {
-      void this.reconcilePendingDeployments();
+      void this.reconcilePendingDeployments().catch((error: unknown) => {
+        // Database read failures must not become unhandled timer rejections.
+        // Keep the operation nonterminal so the next observation can retry.
+        this.logger.error(
+          'Failed to enumerate pending deployment operations',
+          error instanceof Error ? error.stack : String(error),
+        );
+      });
     }, RECONCILE_INTERVAL_MS);
     this.reconciliationTimer.unref?.();
   }
@@ -96,7 +104,7 @@ export class DeploymentService
 
       for (const operation of pending) {
         try {
-          await this.lock.withServiceLock(
+          await this.lock.withServiceRecoveryLock(
             operation.clusterId,
             operation.serviceId,
             async (connection) => {
@@ -508,14 +516,14 @@ export class DeploymentService
 
         let accepted: ServiceMutationResponse;
         try {
-          accepted = await this.agentClient.rollbackService(
+          accepted = await withMutationOperation(input.operationId, () => this.agentClient.rollbackService(
             target.dockerServiceId,
             {
               expectedVersion: plan.version,
               expectedSpecHash: plan.beforeSpecHash,
               targetSpecHash: plan.targetSpecHash,
             },
-          );
+          ));
         } catch (error) {
           if (isDeterministicAgentRejection(error)) {
             await this.rollbackRejected(
@@ -792,7 +800,7 @@ export class DeploymentService
 
         let accepted: ServiceMutationResponse;
         try {
-          accepted = await this.agentClient.updateServiceImage(
+          accepted = await withMutationOperation(input.operationId, () => this.agentClient.updateServiceImage(
             target.dockerServiceId,
             {
               expectedVersion: plan.version,
@@ -800,7 +808,7 @@ export class DeploymentService
               targetSpecHash: plan.targetSpecHash,
               image: targetImage,
             },
-          );
+          ));
         } catch (error) {
           if (isDeterministicAgentRejection(error)) {
             await this.fail(

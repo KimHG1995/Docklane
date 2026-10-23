@@ -1,3 +1,4 @@
+import { withMutationOperation } from '../agent/mutation-dispatch-context.js';
 import {
   BadGatewayException,
   ConflictException,
@@ -11,6 +12,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import {
   AGENT_CLIENT,
   AgentRequestError,
+  MaintenancePreDispatchRejection,
   isDeterministicAgentRejection,
   type AgentClient,
 } from '../agent/agent-client.js';
@@ -69,7 +71,7 @@ export class MutationService implements OnApplicationBootstrap {
     for (const operation of pending) {
       if (operation.type === 'DEPLOY' || operation.type === 'ROLLBACK') continue;
       try {
-        await this.lock.withServiceLock(
+        await this.lock.withServiceRecoveryLock(
           operation.clusterId,
           operation.serviceId,
           async (connection) => {
@@ -179,7 +181,7 @@ export class MutationService implements OnApplicationBootstrap {
         });
 
         try {
-          const accepted = await this.agentClient.scaleService(
+          const accepted = await withMutationOperation(input.operationId, () => this.agentClient.scaleService(
             canonicalServiceId,
             {
               expectedVersion: plan.version,
@@ -187,7 +189,7 @@ export class MutationService implements OnApplicationBootstrap {
               targetSpecHash: plan.targetSpecHash,
               replicas: input.replicas,
             },
-          );
+          ));
           this.assertAcceptedMatchesPlan(accepted, plan);
           await this.markVerifying(connection, input.operationId, accepted);
         } catch (error) {
@@ -292,14 +294,14 @@ export class MutationService implements OnApplicationBootstrap {
         });
 
         try {
-          const accepted = await this.agentClient.restartService(
+          const accepted = await withMutationOperation(input.operationId, () => this.agentClient.restartService(
             canonicalServiceId,
             {
               expectedVersion: plan.version,
               expectedSpecHash: plan.beforeSpecHash,
               targetSpecHash: plan.targetSpecHash,
             },
-          );
+          ));
           this.assertAcceptedMatchesPlan(accepted, plan);
           await this.markVerifying(connection, input.operationId, accepted);
         } catch (error) {
@@ -637,7 +639,9 @@ export class MutationService implements OnApplicationBootstrap {
     error: AgentRequestError,
   ): Promise<void> {
     const code =
-      error.statusCode === 409
+      error instanceof MaintenancePreDispatchRejection
+        ? 'MAINTENANCE_DISPATCH_REJECTED'
+        : error.statusCode === 409
         ? 'AGENT_VERSION_CONFLICT'
         : 'AGENT_MUTATION_REJECTED';
 
