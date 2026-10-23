@@ -195,3 +195,49 @@ func TestBarrierPendingMarkerPreventsRestartAfterInitialSyncFailure(t *testing.T
 		t.Fatal("restarted barrier must not become OPEN after failed initial sync")
 	}
 }
+
+// Simulate a request body arriving while another barrier transition fails.
+// Both requests passed the initial availability check, but only the request
+// holding the barrier lock may decide whether a durable ACK is still valid.
+func TestBarrierRechecksAvailabilityAfterDecodingRequest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	b := newMutationBarrier(path)
+	s := New(config.Config{InsecureDev: true}, fakeReader{})
+	s.barrier = b
+	set := func(body string) *httptest.ResponseRecorder {
+		res := httptest.NewRecorder()
+		s.setMaintenanceBarrier(res, httptest.NewRequest(http.MethodPut, "/v1/maintenance/barrier", strings.NewReader(body)))
+		return res
+	}
+	if res := set(`{"clusterId":"cluster-1","generation":"1","state":"BLOCKED"}`); res.Code != 200 {
+		t.Fatalf("initial BLOCKED: %d %s", res.Code, res.Body.String())
+	}
+	body := &barrierInterleavingReader{
+		Reader: strings.NewReader(`{"clusterId":"cluster-1","generation":"1","state":"BLOCKED"}`),
+		beforeRead: func() {
+			b.syncDirectory = func(string) error { return errors.New("injected persistence failure") }
+			if res := set(`{"clusterId":"cluster-1","generation":"2","state":"OPEN"}`); res.Code != http.StatusServiceUnavailable {
+				t.Fatalf("injected failure: %d %s", res.Code, res.Body.String())
+			}
+		},
+	}
+	res := httptest.NewRecorder()
+	s.setMaintenanceBarrier(res, httptest.NewRequest(http.MethodPut, "/v1/maintenance/barrier", body))
+	if res.Code != http.StatusServiceUnavailable || !strings.Contains(res.Body.String(), "MAINTENANCE_BARRIER_UNAVAILABLE") {
+		t.Fatalf("request queued before persistence failure must not ACK: %d %s", res.Code, res.Body.String())
+	}
+}
+
+type barrierInterleavingReader struct {
+	*strings.Reader
+	beforeRead func()
+}
+
+func (r *barrierInterleavingReader) Read(p []byte) (int, error) {
+	if r.beforeRead != nil {
+		before := r.beforeRead
+		r.beforeRead = nil
+		before()
+	}
+	return r.Reader.Read(p)
+}

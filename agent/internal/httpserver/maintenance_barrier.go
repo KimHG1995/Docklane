@@ -157,14 +157,14 @@ func (b *mutationBarrier) guard(next http.Handler, readIdentity func(context.Con
 
 func (s *Server) getMaintenanceBarrier(w http.ResponseWriter, r *http.Request) {
 	b := s.barrier
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	if !b.enabled || b.invalid {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"code": "MAINTENANCE_BARRIER_UNAVAILABLE", "error": "Agent barrier is disabled or its state is invalid",
 		})
 		return
 	}
-	b.mu.RLock()
-	defer b.mu.RUnlock()
 	identity, err := s.reader.Identity(r.Context())
 	if err != nil || !identity.Manager || identity.ClusterID == "" || identity.NodeID == "" {
 		writeClusterUnavailable(w)
@@ -185,7 +185,7 @@ func (s *Server) getMaintenanceBarrier(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setMaintenanceBarrier(w http.ResponseWriter, r *http.Request) {
 	b := s.barrier
-	if !b.enabled || b.invalid {
+	if !b.enabled {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"code": "MAINTENANCE_BARRIER_UNAVAILABLE", "error": "Agent barrier is disabled or its state is invalid",
 		})
@@ -203,6 +203,14 @@ func (s *Server) setMaintenanceBarrier(w http.ResponseWriter, r *http.Request) {
 	// handlers and prevents new ones from reaching Docker during persistence.
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// Another transition may have failed while this request body was being
+	// decoded or while we waited for the lock. Never acknowledge invalid state.
+	if b.invalid {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"code": "MAINTENANCE_BARRIER_UNAVAILABLE", "error": "Agent barrier is disabled or its state is invalid",
+		})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()

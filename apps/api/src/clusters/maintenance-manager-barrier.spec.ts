@@ -4,9 +4,11 @@ import { MaintenanceManagerBarrier } from './maintenance-manager-barrier.js';
 
 function fixture(failId: string | null = null) {
   const calls: string[] = [];
+  const readbacks: unknown[][] = [];
   const targets = [{agentId:'manager-0',nodeId:'node-0'},{agentId:'manager-1',nodeId:'node-1'}];
   const agent = {
     inspectConfiguredManagers: async () => targets,
+    inspectManagerBarrier: async (...args: unknown[]) => { readbacks.push(args); },
     blockConfiguredManager: async (id: string) => {
       calls.push(id);
       if (id === failId) throw new Error('Agent unavailable');
@@ -23,14 +25,18 @@ function fixture(failId: string | null = null) {
   return {
     barrier: new MaintenanceManagerBarrier(agent as never,maintenance as never,db as never,
       { expectedClusterId:'swarm-a', agents:[{id:'manager-0'},{id:'manager-1'}] } as never),
-    calls,
+    calls, readbacks, agent,
   };
 }
 test('all managers required at exact generation', async () => {
-  const {barrier,calls}=fixture();
+  const {barrier,calls,readbacks}=fixture();
   const result=await barrier.blockAll('default','swarm-a',2n);
   assert.deepEqual(result.blockedManagerIds,['manager-0','manager-1']);
   assert.deepEqual(calls,['manager-0','manager-1']);
+  assert.deepEqual(readbacks,[
+    ['manager-0','node-0','swarm-a',2n,'BLOCKED'],
+    ['manager-1','node-1','swarm-a',2n,'BLOCKED'],
+  ]);
 });
 test('unreachable manager fails closed without all-manager success', async () => {
   const {barrier,calls}=fixture('manager-1');
@@ -70,4 +76,25 @@ test('reopening must reject stale generation before contacting Agent', async () 
     {} as never,{expectedClusterId:'swarm-a',agents:[{id:'manager-0'}]} as never);
   await assert.rejects(()=>barrier.openAll('default','swarm-a',11n),/committed OPEN/);
   assert.equal(called,false);
+});
+
+
+test('persisted ACKs cannot hide a failed fresh BLOCKED readback', async () => {
+  const {barrier,agent}=fixture();
+  agent.inspectManagerBarrier=async () => { throw new Error('Barrier no longer BLOCKED'); };
+  await assert.rejects(()=>barrier.blockAll('default','swarm-a',2n),/Barrier no longer BLOCKED/);
+});
+
+test('manager replacement during readbacks invalidates prior BLOCKED ACKs', async () => {
+  const {barrier,agent}=fixture();
+  let rosterReads=0;
+  agent.inspectConfiguredManagers=async () => {
+    rosterReads++;
+    return [
+      {agentId:'manager-0',nodeId:'node-0'},
+      {agentId:'manager-1',nodeId:rosterReads===3?'replacement-node':'node-1'},
+    ];
+  };
+  await assert.rejects(()=>barrier.blockAll('default','swarm-a',2n),/final block verification/);
+  assert.equal(rosterReads,3);
 });

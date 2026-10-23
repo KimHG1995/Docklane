@@ -1,5 +1,40 @@
 # Maintenance 기능 개발 완료 기준 및 통합 인수 조건
 
+## 최신 판정 (2026-10-23)
+
+아래 날짜별 문단은 당시의 기록이다. 현재 구현/검증 상태는 이 절을 우선한다.
+
+### 기능 수정과 빠른 회귀
+
+- rename 이후 directory fsync 실패는 이미 durable `.pending` marker로 보완되어 있다. marker가 남은 재시작은 OPEN을 복원하지 않는다. 초기 marker sync 실패와 rename 이후 sync 실패 회귀가 존재한다.
+- 추가로 barrier PUT 요청의 본문 처리/lock 대기 중 다른 요청의 저장이 실패하면, 이전 generation의 BLOCKED를 200으로 ACK할 수 있던 경로를 수정했다. GET/PUT은 동일 barrier lock 안에서 invalid 상태를 확인한다. 실제 파일 저장 실패를 끼워 넣은 회귀는 수정 전 200을 재현했고 수정 후 503으로 거절한다.
+- Manager BLOCKED 확인의 fresh readback 및 최종 roster 검증은 구현되어 있다. 누락된 테스트 대역을 수정하고 readback 실패/도중 Manager 교체 거절 회귀를 추가했다.
+- 이 작업의 로컬 검증: API 363개 테스트와 typecheck, Go 전체 race suite 통과. 최종 CI는 새 PR HEAD의 결과로 판단한다.
+
+### 이미 확보한 실제 인수 증거
+
+[실제 3-Manager 인수 #39708410250](https://github.com/KimHG1995/Docklane/actions/runs/39708410250), HEAD `6ed4378`, [artifact 12395527873](https://github.com/KimHG1995/Docklane/actions/runs/39708410250/artifacts/12395527873)는 성공 및 소유권 기반 cleanup을 확인했다.
+
+- 7종 Docker 변경 호출의 성공, BLOCKED 21건 및 stale generation 21건 차단
+- 독립 Lease 프로세스 SIGKILL, 만료 후 fencing token 인계
+- restart/image/rollback 적용 후 응답 유실, UNCERTAIN 유지 및 중복 발송 차단
+- 기존 close/reopen, Agent 재시작 및 OPEN 이후 foreign Swarm 거절
+
+이 증거는 이후 runtime 변경의 최종 인수를 대체하지 않는다. scale은 replicas 0→0의 version 증가이며 실제 workload 수렴 증거가 아니다. image/rollback은 journaled Agent client 경로이지 DeploymentCoordinator 전체 상태 흐름의 인수가 아니다.
+
+### 최종 통합 인수와 배포 차단 조건
+
+1. 두 상주 Nest API CP 서버의 동시 요청 처리, 활성 요청 중 SIGKILL 및 후속 CP 복구
+2. CLOSED 상태에서 실제 Manager leave/init/rejoin 및 이전 identity/barrier 거절
+3. DeploymentCoordinator와 deployment/operation DB 상태를 포함한 DEPLOY/ROLLBACK 전체 장애 복구
+4. 실제 replica 변경과 workload 수렴
+5. 운영 Docker socket/CLI 권한 제한 확인, 최종 독립 안전성/동시성 리뷰
+6. 최종 runtime HEAD에서 기존 실환경 인수와 위 추가 시나리오 통과
+
+순서는 **제품/빠른 회귀 수정 → 전체 빠른 검증 → 별도 통합 인수 작업 단위 → 최종 결과 검토**다. 새 process/network orchestration은 `AGENTS.md`에 따라 제품 수정과 분리하고 기존 workflow를 재사용한다. 중복 workflow나 문서 변경만을 이유로 한 실환경 재실행을 추가하지 않는다.
+
+현재 PR은 Draft를 유지한다. 위 조건이 충족되기 전에는 병합/운영 배포 가능 또는 Maintenance enforcement 활성화 가능으로 보고하지 않는다.
+
 ## 상태 (2026-10-16)
 
 PR #137의 기능 코드가 포함하는 범위:
