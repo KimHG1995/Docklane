@@ -3,14 +3,6 @@ name: maintenance-three-manager-acceptance
 # Deliberately separate from fast PR validation. This workflow owns three
 # privileged DinD containers and may change only their Swarm topology.
 on:
-  push:
-    branches: [feat/maintenance-enforcement]
-    paths:
-      - '.github/workflows/maintenance-three-manager-acceptance.yml'
-      - 'tests/operational-readiness/maintenance-three-manager.mjs'
-      - 'tests/operational-readiness/maintenance-cp-worker.mjs'
-      - 'tests/operational-readiness/maintenance-response-loss-proxy.mjs'
-      - 'tests/operational-readiness/manager-agents.sh'
   workflow_dispatch:
 
 permissions:
@@ -38,9 +30,12 @@ jobs:
       - run: pnpm --filter @docklane/api build
       - name: Verify acceptance helper syntax and disposable host
         run: |
-          node --check tests/operational-readiness/maintenance-three-manager.mjs
-          node --check tests/operational-readiness/maintenance-cp-worker.mjs
-          node --check tests/operational-readiness/maintenance-response-loss-proxy.mjs
+          while IFS= read -r -d '' helper; do
+            node --check "$helper"
+          done < <(find tests/operational-readiness -maxdepth 1 -type f -name '*.mjs' -print0)
+          while IFS= read -r -d '' regression; do
+            node --test "$regression"
+          done < <(find tests/operational-readiness -maxdepth 1 -type f -name '*-test.mjs' -print0)
           bash -n tests/operational-readiness/manager-agents.sh
           docker info
           test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = inactive

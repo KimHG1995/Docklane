@@ -35,6 +35,21 @@
 
 현재 PR은 Draft를 유지한다. 위 조건이 충족되기 전에는 병합/운영 배포 가능 또는 Maintenance enforcement 활성화 가능으로 보고하지 않는다.
 
+## 별도 최종 인수 하네스 (2026-10-23, 실환경 재검증 중)
+
+제품 수정 HEAD `76caa65`의 [CI #39880932534](https://github.com/KimHG1995/Docklane/actions/runs/39880932534)는 통과했다. 이후 제품 코드를 추가하지 않는 별도 인수 작업 단위에서 기존 3-Manager 하네스를 확장한다.
+
+- `maintenance-closed-rejoin.mjs`: DB CLOSED generation 3 중 Manager를 실제 foreign Swarm으로 전환한다. foreign Swarm의 실제 서비스에 대한 BLOCKED 오류와 version 불변을 확인한 뒤, 원래 Swarm으로 재가입하고 새 canonical Node ID/BLOCKED 상태를 검증한다.
+- `maintenance-deployment-faults.mjs`: 실제 application/target/releases/operation/deployment/audit DB 경로와 DeploymentService를 사용한다. 실제 replicas 1→2 및 digest-pinned task/placement 수렴, DEPLOY/ROLLBACK 적용 후 응답 유실과 원본 UNCERTAIN 보존/중복 발송 방지를 확인한다. HTTP health는 제어된 loopback fixture이며 실제 애플리케이션 health endpoint 통합으로 확대 해석하지 않는다.
+- `maintenance-resident-cp.mjs`: 두 상주 Nest AppModule CP의 동시 API 요청을 사용한다. Agent의 실제 적용 ACK를 relay에서 보류하고 첫 CP를 SIGKILL한 뒤, 두 번째 CP의 복구와 mutation 재발송 부재, 원본 SENDING/admission 보존을 확인한다.
+- 기존 workflow만 사용하고 heavy 인수를 `workflow_dispatch`로 제한한다. Node helper 정적 검사 및 빠른 회귀는 동적으로 발견한다.
+
+**하네스 구현이나 빠른 회귀 통과만으로 실제 인수 완료를 표시하지 않는다.** 실행 환경에서 제품/하네스 SHA, 전체 로그, `maintenance-acceptance.json`과 소유권 기반 cleanup 결과를 함께 확인해야 한다. 운영 Docker socket/CLI 권한 제한 확인도 별도로 필요하다.
+
+첫 Mac 실행의 하네스 HEAD `5e1f712`는 CLOSED 중 foreign Swarm 거절/재가입 BLOCKED, 실제 workload 1→2, DEPLOY 응답 유실 복구까지 진행했으나 ROLLBACK이 허용된 `ROLLBACK_VERIFYING` 관측 상태로 반환되어 즉시 완료를 요구한 하네스 assertion에서 중단했다. 이는 전체 인수 성공이 아니다. 동일 operation ID로 제한 시간 내 관측/복구하고 최종 상태와 전체 relay mutation 횟수를 확인하도록 하네스를 보완한다. 두 상주 CP 시나리오와 이후 최종 foreign probe는 이 실행에서 미실행이다. 실행 환경은 TLS 검증을 유지하는 CI 대응 Node 24와 OpenSSL 3을 사용하며 소유 fixture cleanup은 확인했다. 최종 증거는 보완 HEAD의 재실행으로 갱신해야 한다.
+
+실행 전 조건: disposable Docker host의 Swarm은 inactive이고 기존 owned fixture 이름/포트가 비어 있어야 한다. Agent는 Docker Engine 아키텍처에 맞는 Linux 바이너리로 빌드한다. 예시 환경은 `DOCKLANE_OR_MAINTENANCE_ACCEPTANCE=1`, 고유 `DOCKLANE_OR_LOG_DIR`, `DOCKLANE_MANAGER_AGENT_BINARY`이며 실행 진입점은 `bash tests/operational-readiness/manager-agents.sh`다. 호스트 Swarm을 변경하거나 기존 사용자 workload를 정리하지 않는다.
+
 ## 상태 (2026-10-16)
 
 PR #137의 기능 코드가 포함하는 범위:
